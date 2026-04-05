@@ -74,7 +74,7 @@ class _HubScreenState extends ConsumerState<HubScreen> {
       child: Row(
         children: [
           const Text(
-            'Agent Hub',
+            'PixelCode',
             style: TextStyle(
               color: Colors.white,
               fontSize: 14,

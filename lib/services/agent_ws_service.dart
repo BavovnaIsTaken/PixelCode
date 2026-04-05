@@ -1,4 +1,4 @@
-/// WebSocket client that connects to the Agent Hub Node.js server.
+/// WebSocket client that connects to the PixelCode Node.js server.
 library;
 
 import 'dart:async';

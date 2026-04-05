@@ -1,5 +1,5 @@
 /**
- * Agent definitions for the Agent Hub team.
+ * Agent definitions for the PixelCode team.
  * 7 agents: Tech Lead, Manager, Coder, Reviewer, Tester, Security, UI/UX Designer.
  */
 

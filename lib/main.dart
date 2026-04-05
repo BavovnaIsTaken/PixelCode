@@ -11,17 +11,17 @@ final serverProcess = ServerProcessService();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await serverProcess.start();
-  runApp(const ProviderScope(child: AgentHubApp()));
+  runApp(const ProviderScope(child: PixelCodeApp()));
 }
 
-class AgentHubApp extends StatefulWidget {
-  const AgentHubApp({super.key});
+class PixelCodeApp extends StatefulWidget {
+  const PixelCodeApp({super.key});
 
   @override
-  State<AgentHubApp> createState() => _AgentHubAppState();
+  State<PixelCodeApp> createState() => _PixelCodeAppState();
 }
 
-class _AgentHubAppState extends State<AgentHubApp> {
+class _PixelCodeAppState extends State<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
 
   @override
@@ -45,7 +45,7 @@ class _AgentHubAppState extends State<AgentHubApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Agent Hub',
+      title: 'PixelCode',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: const Color(0xFF0E0E11),

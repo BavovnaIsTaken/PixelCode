@@ -1,7 +1,7 @@
 {
-  "name": "agent-hub-server",
+  "name": "pixel-code-server",
   "version": "1.0.0",
-  "description": "WebSocket server wrapping Claude Agent SDK for Agent Hub",
+  "description": "WebSocket server wrapping Claude Agent SDK for PixelCode",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",

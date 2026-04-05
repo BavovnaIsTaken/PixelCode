@@ -1,6 +1,6 @@
-# agent_hub
+# PixelCode
 
-AI Agent Team Hub — visual orchestrator for Claude Agent SDK
+PixelCode — visual orchestrator for Claude Agent SDK
 
 ## Getting Started
 

@@ -1,5 +1,5 @@
 /**
- * Agent Hub WebSocket Server
+ * PixelCode WebSocket Server
  *
  * Bridges Flutter UI ↔ Claude Agent SDK.
  * Runs a Tech Lead session that delegates to 6 sub-agents.
@@ -246,7 +246,7 @@ async function runQuery(ws: WebSocket, userMessage: string): Promise<void> {
 
 const wss = new WebSocketServer({ port: PORT });
 
-console.log(`🏗️  Agent Hub server listening on ws://localhost:${PORT}`);
+console.log(`🏗️  PixelCode server listening on ws://localhost:${PORT}`);
 console.log(`   Working directory: ${IMUX_CWD}`);
 console.log(`   Agents: ${agentInfoList.map((a) => a.name).join(", ")}`);
 
