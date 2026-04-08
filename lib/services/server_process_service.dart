@@ -4,10 +4,15 @@
 /// and kills it when the app is disposed.
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 class ServerProcessService {
   Process? _process;
+  final _logController = StreamController<ServerProcessLog>.broadcast();
+
+  /// Stream of server process logs (stdout/stderr).
+  Stream<ServerProcessLog> get logs => _logController.stream;
 
   /// Resolves the server directory from the project root.
   /// In debug mode, `Directory.current` is the project root.
@@ -17,18 +22,17 @@ class ServerProcessService {
   }
 
   /// Starts the Node.js server if it is not already running.
-  Future<void> start() async {
+  /// If [projectPath] is provided, it will be used as PROJECT_CWD.
+  Future<void> start({String? projectPath}) async {
     if (_process != null) return;
 
     final serverDir = _serverDir;
     if (!Directory(serverDir).existsSync()) {
-      // ignore: avoid_print
-      print('[ServerProcess] server/ directory not found at $serverDir');
+      _emitLog('error', 'server/ directory not found at $serverDir');
       return;
     }
 
-    // ignore: avoid_print
-    print('[ServerProcess] Starting server in $serverDir');
+    _emitLog('info', 'Starting server in $serverDir');
 
     // Launch via shell so that PATH from the user's profile is inherited.
     // This ensures node/npm/npx are found even when the app is launched
@@ -40,23 +44,33 @@ class ServerProcessService {
       environment: {
         ...Platform.environment,
         'PORT': '9720',
+        'PROJECT_CWD': projectPath ?? Directory.current.path,
       },
     );
 
     _process!.stdout.transform(const SystemEncoding().decoder).listen((data) {
-      // ignore: avoid_print
-      print('[Server] $data');
+      for (final line in data.split('\n')) {
+        if (line.trim().isNotEmpty) _emitLog('info', line.trim());
+      }
     });
     _process!.stderr.transform(const SystemEncoding().decoder).listen((data) {
-      // ignore: avoid_print
-      print('[Server:err] $data');
+      for (final line in data.split('\n')) {
+        if (line.trim().isNotEmpty) _emitLog('warn', line.trim());
+      }
     });
 
     _process!.exitCode.then((code) {
-      // ignore: avoid_print
-      print('[ServerProcess] Server exited with code $code');
+      _emitLog(code == 0 ? 'info' : 'error', 'Server exited with code $code');
       _process = null;
     });
+  }
+
+  void _emitLog(String level, String message) {
+    _logController.add(ServerProcessLog(
+      timestamp: DateTime.now(),
+      level: level,
+      message: message,
+    ));
   }
 
   /// Kills the server process and its children (npm spawns node).
@@ -66,5 +80,18 @@ class ServerProcessService {
     _process = null;
     // Kill the process group so child processes (node) are also terminated.
     Process.killPid(proc.pid, ProcessSignal.sigterm);
+    await _logController.close();
   }
+}
+
+class ServerProcessLog {
+  final DateTime timestamp;
+  final String level;
+  final String message;
+
+  const ServerProcessLog({
+    required this.timestamp,
+    required this.level,
+    required this.message,
+  });
 }

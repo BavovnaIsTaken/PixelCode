@@ -2,16 +2,33 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'providers/agent_provider.dart';
+import 'providers/settings_provider.dart';
 import 'screens/hub/hub_screen.dart';
+import 'services/project_persistence_service.dart';
 import 'services/server_process_service.dart';
 
 final serverProcess = ServerProcessService();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await serverProcess.start();
-  runApp(const ProviderScope(child: PixelCodeApp()));
+  final prefs = await SharedPreferences.getInstance();
+
+  // Use the last opened project path, or fall back to the current directory.
+  final savedPath = ProjectPersistenceService.loadCurrentProjectPath(prefs);
+  await serverProcess.start(projectPath: savedPath);
+
+  runApp(
+    ProviderScope(
+      overrides: [
+        sharedPrefsProvider.overrideWithValue(prefs),
+        serverProcessProvider.overrideWithValue(serverProcess),
+      ],
+      child: const PixelCodeApp(),
+    ),
+  );
 }
 
 class PixelCodeApp extends StatefulWidget {

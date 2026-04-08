@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "pixelcode-game-assets": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "mcp-game-assets/src/index.ts"],
+      "env": {
+        "ASSETS_DIR": "${PWD}/assets",
+        "PROJECT_DIR": "${PWD}"
+      }
+    }
+  }
+}

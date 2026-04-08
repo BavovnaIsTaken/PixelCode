@@ -1,17 +1,55 @@
 /// Pixel-art sprite definitions and rendering helpers.
 ///
-/// Characters are 8×12 grids. Each cell is a palette key:
+/// Characters are 8-wide grids. Each cell is a palette key:
 ///   '.' = transparent
-///   'h' = hair, 's' = skin, 'e' = eye, 'c' = clothes, 'p' = pants, 'b' = boots
+///   'h' = hair, 's' = skin, 'f' = skin light, 'e' = eye,
+///   'c' = clothes, 'p' = pants, 'b' = boots
 ///   'm' = monitor frame, 'g' = monitor glow, 'k' = desk/keyboard
 library;
 
 import 'package:flutter/material.dart';
 
-// ─── Character sprite frames ────────────────────────────────────────────────
+import 'office_game_state.dart';
 
-/// Idle, facing down — standing pose.
-const charIdle0 = [
+// ─── Sprite selection ───────────────────────────────────────────────────────
+
+/// Get the correct sprite for a character's state, direction, and frame.
+/// Returns (sprite, mirrored). mirrored=true → draw flipped horizontally.
+(List<String>, bool) getCharacterSprite(GameCharacter ch) {
+  final isLeft = ch.dir == CharDirection.left;
+  final lookupDir = isLeft ? CharDirection.right : ch.dir;
+
+  switch (ch.state) {
+    case CharState.typing:
+      final sprites = ch.isReading
+          ? (_readSprites[lookupDir] ?? _readSprites[CharDirection.up]!)
+          : (_typeSprites[lookupDir] ?? _typeSprites[CharDirection.up]!);
+      return (sprites[ch.frame % sprites.length], isLeft);
+    case CharState.walk:
+      return (_walkSprites[lookupDir]![ch.frame % 4], isLeft);
+    case CharState.idle:
+      return (_walkSprites[lookupDir]![1], isLeft); // standing pose
+  }
+}
+
+// ─── DOWN (front-facing) walk ───────────────────────────────────────────────
+
+const _downWalk0 = [
+  '...hh...',
+  '..hhhh..',
+  '..sffs..',
+  '..sees..',
+  '...ss...',
+  '..cccc..',
+  '.cccccc.',
+  '..cccc..',
+  '..pp....',
+  '.p..p...',
+  '.p...p..',
+  '.b...b..',
+];
+
+const _downWalk1 = [
   '...hh...',
   '..hhhh..',
   '..sffs..',
@@ -26,8 +64,7 @@ const charIdle0 = [
   '..b..b..',
 ];
 
-/// Idle frame 2 — subtle shift.
-const charIdle1 = [
+const _downWalk2 = [
   '...hh...',
   '..hhhh..',
   '..sffs..',
@@ -36,14 +73,15 @@ const charIdle1 = [
   '..cccc..',
   '.cccccc.',
   '..cccc..',
-  '...pp...',
-  '..p..p..',
-  '..p..p..',
-  '..b..b..',
+  '....pp..',
+  '...p..p.',
+  '..p...p.',
+  '..b...b.',
 ];
 
-/// Typing, seated at desk (10 rows — legs hidden behind desk).
-const charType0 = [
+// ─── DOWN type / read ───────────────────────────────────────────────────────
+
+const _downType0 = [
   '...hh...',
   '..hhhh..',
   '..sffs..',
@@ -56,8 +94,7 @@ const charType0 = [
   '...cc...',
 ];
 
-/// Typing frame 2 — hands shifted.
-const charType1 = [
+const _downType1 = [
   '...hh...',
   '..hhhh..',
   '..sffs..',
@@ -70,8 +107,7 @@ const charType1 = [
   '...cc...',
 ];
 
-/// Reading frame — looking at monitor, slight lean.
-const charRead0 = [
+const _downRead0 = [
   '...hh...',
   '..hhhh..',
   '..hhhh..',
@@ -84,37 +120,159 @@ const charRead0 = [
   '...cc...',
 ];
 
-/// Walking frame 0.
-const charWalk0 = [
+// ─── UP (back-facing) walk ──────────────────────────────────────────────────
+
+const _upWalk0 = [
   '...hh...',
   '..hhhh..',
-  '..sffs..',
-  '..sees..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '..cccc..',
+  '.cccccc.',
+  '..cccc..',
+  '..pp....',
+  '.p..p...',
+  '.p...p..',
+  '.b...b..',
+];
+
+const _upWalk1 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
   '...ss...',
   '..cccc..',
   '.cccccc.',
   '..cccc..',
   '...pp...',
   '..p..p..',
-  '.p....p.',
-  '.b....b.',
+  '..p..p..',
+  '..b..b..',
 ];
 
-/// Walking frame 1.
-const charWalk1 = [
+const _upWalk2 = [
   '...hh...',
   '..hhhh..',
-  '..sffs..',
-  '..sees..',
+  '..hhhh..',
+  '..hhhh..',
   '...ss...',
   '..cccc..',
   '.cccccc.',
   '..cccc..',
-  '...pp...',
-  '..pp....',
-  '..pp....',
-  '..bb....',
+  '....pp..',
+  '...p..p.',
+  '..p...p.',
+  '..b...b.',
 ];
+
+// ─── UP type / read ─────────────────────────────────────────────────────────
+
+const _upType0 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '..cccc..',
+  '.cccccc.',
+  'cc.cc.cc',
+  '..cccc..',
+  '...cc...',
+];
+
+const _upType1 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '..cccc..',
+  '.cccccc.',
+  '.cc..cc.',
+  '..cccc..',
+  '...cc...',
+];
+
+const _upRead0 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...hh...',
+  '...ss...',
+  '..cccc..',
+  '.cccccc.',
+  '..cccc..',
+  '...cc...',
+];
+
+// ─── RIGHT (side-facing) walk ───────────────────────────────────────────────
+
+const _rightWalk0 = [
+  '..hh....',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '..cccc..',
+  '..ccccc.',
+  '..cccc..',
+  '..pp....',
+  '.p..p...',
+  '.p...p..',
+  '.b...b..',
+];
+
+const _rightWalk1 = [
+  '..hh....',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '..cccc..',
+  '..ccccc.',
+  '..cccc..',
+  '...pp...',
+  '..p..p..',
+  '..p..p..',
+  '..b..b..',
+];
+
+const _rightWalk2 = [
+  '..hh....',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '..cccc..',
+  '..ccccc.',
+  '..cccc..',
+  '....pp..',
+  '...p..p.',
+  '..p...p.',
+  '..b...b.',
+];
+
+// ─── Sprite lookup maps ─────────────────────────────────────────────────────
+
+const _walkSprites = <CharDirection, List<List<String>>>{
+  CharDirection.down: [_downWalk0, _downWalk1, _downWalk2, _downWalk1],
+  CharDirection.up: [_upWalk0, _upWalk1, _upWalk2, _upWalk1],
+  CharDirection.right: [_rightWalk0, _rightWalk1, _rightWalk2, _rightWalk1],
+  // left = mirror of right at render time
+};
+
+const _typeSprites = <CharDirection, List<List<String>>>{
+  CharDirection.down: [_downType0, _downType1],
+  CharDirection.up: [_upType0, _upType1],
+};
+
+const _readSprites = <CharDirection, List<List<String>>>{
+  CharDirection.down: [_downRead0],
+  CharDirection.up: [_upRead0],
+};
 
 // ─── Desk & monitor sprites ────────────────────────────────────────────────
 
@@ -154,14 +312,6 @@ const monitorOn1 = [
   '.mgGGgm.',
   '.mmmmmm.',
   '...mm...',
-];
-
-/// Chair (4×4).
-const chairSprite = [
-  '.rr.',
-  'rrrr',
-  '.rr.',
-  '.rr.',
 ];
 
 // ─── Agent color palettes ───────────────────────────────────────────────────
@@ -263,6 +413,18 @@ const agentPalettes = <String, AgentPalette>{
   ),
 };
 
+/// Agent accent colors for UI elements.
+Color agentAccentColor(String id) => switch (id) {
+      'tech-lead' => const Color(0xFF00C0D1),
+      'manager' => const Color(0xFFF59E0B),
+      'coder' => const Color(0xFF10B981),
+      'reviewer' => const Color(0xFF8B5CF6),
+      'tester' => const Color(0xFFEC4899),
+      'security' => const Color(0xFFEF4444),
+      'ui-ux-designer' => const Color(0xFF3B82F6),
+      _ => const Color(0xFF6B7280),
+    };
+
 // ─── Furniture palette ──────────────────────────────────────────────────────
 
 const _deskWood = Color(0xFF5C4033);
@@ -270,22 +432,20 @@ const _deskEdge = Color(0xFF3E2B22);
 const _monitorFrame = Color(0xFF2A2A35);
 const _monitorGlow = Color(0xFF00C0D1);
 const _monitorGlowDim = Color(0xFF007A84);
-const _chairColor = Color(0xFF3A3A4A);
 
-Color resolveFurniture(String key, {bool monitorActive = false}) => switch (key) {
+Color resolveFurniture(String key, {bool monitorActive = false}) =>
+    switch (key) {
       'd' => _deskWood,
       'k' => _deskEdge,
       'm' => _monitorFrame,
       'g' => monitorActive ? _monitorGlowDim : _monitorFrame,
       'G' => monitorActive ? _monitorGlow : _monitorFrame,
-      'r' => _chairColor,
       _ => Colors.transparent,
     };
 
-// ─── Rendering helper ───────────────────────────────────────────────────────
+// ─── Rendering helpers ──────────────────────────────────────────────────────
 
-/// Draws a sprite onto [canvas] at the given pixel position.
-/// [pixelSize] is the screen size of one virtual pixel.
+/// Draws a sprite at the given pixel position.
 void drawSprite(
   Canvas canvas,
   List<String> sprite,
@@ -307,7 +467,39 @@ void drawSprite(
         Rect.fromLTWH(
           x + col * pixelSize,
           y + row * pixelSize,
-          pixelSize + 0.5, // +0.5 to avoid sub-pixel gaps
+          pixelSize + 0.5,
+          pixelSize + 0.5,
+        ),
+        paint,
+      );
+    }
+  }
+}
+
+/// Draws a sprite mirrored horizontally (for LEFT direction).
+void drawSpriteMirrored(
+  Canvas canvas,
+  List<String> sprite,
+  double x,
+  double y,
+  double pixelSize,
+  Color Function(String key) colorResolver,
+) {
+  final paint = Paint()..style = PaintingStyle.fill;
+
+  for (int row = 0; row < sprite.length; row++) {
+    final line = sprite[row];
+    final width = line.length;
+    for (int col = 0; col < width; col++) {
+      final ch = line[col];
+      if (ch == '.') continue;
+      paint.color = colorResolver(ch);
+      if (paint.color == Colors.transparent) continue;
+      canvas.drawRect(
+        Rect.fromLTWH(
+          x + (width - 1 - col) * pixelSize,
+          y + row * pixelSize,
+          pixelSize + 0.5,
           pixelSize + 0.5,
         ),
         paint,

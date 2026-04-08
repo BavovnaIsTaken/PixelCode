@@ -5,6 +5,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
 import '../models/agent_message.dart';
 
 class AgentWsService {
@@ -54,8 +56,20 @@ class AgentWsService {
     }
   }
 
-  void sendMessage(String content) {
-    _send({'type': 'send_message', 'content': content});
+  void sendMessage(String content, {String agentId = 'manager'}) {
+    _send({'type': 'send_message', 'content': content, 'agentId': agentId});
+  }
+
+  void resumeSession(String sessionId) {
+    _send({'type': 'resume_session', 'sessionId': sessionId});
+  }
+
+  void newChat() {
+    _send({'type': 'new_chat'});
+  }
+
+  void clearSessions() {
+    _send({'type': 'clear_sessions'});
   }
 
   void interrupt() {
@@ -66,9 +80,124 @@ class AgentWsService {
     _send({'type': 'get_status'});
   }
 
+  // ─── Task board ──────────────────────────────────────────────────────────
+
+  void boardGetState() {
+    _send({'type': 'board_get_state'});
+  }
+
+  void boardCreateTask({
+    required String title,
+    String? description,
+    String? color,
+    String? priority,
+  }) {
+    _send({
+      'type': 'board_create_task',
+      'title': title,
+      if (description != null) 'description': description,
+      if (color != null) 'color': color,
+      if (priority != null) 'priority': priority,
+    });
+  }
+
+  void boardMoveTask({required String taskId, required String column}) {
+    _send({
+      'type': 'board_move_task',
+      'taskId': taskId,
+      'column': column,
+    });
+  }
+
+  void boardUpdateTask({
+    required String taskId,
+    required Map<String, dynamic> updates,
+  }) {
+    _send({
+      'type': 'board_update_task',
+      'taskId': taskId,
+      'updates': updates,
+    });
+  }
+
+  void boardDeleteTask({required String taskId}) {
+    _send({'type': 'board_delete_task', 'taskId': taskId});
+  }
+
+  void boardAssignAgent({
+    required String taskId,
+    required String agentId,
+    required bool assign,
+  }) {
+    _send({
+      'type': 'board_assign_agent',
+      'taskId': taskId,
+      'agentId': agentId,
+      'assign': assign,
+    });
+  }
+
+  // ─── Project management ───────────────────────────────────────────────────
+
+  void setProject(String path) {
+    _send({'type': 'set_project', 'path': path});
+  }
+
+  void setProjectContext(String memories) {
+    _send({'type': 'set_project_context', 'memories': memories});
+  }
+
+  void generateSummary() {
+    _send({'type': 'generate_summary'});
+  }
+
+  // ─── Game economy ────────────────────────────────────────────────────────
+
+  void setGameState({
+    required List<String> hiredAgents,
+    required Map<String, int> agentHardware,
+    required Map<String, Map<String, int>> agentSkills,
+  }) {
+    _send({
+      'type': 'set_game_state',
+      'hiredAgents': hiredAgents,
+      'agentHardware': agentHardware,
+      'agentSkills': agentSkills,
+    });
+  }
+
+  // ─── Agent traits ────────────────────────────────────────────────────────
+
+  void getTraits() {
+    _send({'type': 'get_traits'});
+  }
+
+  void recordLesson({
+    required String agentId,
+    required String lessonType,
+    required String category,
+    required String tag,
+    required String lesson,
+  }) {
+    _send({
+      'type': 'record_lesson',
+      'agentId': agentId,
+      'lessonType': lessonType,
+      'category': category,
+      'tag': tag,
+      'lesson': lesson,
+    });
+  }
+
+  void removeLesson(String lessonId) {
+    _send({'type': 'remove_lesson', 'lessonId': lessonId});
+  }
+
   void _send(Map<String, dynamic> msg) {
     if (_ws != null && _isConnected) {
       _ws!.add(jsonEncode(msg));
+    } else {
+      debugPrint('[WS] Message dropped (not connected): ${msg['type']}');
     }
   }
 

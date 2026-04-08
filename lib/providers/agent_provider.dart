@@ -6,7 +6,17 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/agent_message.dart';
+import '../models/agent_trait.dart';
 import '../services/agent_ws_service.dart';
+import '../services/chat_persistence_service.dart';
+import '../services/server_process_service.dart';
+import 'settings_provider.dart';
+
+// ─── Server Process ─────────────────────────────────────────────────────────
+
+final serverProcessProvider = Provider<ServerProcessService>((ref) {
+  throw UnimplementedError('Must be overridden in ProviderScope');
+});
 
 // ─── WebSocket Service ───────────────────────────────────────────────────────
 
@@ -28,22 +38,83 @@ final serverMessagesProvider = StreamProvider<ServerMessage>((ref) {
   return ref.watch(wsServiceProvider).messages;
 });
 
+// ─── Working directory ───────────────────────────────────────────────────
+
+class WorkingDirectoryNotifier extends Notifier<String?> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  String? build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return null;
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is InitMessage && msg.workingDirectory != null) {
+      state = msg.workingDirectory;
+    }
+  }
+}
+
+final workingDirectoryProvider =
+    NotifierProvider<WorkingDirectoryNotifier, String?>(
+  WorkingDirectoryNotifier.new,
+);
+
+// ─── Selected agent ──────────────────────────────────────────────────────
+
+final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
+
 // ─── Chat messages ───────────────────────────────────────────────────────────
 
 class ChatNotifier extends Notifier<List<ChatMessage>> {
   StreamSubscription<ServerMessage>? _sub;
+  Timer? _saveTimer;
 
   @override
   List<ChatMessage> build() {
     final ws = ref.watch(wsServiceProvider);
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
-    ref.onDispose(() => _sub?.cancel());
-    return [];
+    ref.onDispose(() {
+      _sub?.cancel();
+      _saveTimer?.cancel();
+    });
+
+    // Restore persisted messages
+    final prefs = ref.read(sharedPrefsProvider);
+    final restored = ChatPersistenceService.loadMessages(prefs);
+
+    // Resume server session if we have a stored session ID
+    final sessionId = ChatPersistenceService.loadSessionId(prefs);
+    if (sessionId != null) {
+      ws.connectionStatus.firstWhere((connected) => connected).then((_) {
+        ws.resumeSession(sessionId);
+      });
+    }
+
+    return restored;
+  }
+
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(seconds: 1), () {
+      final prefs = ref.read(sharedPrefsProvider);
+      ChatPersistenceService.saveMessages(prefs, state);
+    });
   }
 
   void _onMessage(ServerMessage msg) {
     switch (msg) {
+      case InitMessage(:final sessionId):
+        if (sessionId != 'pending') {
+          final prefs = ref.read(sharedPrefsProvider);
+          ChatPersistenceService.saveSessionId(prefs, sessionId);
+        }
+
       case AssistantTextMessage(:final text):
         // Streaming text — append to last message or create new
         final messages = [...state];
@@ -76,12 +147,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           messages.add(ChatMessage(role: ChatRole.assistant, text: text));
         }
         state = messages;
+        _scheduleSave();
 
       case ErrorMessage(:final message):
         state = [
           ...state,
           ChatMessage(role: ChatRole.assistant, text: '⚠️ $message'),
         ];
+        _scheduleSave();
 
       default:
         break;
@@ -89,8 +162,19 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void sendMessage(String text) {
+    final agentId = ref.read(selectedAgentProvider);
     state = [...state, ChatMessage(role: ChatRole.user, text: text)];
-    ref.read(wsServiceProvider).sendMessage(text);
+    ref.read(wsServiceProvider).sendMessage(text, agentId: agentId);
+    _scheduleSave();
+  }
+
+  void newChat() {
+    state = [];
+    final prefs = ref.read(sharedPrefsProvider);
+    ChatPersistenceService.clear(prefs);
+    ref.read(activityLogProvider.notifier).clear();
+    ref.read(debugLogProvider.notifier).clear();
+    ref.read(wsServiceProvider).newChat();
   }
 }
 
@@ -105,24 +189,34 @@ class AgentState {
   final AgentStatus status;
   final List<ToolActivity> activeTools;
   final String? currentTask;
+  final DateTime? activeSince;
+  final String? lastToolDescription;
 
   const AgentState({
     required this.info,
     this.status = AgentStatus.idle,
     this.activeTools = const [],
     this.currentTask,
+    this.activeSince,
+    this.lastToolDescription,
   });
+
+  bool get isActive => status != AgentStatus.idle;
 
   AgentState copyWith({
     AgentStatus? status,
     List<ToolActivity>? activeTools,
     String? currentTask,
+    DateTime? activeSince,
+    String? lastToolDescription,
   }) =>
       AgentState(
         info: info,
         status: status ?? this.status,
         activeTools: activeTools ?? this.activeTools,
         currentTask: currentTask ?? this.currentTask,
+        activeSince: activeSince ?? this.activeSince,
+        lastToolDescription: lastToolDescription ?? this.lastToolDescription,
       );
 }
 
@@ -148,9 +242,16 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
       case AgentStatusMessage(:final agentId, :final status, :final tools):
         final current = state[agentId];
         if (current != null) {
+          final wasIdle = current.status == AgentStatus.idle;
           state = {
             ...state,
-            agentId: current.copyWith(status: status, activeTools: tools),
+            agentId: current.copyWith(
+              status: status,
+              activeTools: tools,
+              activeSince: wasIdle && status != AgentStatus.idle
+                  ? DateTime.now()
+                  : null,
+            ),
           };
         }
 
@@ -159,11 +260,13 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
         final agentId = _resolveAgentId(agentType);
         final current = state[agentId];
         if (current != null) {
+          final wasIdle = current.status == AgentStatus.idle;
           state = {
             ...state,
             agentId: current.copyWith(
               status: AgentStatus.running,
               currentTask: task,
+              activeSince: wasIdle ? DateTime.now() : null,
             ),
           };
         }
@@ -174,23 +277,27 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
         if (current != null) {
           state = {
             ...state,
-            resolved: current.copyWith(
+            resolved: AgentState(
+              info: current.info,
               status: AgentStatus.idle,
-              activeTools: [],
-              currentTask: null,
+              activeTools: const [],
             ),
           };
         }
 
-      case ToolUseMessage(:final agentId, :final toolName):
-        // Determine which agent this tool belongs to based on tool name
+      case ToolUseMessage(:final agentId, :final toolName, :final status):
         final resolved = _resolveAgentId(agentId);
         final current = state[resolved];
         if (current != null) {
+          final wasIdle = current.status == AgentStatus.idle;
           final newStatus = _toolNameToStatus(toolName);
           state = {
             ...state,
-            resolved: current.copyWith(status: newStatus),
+            resolved: current.copyWith(
+              status: newStatus,
+              lastToolDescription: status,
+              activeSince: wasIdle ? DateTime.now() : null,
+            ),
           };
         }
 
@@ -198,11 +305,7 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
         // Reset all to idle
         state = {
           for (final entry in state.entries)
-            entry.key: entry.value.copyWith(
-              status: AgentStatus.idle,
-              activeTools: [],
-              currentTask: null,
-            ),
+            entry.key: AgentState(info: entry.value.info),
         };
 
       default:
@@ -232,4 +335,212 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
 
 final agentsProvider = NotifierProvider<AgentsNotifier, Map<String, AgentState>>(
   AgentsNotifier.new,
+);
+
+// ─── Team metrics ───────────────────────────────────────────────────────────
+
+class MetricsNotifier extends Notifier<Map<String, AgentMetrics>> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  Map<String, AgentMetrics> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return {};
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is TeamMetricsMessage) {
+      state = msg.metrics;
+    }
+  }
+}
+
+final metricsProvider =
+    NotifierProvider<MetricsNotifier, Map<String, AgentMetrics>>(
+  MetricsNotifier.new,
+);
+
+// ─── Activity log ───────────────────────────────────────────────────────────
+
+class ActivityLogNotifier extends Notifier<List<ActivityEventMessage>> {
+  static const _maxEvents = 200;
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  List<ActivityEventMessage> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return [];
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is ActivityEventMessage) {
+      final updated = [...state, msg];
+      // Keep only the last N events
+      state = updated.length > _maxEvents
+          ? updated.sublist(updated.length - _maxEvents)
+          : updated;
+    }
+  }
+
+  void clear() => state = [];
+}
+
+final activityLogProvider =
+    NotifierProvider<ActivityLogNotifier, List<ActivityEventMessage>>(
+  ActivityLogNotifier.new,
+);
+
+// ─── Communication graph ────────────────────────────────────────────────────
+
+class CommGraphNotifier extends Notifier<List<CommEvent>> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  List<CommEvent> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return [];
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is CommGraphMessage) {
+      state = msg.events;
+    }
+  }
+}
+
+final commGraphProvider =
+    NotifierProvider<CommGraphNotifier, List<CommEvent>>(
+  CommGraphNotifier.new,
+);
+
+// ─── Debug console ──────────────────────────────────────────────────────────
+
+class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
+  static const _maxEntries = 500;
+  StreamSubscription<ServerMessage>? _wsSub;
+  StreamSubscription<ServerProcessLog>? _procSub;
+
+  @override
+  List<DebugLogMessage> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _wsSub?.cancel();
+    _wsSub = ws.messages.listen(_onMessage);
+
+    final proc = ref.watch(serverProcessProvider);
+    _procSub?.cancel();
+    _procSub = proc.logs.listen(_onProcessLog);
+
+    ref.onDispose(() {
+      _wsSub?.cancel();
+      _procSub?.cancel();
+    });
+    return [];
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is DebugLogMessage) {
+      _add(msg);
+    }
+  }
+
+  void _onProcessLog(ServerProcessLog log) {
+    _add(DebugLogMessage(
+      timestamp: log.timestamp,
+      level: log.level,
+      category: 'process',
+      message: log.message,
+    ));
+  }
+
+  void _add(DebugLogMessage msg) {
+    final updated = [...state, msg];
+    state = updated.length > _maxEntries
+        ? updated.sublist(updated.length - _maxEntries)
+        : updated;
+  }
+
+  void clear() => state = [];
+}
+
+final debugLogProvider =
+    NotifierProvider<DebugLogNotifier, List<DebugLogMessage>>(
+  DebugLogNotifier.new,
+);
+
+// ─── Agent traits ──────────────────────────────────────────────────────────
+
+class TraitsNotifier extends Notifier<List<AgentTrait>> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  List<AgentTrait> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return [];
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is AgentTraitsMessage) {
+      state = msg.traits;
+    }
+  }
+
+  /// Get traits for a specific agent, sorted by frequency descending.
+  List<AgentTrait> forAgent(String agentId) {
+    return state
+        .where((t) => t.agentId == agentId)
+        .toList()
+      ..sort((a, b) => b.frequency.compareTo(a.frequency));
+  }
+
+  /// Get only weaknesses for an agent.
+  List<AgentTrait> weaknessesFor(String agentId) {
+    return forAgent(agentId)
+        .where((t) => t.type == TraitType.weakness)
+        .toList();
+  }
+
+  /// Get only strengths for an agent.
+  List<AgentTrait> strengthsFor(String agentId) {
+    return forAgent(agentId)
+        .where((t) => t.type == TraitType.strength)
+        .toList();
+  }
+
+  /// Record a lesson via WebSocket.
+  void recordLesson({
+    required String agentId,
+    required TraitType type,
+    required String category,
+    required String tag,
+    required String lesson,
+  }) {
+    ref.read(wsServiceProvider).recordLesson(
+          agentId: agentId,
+          lessonType: type == TraitType.strength ? 'strength' : 'weakness',
+          category: category,
+          tag: tag,
+          lesson: lesson,
+        );
+  }
+
+  /// Remove a lesson via WebSocket.
+  void removeLesson(String lessonId) {
+    ref.read(wsServiceProvider).removeLesson(lessonId);
+  }
+}
+
+final traitsProvider = NotifierProvider<TraitsNotifier, List<AgentTrait>>(
+  TraitsNotifier.new,
 );

@@ -15,14 +15,50 @@ class ChatPanel extends ConsumerStatefulWidget {
 class _ChatPanelState extends ConsumerState<ChatPanel> {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
-  final _focusNode = FocusNode();
+  late final FocusNode _focusNode;
+  bool _autoScroll = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.enter &&
+            !HardwareKeyboard.instance.isShiftPressed) {
+          _send();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+    );
+    _scrollController.addListener(_onScroll);
+    // Scroll to bottom on initial load so the user sees the latest messages
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
+  }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 40;
+    if (_autoScroll && !atBottom) {
+      setState(() => _autoScroll = false);
+    } else if (!_autoScroll && atBottom) {
+      setState(() => _autoScroll = true);
+    }
   }
 
   void _send() {
@@ -31,6 +67,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     ref.read(chatProvider.notifier).sendMessage(text);
     _controller.clear();
     _focusNode.requestFocus();
+    setState(() => _autoScroll = true);
     _scrollToBottom();
   }
 
@@ -51,7 +88,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     final messages = ref.watch(chatProvider);
 
     // Auto-scroll when new messages arrive
-    ref.listen(chatProvider, (prev, next) => _scrollToBottom());
+    ref.listen(chatProvider, (prev, next) {
+      if (_autoScroll) _scrollToBottom();
+    });
 
     return Container(
       color: const Color(0xFF0E0E11),
@@ -67,16 +106,29 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 ),
               ),
             ),
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
-                SizedBox(width: 8),
+                const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
+                const SizedBox(width: 8),
                 Text(
-                  'Tech Lead',
-                  style: TextStyle(
+                  ref.watch(selectedAgentProvider),
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  onPressed: () => ref.read(chatProvider.notifier).newChat(),
+                  icon: const Icon(Icons.add_comment_outlined),
+                  color: Colors.white.withValues(alpha: 0.4),
+                  iconSize: 18,
+                  tooltip: 'New Chat',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
                   ),
                 ),
               ],
@@ -86,12 +138,50 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           Expanded(
             child: messages.isEmpty
                 ? _buildEmptyState()
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    itemCount: messages.length,
-                    itemBuilder: (context, index) =>
-                        _ChatBubble(message: messages[index]),
+                : Stack(
+                    children: [
+                      ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.all(16),
+                        itemCount: messages.length,
+                        itemBuilder: (context, index) =>
+                            _ChatBubble(message: messages[index]),
+                      ),
+                      if (!_autoScroll)
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
+                          child: GestureDetector(
+                            onTap: () {
+                              setState(() => _autoScroll = true);
+                              _scrollToBottom();
+                            },
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E1F27),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white.withValues(alpha: 0.1),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.4),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.keyboard_arrow_down_rounded,
+                                color: Color(0xFF00C0D1),
+                                size: 22,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
           ),
           // Input
@@ -102,6 +192,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Widget _buildEmptyState() {
+    final workDir = ref.watch(workingDirectoryProvider);
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -113,20 +205,47 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Start a conversation with Tech Lead',
+            'Start a conversation',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.3),
               fontSize: 14,
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            'The team will coordinate automatically',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.15),
-              fontSize: 12,
+          if (workDir != null) ...[
+            const SizedBox(height: 12),
+            Tooltip(
+              message: workDir,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.06),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.folder_outlined,
+                      size: 13,
+                      color: Colors.white.withValues(alpha: 0.3),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      workDir.split('/').last,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.35),
+                        fontSize: 12,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -146,50 +265,41 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
       child: Row(
         children: [
           Expanded(
-            child: KeyboardListener(
-              focusNode: FocusNode(),
-              onKeyEvent: (event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.enter &&
-                    !HardwareKeyboard.instance.isShiftPressed) {
-                  _send();
-                }
-              },
-              child: TextField(
-                controller: _controller,
-                focusNode: _focusNode,
-                maxLines: 4,
-                minLines: 1,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Message Tech Lead...',
-                  hintStyle: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.25),
-                  ),
-                  filled: true,
-                  fillColor: const Color(0xFF0E0E11),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(
-                      color: Color(0xFF00C0D1),
-                      width: 1,
-                    ),
-                  ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: TextField(
+              controller: _controller,
+              focusNode: _focusNode,
+              autofocus: true,
+              maxLines: 4,
+              minLines: 1,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Message ${ref.watch(selectedAgentProvider)}...',
+                hintStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.25),
                 ),
+                filled: true,
+                fillColor: const Color(0xFF0E0E11),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.1),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.1),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: Color(0xFF00C0D1),
+                    width: 1,
+                  ),
+                ),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
             ),
           ),

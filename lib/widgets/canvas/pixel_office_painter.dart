@@ -1,4 +1,10 @@
-/// CustomPainter that renders the pixel-art office scene.
+/// CustomPainter that renders the pixel-art office scene with Z-sorted entities.
+///
+/// Uses PNG sprite sheets from pixel-agents for characters (16×32) and
+/// furniture. Falls back to text-based sprites when images aren't loaded yet.
+///
+/// Supports resource packs: [RoomTheme] for environment colors,
+/// [ComputerType] for monitor sprites, and [CharacterSkin] for agent palettes.
 library;
 
 import 'dart:math' as math;
@@ -6,362 +12,527 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../models/agent_message.dart';
-import '../../providers/agent_provider.dart';
+import '../../models/game_economy.dart';
+import '../../models/resource_pack.dart';
+import 'character_skins.dart';
+import 'character_sprites.dart';
+import 'computer_sprites.dart';
+import 'office_game_state.dart';
 import 'pixel_sprites.dart';
+import 'room_themes.dart';
 
-// ─── Office layout ──────────────────────────────────────────────────────────
+// ─── Z-sortable drawable ────────────────────────────────────────────────────
 
-/// Virtual canvas size in "pixels" (scaled to fit the widget).
-const kVirtualWidth = 224.0;
-const kVirtualHeight = 160.0;
-
-/// Tile size in virtual pixels.
-const kTile = 16.0;
-
-/// Desk station: defines where each agent sits.
-class DeskStation {
-  final String agentId;
-  final double deskX; // desk top-left in virtual px
-  final double deskY;
-  final double charX; // character position (bottom-center anchor)
-  final double charY;
-  final double monitorX;
-  final double monitorY;
-
-  const DeskStation({
-    required this.agentId,
-    required this.deskX,
-    required this.deskY,
-    required this.charX,
-    required this.charY,
-    required this.monitorX,
-    required this.monitorY,
-  });
+class _Drawable {
+  final double zY;
+  final void Function(Canvas canvas) draw;
+  _Drawable(this.zY, this.draw);
 }
 
-/// 7 desks arranged in a neat office layout.
-/// Row 0: Tech Lead centered.
-/// Row 1: Manager, Coder, Reviewer.
-/// Row 2: Tester, Security, UI/UX Designer.
-const _stations = <DeskStation>[
-  // Tech Lead — centered, front row
-  DeskStation(
-    agentId: 'tech-lead',
-    deskX: 96, deskY: 18,
-    charX: 102, charY: 42,
-    monitorX: 98, monitorY: 12,
-  ),
-  // Row 1
-  DeskStation(
-    agentId: 'manager',
-    deskX: 24, deskY: 62,
-    charX: 30, charY: 86,
-    monitorX: 26, monitorY: 56,
-  ),
-  DeskStation(
-    agentId: 'coder',
-    deskX: 96, deskY: 62,
-    charX: 102, charY: 86,
-    monitorX: 98, monitorY: 56,
-  ),
-  DeskStation(
-    agentId: 'reviewer',
-    deskX: 168, deskY: 62,
-    charX: 174, charY: 86,
-    monitorX: 170, monitorY: 56,
-  ),
-  // Row 2
-  DeskStation(
-    agentId: 'tester',
-    deskX: 24, deskY: 106,
-    charX: 30, charY: 130,
-    monitorX: 26, monitorY: 100,
-  ),
-  DeskStation(
-    agentId: 'security',
-    deskX: 96, deskY: 106,
-    charX: 102, charY: 130,
-    monitorX: 98, monitorY: 100,
-  ),
-  DeskStation(
-    agentId: 'ui-ux-designer',
-    deskX: 168, deskY: 106,
-    charX: 174, charY: 130,
-    monitorX: 170, monitorY: 100,
-  ),
-];
+// ─── Paint for pixel-perfect image rendering ────────────────────────────────
+
+final _pixelPaint = Paint()..filterQuality = FilterQuality.none;
 
 // ─── Painter ────────────────────────────────────────────────────────────────
 
 class PixelOfficePainter extends CustomPainter {
-  final Map<String, AgentState> agents;
-  final int tick; // animation tick (increments every ~200ms)
+  final OfficeGameState gameState;
+  final SpriteManager? sprites;
+  final String? selectedAgentId;
+  final String? hoveredAgentId;
+  final int tick;
+  final OfficeLevel officeLevel;
+  final CharacterSkin? skin;
 
-  PixelOfficePainter({required this.agents, required this.tick});
+  PixelOfficePainter({
+    required this.gameState,
+    this.sprites,
+    this.selectedAgentId,
+    this.hoveredAgentId,
+    this.tick = 0,
+    this.officeLevel = OfficeLevel.garage,
+    this.skin,
+  });
+
+  bool get _hasImages => sprites != null && sprites!.isLoaded;
+
+  RoomTheme get _theme => roomThemeForLevel(officeLevel);
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Calculate scale to fit virtual canvas into the widget.
     final scale = math.min(
-      size.width / kVirtualWidth,
-      size.height / kVirtualHeight,
+      size.width / kCanvasWidth,
+      size.height / kCanvasHeight,
     );
-
-    // Center the office in the widget.
-    final offsetX = (size.width - kVirtualWidth * scale) / 2;
-    final offsetY = (size.height - kVirtualHeight * scale) / 2;
+    final offsetX = (size.width - kCanvasWidth * scale) / 2;
+    final offsetY = (size.height - kCanvasHeight * scale) / 2;
 
     canvas.save();
     canvas.translate(offsetX, offsetY);
     canvas.scale(scale);
 
-    final px = 1.0; // one virtual pixel
-
-    _drawFloor(canvas, px);
-    _drawStations(canvas, px);
-    _drawVignette(canvas, size, scale, offsetX, offsetY);
+    _drawFloorAndWalls(canvas);
+    _drawScene(canvas);
+    _drawBubbles(canvas);
+    _drawVignette(canvas);
 
     canvas.restore();
   }
 
-  void _drawFloor(Canvas canvas, double px) {
+  // ─── Floor & walls ──────────────────────────────────────────────────────
+
+  void _drawFloorAndWalls(Canvas canvas) {
     final paint = Paint()..style = PaintingStyle.fill;
-    final tilesX = (kVirtualWidth / kTile).ceil();
-    final tilesY = (kVirtualHeight / kTile).ceil();
+    final tileMap = gameState.tileMap;
+    final theme = _theme;
 
-    for (int ty = 0; ty < tilesY; ty++) {
-      for (int tx = 0; tx < tilesX; tx++) {
-        final isDark = (tx + ty) % 2 == 0;
-        paint.color = isDark
-            ? const Color(0xFF121218)
-            : const Color(0xFF15151D);
-        canvas.drawRect(
-          Rect.fromLTWH(tx * kTile, ty * kTile, kTile + 0.5, kTile + 0.5),
-          paint,
-        );
+    for (int r = 0; r < kGridRows; r++) {
+      for (int c = 0; c < kGridCols; c++) {
+        final tx = c * kTileSize;
+        final ty = r * kTileSize;
+        final tile = tileMap[r][c];
+
+        if (tile == TileType.wall) {
+          paint.color = theme.wallBase;
+          canvas.drawRect(
+            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), paint);
+
+          if (r > 0 && tileMap[r - 1][c] == TileType.floor) {
+            paint.color = theme.wallTop;
+            canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize + 0.5, 2), paint);
+          }
+          if (r < kGridRows - 1 && tileMap[r + 1][c] == TileType.floor) {
+            paint.color = theme.wallInner;
+            canvas.drawRect(
+              Rect.fromLTWH(tx, ty + kTileSize - 2, kTileSize + 0.5, 2), paint);
+          }
+        } else {
+          paint.color = (c + r) % 2 == 0 ? theme.floorDark : theme.floorLight;
+          canvas.drawRect(
+            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), paint);
+        }
       }
     }
 
-    // Subtle grid lines
-    paint.color = const Color(0xFF1E1E28);
-    paint.strokeWidth = 0.5;
-    paint.style = PaintingStyle.stroke;
-    for (int tx = 0; tx <= tilesX; tx++) {
+    // Subtle grid
+    paint
+      ..color = theme.floorGrid
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.3;
+    for (int c = 1; c < kGridCols; c++) {
       canvas.drawLine(
-        Offset(tx * kTile, 0),
-        Offset(tx * kTile, kVirtualHeight),
+        Offset(c * kTileSize, kTileSize),
+        Offset(c * kTileSize, (kGridRows - 1) * kTileSize),
         paint,
       );
     }
-    for (int ty = 0; ty <= tilesY; ty++) {
+    for (int r = 1; r < kGridRows; r++) {
       canvas.drawLine(
-        Offset(0, ty * kTile),
-        Offset(kVirtualWidth, ty * kTile),
+        Offset(kTileSize, r * kTileSize),
+        Offset((kGridCols - 1) * kTileSize, r * kTileSize),
         paint,
       );
     }
   }
 
-  void _drawStations(Canvas canvas, double px) {
-    for (final station in _stations) {
-      final agentState = agents[station.agentId];
-      final isActive = agentState != null &&
-          agentState.status != AgentStatus.idle;
+  // ─── Z-sorted scene ─────────────────────────────────────────────────────
 
-      // Draw desk
-      drawSprite(canvas, deskSprite, station.deskX, station.deskY, px,
-          (k) => resolveFurniture(k));
+  void _drawScene(Canvas canvas) {
+    final drawables = <_Drawable>[];
 
-      // Draw monitor (animated if agent is active)
-      final monitorFrame = isActive
-          ? (tick % 2 == 0 ? monitorOn0 : monitorOn1)
-          : monitorOff;
-      drawSprite(canvas, monitorFrame, station.monitorX, station.monitorY, px,
-          (k) => resolveFurniture(k, monitorActive: isActive));
+    // Furniture per station: desk, PC, chair (only for hired agents)
+    for (final station in kStations) {
+      final ch = gameState.characters[station.agentId];
+      if (ch == null || !ch.isHired) continue;
+      final isActive = ch.isActive;
+      _addStationFurniture(drawables, station, isActive, ch);
+    }
 
-      // Draw monitor glow on desk surface when active
-      if (isActive) {
-        final glowPaint = Paint()
-          ..color = const Color(0xFF00C0D1).withValues(alpha: 0.08)
-          ..style = PaintingStyle.fill;
-        canvas.drawRect(
-          Rect.fromLTWH(station.deskX, station.deskY, 12 * px, 6 * px),
-          glowPaint,
+    // Decorative plants in corners (not in garage)
+    if (officeLevel != OfficeLevel.garage) {
+      _addPlants(drawables);
+    }
+
+    // Characters (only hired)
+    for (final ch in gameState.characters.values) {
+      if (!ch.isHired) continue;
+      _addCharacter(drawables, ch);
+    }
+
+    drawables.sort((a, b) => a.zY.compareTo(b.zY));
+    for (final d in drawables) {
+      d.draw(canvas);
+    }
+  }
+
+  void _addStationFurniture(
+    List<_Drawable> drawables,
+    DeskStation station,
+    bool isActive,
+    GameCharacter ch,
+  ) {
+    final deskTileX = station.deskCol * kTileSize;
+    final deskTileY = station.deskRow * kTileSize;
+    final deskZY = (station.deskRow + 1) * kTileSize.toDouble();
+    final theme = _theme;
+
+    // ── Desk surface (programmatic or PNG) ──
+    final deskImg = sprites?.furniture('DESK_FRONT');
+    if (_hasImages && deskImg != null) {
+      final dw = 48.0;
+      final dh = 32.0;
+      final dx = deskTileX + kTileSize / 2 - dw / 2;
+      final dy = deskTileY + kTileSize * 2 - dh;
+      drawables.add(_Drawable(deskZY, (c) {
+        c.drawImageRect(
+          deskImg,
+          Rect.fromLTWH(0, 0, deskImg.width.toDouble(), deskImg.height.toDouble()),
+          Rect.fromLTWH(dx, dy, dw, dh),
+          _pixelPaint,
         );
-      }
+      }));
+    } else {
+      // Fallback: colored rectangle using theme desk colors
+      drawables.add(_Drawable(deskZY, (c) {
+        final p = Paint()..style = PaintingStyle.fill;
+        p.color = theme.deskSurface;
+        c.drawRect(Rect.fromLTWH(deskTileX + 1, deskTileY + 10, 14, 5), p);
+        p.color = theme.deskEdge;
+        c.drawRect(Rect.fromLTWH(deskTileX + 1, deskTileY + 15, 14, 1), p);
+      }));
+    }
 
-      // Draw character
-      _drawCharacter(canvas, station, agentState, px);
+    // ── PC / Monitor ──
+    // Determine computer type from agent's hardware tier
+    final compType = computerForHardware(ch.hardware);
 
-      // Draw status label above character
-      if (agentState != null && isActive) {
-        _drawStatusBubble(canvas, station, agentState, px);
-      }
+    final pcName = isActive
+        ? 'PC_FRONT_ON_${(tick % 3) + 1}'
+        : 'PC_FRONT_OFF';
+    final pcImg = sprites?.furniture(pcName);
+    if (_hasImages && pcImg != null) {
+      final px = deskTileX.toDouble();
+      final py = deskTileY - kTileSize;
+      drawables.add(_Drawable(deskZY + 0.5, (c) {
+        c.drawImageRect(
+          pcImg,
+          Rect.fromLTWH(0, 0, pcImg.width.toDouble(), pcImg.height.toDouble()),
+          Rect.fromLTWH(px, py, kSpriteW.toDouble(), kSpriteH.toDouble()),
+          _pixelPaint,
+        );
+      }));
+    } else {
+      // Fallback: text sprite monitor from computer type
+      final frame = isActive
+          ? (tick % 2 == 0 ? compType.monitorOn0 : compType.monitorOn1)
+          : compType.monitorOff;
+      drawables.add(_Drawable(deskZY + 0.5, (c) {
+        drawSprite(c, frame, deskTileX + 4, deskTileY + 4, 1.0,
+            (k) => compType.resolveKey(k, active: isActive));
+      }));
+    }
 
-      // Draw name tag
-      _drawNameTag(canvas, station, agentState, px);
+    // ── Monitor glow on desk ──
+    if (isActive) {
+      final glowColor = compType.monitorGlow;
+      drawables.add(_Drawable(deskZY + 0.3, (c) {
+        c.drawRect(
+          Rect.fromLTWH(deskTileX + 2, deskTileY + 10, 12, 6),
+          Paint()
+            ..color = glowColor.withValues(alpha: 0.08)
+            ..style = PaintingStyle.fill,
+        );
+      }));
+    }
+
+    // ── Chair (behind character) ──
+    final chairImg = sprites?.furniture('CUSHIONED_CHAIR_BACK');
+    if (_hasImages && chairImg != null) {
+      final cx = station.seatCol * kTileSize.toDouble();
+      final cy = station.seatRow * kTileSize.toDouble();
+      final chairZY = (station.seatRow + 1) * kTileSize - 0.5;
+      drawables.add(_Drawable(chairZY, (c) {
+        c.drawImageRect(
+          chairImg,
+          Rect.fromLTWH(
+            0, 0, chairImg.width.toDouble(), chairImg.height.toDouble()),
+          Rect.fromLTWH(cx, cy, kTileSize, kTileSize),
+          _pixelPaint,
+        );
+      }));
     }
   }
 
-  void _drawCharacter(
-    Canvas canvas,
-    DeskStation station,
-    AgentState? agentState,
-    double px,
-  ) {
-    final palette = agentPalettes[station.agentId] ??
-        agentPalettes['tech-lead']!;
+  void _addPlants(List<_Drawable> drawables) {
+    final plantImg = sprites?.furniture('PLANT');
+    if (!_hasImages || plantImg == null) return;
 
-    final status = agentState?.status ?? AgentStatus.idle;
-
-    // Select sprite frame based on status and tick
-    final List<String> frame;
-    switch (status) {
-      case AgentStatus.typing:
-        frame = tick % 2 == 0 ? charType0 : charType1;
-      case AgentStatus.reading:
-        frame = charRead0;
-      case AgentStatus.thinking:
-        frame = tick % 2 == 0 ? charType0 : charType1;
-      case AgentStatus.running:
-        frame = tick % 2 == 0 ? charType0 : charType1;
-      case AgentStatus.waiting:
-        frame = charIdle0;
-      case AgentStatus.idle:
-        frame = charIdle0;
-    }
-
-    // Character position — centered horizontally on charX
-    final spriteWidth = frame[0].length;
-    final drawX = station.charX - (spriteWidth * px) / 2;
-    final drawY = station.charY - frame.length * px;
-
-    drawSprite(canvas, frame, drawX, drawY, px, (k) => palette.resolve(k));
-
-    // Active glow under character
-    if (status != AgentStatus.idle) {
-      final agentColor = _agentGlowColor(station.agentId);
-      final glowPaint = Paint()
-        ..color = agentColor.withValues(alpha: 0.12 + 0.04 * (tick % 3))
-        ..style = PaintingStyle.fill
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
-      canvas.drawOval(
-        Rect.fromCenter(
-          center: Offset(station.charX, station.charY + 1),
-          width: 12 * px,
-          height: 4 * px,
-        ),
-        glowPaint,
-      );
+    for (final pos in const [
+      (2, 1), (17, 1),   // top corners
+      (2, 11), (17, 11), // bottom corners
+    ]) {
+      final px = pos.$1 * kTileSize.toDouble();
+      final py = pos.$2 * kTileSize - kTileSize;
+      final zY = (pos.$2 + 1) * kTileSize.toDouble();
+      drawables.add(_Drawable(zY, (c) {
+        c.drawImageRect(
+          plantImg,
+          Rect.fromLTWH(
+            0, 0, plantImg.width.toDouble(), plantImg.height.toDouble()),
+          Rect.fromLTWH(px, py, kTileSize, kSpriteH.toDouble()),
+          _pixelPaint,
+        );
+      }));
     }
   }
 
-  void _drawStatusBubble(
-    Canvas canvas,
-    DeskStation station,
-    AgentState agentState,
-    double px,
-  ) {
-    final status = agentState.status;
-    final color = _agentGlowColor(station.agentId);
+  // Amber outline paint: turns all opaque pixels into amber.
+  static final _outlinePaint = Paint()
+    ..filterQuality = FilterQuality.none
+    ..colorFilter =
+        const ColorFilter.mode(Color(0xFFFFC107), BlendMode.srcATop);
 
-    // Bubble position above the character's head
-    final bubbleX = station.charX;
-    final bubbleY = station.charY - 18 * px;
+  void _addCharacter(List<_Drawable> drawables, GameCharacter ch) {
+    final sittingOffset =
+        ch.state == CharState.typing ? kSittingOffsetPx : 0.0;
+    final charZY = ch.y + kTileSize / 2 + kCharZSortOffset;
 
-    // Draw small colored dot indicator
-    final dotPaint = Paint()
-      ..color = color.withValues(alpha: 0.6 + 0.3 * ((tick % 3) / 2))
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(bubbleX, bubbleY), 2 * px, dotPaint);
+    final isSelected = selectedAgentId == ch.agentId;
+    final isHovered = hoveredAgentId == ch.agentId;
+    final glowColor = agentAccentColor(ch.agentId);
 
-    // Glow around the dot
-    dotPaint.color = color.withValues(alpha: 0.15);
-    dotPaint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-    canvas.drawCircle(Offset(bubbleX, bubbleY), 3 * px, dotPaint);
+    // Active glow under feet
+    if (ch.isActive) {
+      drawables.add(_Drawable(charZY - 0.003, (c) {
+        c.drawOval(
+          Rect.fromCenter(
+            center: Offset(ch.x, ch.y + sittingOffset + 1),
+            width: 14,
+            height: 4,
+          ),
+          Paint()
+            ..color = glowColor.withValues(alpha: 0.15)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+        );
+      }));
+    }
 
-    // Draw tiny pixel activity indicator
-    if (status == AgentStatus.thinking) {
-      // Three animated dots
+    // Selection / hover glow under feet
+    if (isSelected || isHovered) {
+      final outlineColor =
+          isSelected ? glowColor : const Color(0xFFFFC107);
+      final outlineAlpha = isSelected ? 0.35 : 0.25;
+      drawables.add(_Drawable(charZY - 0.002, (c) {
+        c.drawOval(
+          Rect.fromCenter(
+            center: Offset(ch.x, ch.y + sittingOffset + 1),
+            width: 18,
+            height: 6,
+          ),
+          Paint()
+            ..color = outlineColor.withValues(alpha: outlineAlpha)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+        );
+      }));
+    }
+
+    // ── Character sprite (PNG or fallback text) ──
+    final sheet = sprites?.charSheet(ch.paletteIndex);
+    if (_hasImages && sheet != null) {
+      final info = charSpriteFrame(ch);
+      final srcRect = charFrameRect(info.col, info.row);
+      final drawX = ch.x - kSpriteW / 2;
+      final drawY = ch.y + sittingOffset - kSpriteH;
+      final sw = kSpriteW.toDouble();
+      final sh = kSpriteH.toDouble();
+
+      // Amber 1px outline: draw sprite shifted in 4 directions
+      if (isHovered || isSelected) {
+        drawables.add(_Drawable(charZY - 0.001, (c) {
+          void drawShifted(double dx, double dy, bool flip) {
+            if (flip) {
+              c.save();
+              c.translate(drawX + dx + sw, drawY + dy);
+              c.scale(-1, 1);
+              c.drawImageRect(
+                  sheet, srcRect, Rect.fromLTWH(0, 0, sw, sh), _outlinePaint);
+              c.restore();
+            } else {
+              c.drawImageRect(sheet, srcRect,
+                  Rect.fromLTWH(drawX + dx, drawY + dy, sw, sh), _outlinePaint);
+            }
+          }
+
+          for (final d in const [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)]) {
+            drawShifted(d.$1, d.$2, info.mirror);
+          }
+        }));
+      }
+
+      // Normal sprite
+      drawables.add(_Drawable(charZY, (c) {
+        if (info.mirror) {
+          c.save();
+          c.translate(drawX + sw, drawY);
+          c.scale(-1, 1);
+          c.drawImageRect(
+              sheet, srcRect, Rect.fromLTWH(0, 0, sw, sh), _pixelPaint);
+          c.restore();
+        } else {
+          c.drawImageRect(
+              sheet, srcRect, Rect.fromLTWH(drawX, drawY, sw, sh), _pixelPaint);
+        }
+      }));
+    } else {
+      // Fallback: text sprite with skin palette support
+      final activeSkin = skin ?? skinDefault;
+      final skinPalette = activeSkin.palettes[ch.agentId];
+      final fallbackPalette =
+          agentPalettes[ch.agentId] ?? agentPalettes['manager']!;
+
+      Color resolveColor(String key) =>
+          skinPalette?.resolve(key) ?? fallbackPalette.resolve(key);
+
+      final (sprite, mirrored) = getCharacterSprite(ch);
+      final sw = sprite[0].length;
+      final shh = sprite.length;
+      final drawX = ch.x - (sw / 2);
+      final drawY = ch.y + sittingOffset - shh;
+
+      drawables.add(_Drawable(charZY, (c) {
+        if (mirrored) {
+          drawSpriteMirrored(c, sprite, drawX, drawY, 1.0, resolveColor);
+        } else {
+          drawSprite(c, sprite, drawX, drawY, 1.0, resolveColor);
+        }
+      }));
+    }
+  }
+
+  // ─── Speech bubbles ─────────────────────────────────────────────────────
+
+  void _drawBubbles(Canvas canvas) {
+    for (final ch in gameState.characters.values) {
+      if (!ch.isHired || !ch.isActive || ch.displayStatus == AgentStatus.idle) {
+        continue;
+      }
+      _drawBubble(canvas, ch);
+    }
+  }
+
+  void _drawBubble(Canvas canvas, GameCharacter ch) {
+    final sittingOffset =
+        ch.state == CharState.typing ? kSittingOffsetPx : 0.0;
+    final bx = ch.x;
+    final by = ch.y + sittingOffset - kSpriteH - 2;
+    final color = agentAccentColor(ch.agentId);
+
+    // Background pill
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(bx, by), width: 13, height: 8),
+        const Radius.circular(2),
+      ),
+      Paint()..color = const Color(0xFF1E1E2E).withValues(alpha: 0.92),
+    );
+
+    // Border
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(bx, by), width: 13, height: 8),
+        const Radius.circular(2),
+      ),
+      Paint()
+        ..color = color.withValues(alpha: 0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.5,
+    );
+
+    // Tail
+    final tail = Path()
+      ..moveTo(bx - 1, by + 4)
+      ..lineTo(bx, by + 6)
+      ..lineTo(bx + 1, by + 4);
+    canvas.drawPath(
+      tail,
+      Paint()..color = const Color(0xFF1E1E2E).withValues(alpha: 0.92),
+    );
+
+    // Content
+    if (ch.displayStatus == AgentStatus.thinking) {
+      final dp = Paint()..style = PaintingStyle.fill;
       for (int i = 0; i < 3; i++) {
-        final dotAlpha = ((tick + i) % 3 == 0) ? 0.8 : 0.2;
-        final dp = Paint()
-          ..color = color.withValues(alpha: dotAlpha)
-          ..style = PaintingStyle.fill;
+        dp.color = color.withValues(alpha: (tick + i) % 3 == 0 ? 0.9 : 0.3);
         canvas.drawRect(
-          Rect.fromLTWH(bubbleX - 3 * px + i * 3 * px, bubbleY - 4 * px, px, px),
-          dp,
-        );
+          Rect.fromLTWH(bx - 3 + i * 3, by - 0.5, 1, 1), dp);
       }
+    } else {
+      canvas.drawCircle(
+        Offset(bx, by), 1.5,
+        Paint()..color = color.withValues(alpha: 0.8),
+      );
     }
   }
 
-  void _drawNameTag(
-    Canvas canvas,
-    DeskStation station,
-    AgentState? agentState,
-    double px,
-  ) {
-    final isActive = agentState != null &&
-        agentState.status != AgentStatus.idle;
+  // ─── Vignette ───────────────────────────────────────────────────────────
 
-    final color = _agentGlowColor(station.agentId);
-
-    // Small colored line under the desk to identify the agent
-    final tagPaint = Paint()
-      ..color = isActive ? color.withValues(alpha: 0.6) : color.withValues(alpha: 0.2)
-      ..style = PaintingStyle.fill;
+  void _drawVignette(Canvas canvas) {
+    final center = Offset(kCanvasWidth / 2, kCanvasHeight / 2);
+    final rect = Rect.fromCenter(
+      center: center,
+      width: kCanvasWidth,
+      height: kCanvasHeight,
+    );
+    final theme = _theme;
 
     canvas.drawRect(
-      Rect.fromLTWH(station.deskX + 2, station.deskY + 7 * px, 8 * px, px),
-      tagPaint,
+      Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+      Paint()
+        ..shader = RadialGradient(
+          center: Alignment.center,
+          radius: 0.9,
+          colors: [
+            Colors.transparent,
+            Colors.transparent,
+            Colors.black.withValues(alpha: theme.vignetteAlpha),
+          ],
+          stops: const [0.0, 0.55, 1.0],
+        ).createShader(rect),
     );
-  }
 
-  void _drawVignette(
-    Canvas canvas,
-    Size widgetSize,
-    double scale,
-    double offsetX,
-    double offsetY,
-  ) {
-    // Draw vignette in virtual coordinates
-    final center = Offset(kVirtualWidth / 2, kVirtualHeight / 2);
-    final paint = Paint()
-      ..shader = RadialGradient(
-        center: Alignment.center,
-        radius: 0.9,
-        colors: [
-          Colors.transparent,
-          Colors.transparent,
-          Colors.black.withValues(alpha: 0.5),
-        ],
-        stops: const [0.0, 0.5, 1.0],
-      ).createShader(
-        Rect.fromCenter(
-          center: center,
-          width: kVirtualWidth,
-          height: kVirtualHeight,
-        ),
+    // Tech hub: subtle cyan ambient glow from below
+    if (officeLevel == OfficeLevel.techHub) {
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              theme.accentColor.withValues(alpha: 0.03),
+              Colors.transparent,
+            ],
+          ).createShader(rect),
       );
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, kVirtualWidth, kVirtualHeight),
-      paint,
-    );
-  }
+    }
 
-  Color _agentGlowColor(String id) => switch (id) {
-        'tech-lead' => const Color(0xFF00C0D1),
-        'manager' => const Color(0xFFF59E0B),
-        'coder' => const Color(0xFF10B981),
-        'reviewer' => const Color(0xFF8B5CF6),
-        'tester' => const Color(0xFFEC4899),
-        'security' => const Color(0xFFEF4444),
-        'ui-ux-designer' => const Color(0xFF3B82F6),
-        _ => const Color(0xFF6B7280),
-      };
+    // Campus: warm ambient glow
+    if (officeLevel == OfficeLevel.campus) {
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+        Paint()
+          ..shader = RadialGradient(
+            center: Alignment.center,
+            radius: 0.8,
+            colors: [
+              theme.accentColor.withValues(alpha: 0.02),
+              Colors.transparent,
+            ],
+          ).createShader(rect),
+      );
+    }
+  }
 
   @override
-  bool shouldRepaint(PixelOfficePainter oldDelegate) =>
-      tick != oldDelegate.tick || agents != oldDelegate.agents;
+  bool shouldRepaint(PixelOfficePainter oldDelegate) => true;
 }
