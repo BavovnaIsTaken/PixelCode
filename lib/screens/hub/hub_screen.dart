@@ -33,6 +33,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   bool _debugOpen = false;
   double _debugHeight = 200;
   bool _isShuttingDown = false;
+  double _shutdownHeight = 0;
   int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop
   bool _showGames = false;
 
@@ -52,43 +53,29 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _arkanoidTimer?.cancel();
   }
 
-  // Idle logo flip — single Y-axis rotation at random intervals
-  late final AnimationController _idleLogoCtrl = AnimationController(
+  // Periodic glitch effect on the logo
+  late final AnimationController _glitchCtrl = AnimationController(
     vsync: this,
   );
+  int _glitchSeed = 0;
 
-  void _scheduleIdleFlip() {
+  void _scheduleGlitch() {
     if (_isShuttingDown || !mounted) return;
-    final delay = 3000 + _rng.nextInt(5000); // 3–8s
+    final delay = 10000 + _rng.nextInt(30001); // 10–40s
     Future.delayed(Duration(milliseconds: delay), () {
       if (_isShuttingDown || !mounted) return;
-      final dur = 700 + _rng.nextInt(1301); // 700–2000ms
-      _idleLogoCtrl
+      _glitchSeed = _rng.nextInt(10000);
+      final dur = 200 + _rng.nextInt(401); // 200–600ms
+      _glitchCtrl
         ..duration = Duration(milliseconds: dur)
-        ..forward(from: 0.0).then((_) => _scheduleIdleFlip());
+        ..forward(from: 0.0).then((_) => _scheduleGlitch());
     });
   }
 
   // Shutdown animation
   late final AnimationController _shutdownCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1600),
-  );
-
-  // Logo spins 1× during first 40% of shutdown
-  late final Animation<double> _logoSpin = Tween(begin: 0.0, end: 1.0).animate(
-    CurvedAnimation(
-      parent: _shutdownCtrl,
-      curve: const Interval(0.0, 0.4, curve: Curves.easeInOut),
-    ),
-  );
-
-  // Screen collapses vertically (CRT power-off) during 40%-100%
-  late final Animation<double> _scaleY = Tween(begin: 1.0, end: 0.01).animate(
-    CurvedAnimation(
-      parent: _shutdownCtrl,
-      curve: const Interval(0.4, 1.0, curve: Curves.easeInQuart),
-    ),
+    duration: const Duration(milliseconds: 5000), // TODO: revert to 1600ms after debug
   );
 
   // Bright flash at the center
@@ -98,6 +85,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
     TweenSequenceItem(tween: Tween(begin: 0.8, end: 0.0), weight: 45),
   ]).animate(_shutdownCtrl);
 
+  // Content lift + fade during native window collapse.
+  // Intentionally faster than the native 550ms so it finishes first.
+  late final AnimationController _liftCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 350),
+  );
+
   // Opening animation — content scales up from center
   late final AnimationController _openCtrl = AnimationController(
     vsync: this,
@@ -106,19 +100,21 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   void _triggerShutdown() {
     if (_isShuttingDown) return;
+    _shutdownHeight = MediaQuery.of(context).size.height;
     setState(() => _isShuttingDown = true);
-    _idleLogoCtrl.stop();
+    _glitchCtrl.stop();
     _shutdownCtrl.forward();
     // Start native window collapse slightly after content starts shrinking
     Future.delayed(const Duration(milliseconds: 640), () {
       _windowChannel.invokeMethod('animateShutdown');
+      _liftCtrl.forward();
     });
   }
 
   @override
   void initState() {
     super.initState();
-    _scheduleIdleFlip();
+    _scheduleGlitch();
     // Give the server a moment to start, then connect
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) {
@@ -131,8 +127,9 @@ class _HubScreenState extends ConsumerState<HubScreen>
   @override
   void dispose() {
     _arkanoidTimer?.cancel();
-    _idleLogoCtrl.dispose();
+    _glitchCtrl.dispose();
     _shutdownCtrl.dispose();
+    _liftCtrl.dispose();
     _openCtrl.dispose();
     super.dispose();
   }
@@ -150,18 +147,30 @@ class _HubScreenState extends ConsumerState<HubScreen>
     return Scaffold(
       backgroundColor: const Color(0xFF0E0E11),
       body: AnimatedBuilder(
-        animation: Listenable.merge([_shutdownCtrl, _openCtrl]),
+        animation: Listenable.merge([_shutdownCtrl, _liftCtrl, _openCtrl]),
         builder: (context, child) {
           final sy = _isShuttingDown
-              ? _scaleY.value
+              ? 1.0
               : Curves.easeOut.transform(_openCtrl.value);
+          // Lift content UP + fade out, finishing before the native window
+          // collapse so the animation never lags behind the shrinking frame.
+          final t = Curves.easeOut.transform(_liftCtrl.value);
+          final liftY = _isShuttingDown
+              ? -t * (_shutdownHeight - 50) / 2
+              : 0.0;
+          final contentOpacity = _isShuttingDown ? 1.0 - t : 1.0;
           return Stack(
             children: [
-              // Main content with CRT power-off / open transform
-              Transform(
-                alignment: Alignment.center,
-                transform: Matrix4.diagonal3Values(1.0, sy, 1.0),
-                child: child,
+              Opacity(
+                opacity: contentOpacity,
+                child: Transform.translate(
+                  offset: Offset(0, liftY),
+                  child: Transform(
+                    alignment: Alignment.center,
+                    transform: Matrix4.diagonal3Values(1.0, sy, 1.0),
+                    child: child,
+                  ),
+                ),
               ),
               // White flash overlay
               if (_flash.value > 0)
@@ -206,11 +215,44 @@ class _HubScreenState extends ConsumerState<HubScreen>
                       ),
                       // Right: Agent canvas, Task board, or Shop
                       Expanded(
-                        child: switch (_viewIndex) {
-                          1 => const TaskBoardPanel(),
-                          2 => const ShopPanel(),
-                          _ => const AgentCanvas(),
-                        },
+                        child: AnimatedSwitcher(
+                          duration: _viewIndex == 0
+                              ? const Duration(milliseconds: 350)
+                              : Duration.zero,
+                          switchInCurve: Curves.easeOutCubic,
+                          switchOutCurve: Curves.easeInCubic,
+                          transitionBuilder: (child, animation) {
+                            return AnimatedBuilder(
+                              animation: animation,
+                              builder: (context, _) {
+                                return ClipRect(
+                                  child: Align(
+                                    heightFactor: animation.value,
+                                    widthFactor: animation.value,
+                                    child: child,
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                          layoutBuilder: (currentChild, previousChildren) {
+                            return Stack(
+                              alignment: Alignment.center,
+                              children: [
+                                ...previousChildren,
+                                if (currentChild != null) currentChild,
+                              ],
+                            );
+                          },
+                          child: KeyedSubtree(
+                            key: ValueKey(_viewIndex),
+                            child: switch (_viewIndex) {
+                              1 => const TaskBoardPanel(),
+                              2 => const ShopPanel(),
+                              _ => const AgentCanvas(),
+                            },
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -272,153 +314,94 @@ class _HubScreenState extends ConsumerState<HubScreen>
               child: Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: AnimatedBuilder(
-                  animation: Listenable.merge([_idleLogoCtrl, _logoSpin]),
+                  animation: _glitchCtrl,
                   builder: (context, _) {
-                    final t = _isShuttingDown
-                        ? _logoSpin.value
-                        : _idleLogoCtrl.value;
-                    final angle = t * 2 * pi;
-                    final cosA = cos(angle);
-                    final sinA = sin(angle);
-                    final showFront = cosA >= 0;
+                    const size = 24.0;
+                    final t = _glitchCtrl.value;
+                    final glitching = _glitchCtrl.isAnimating && t > 0;
 
-                    // Thick coin with lighting
-                    const totalThickness = 8.0;
-                    const edgeLayers = 20;
-                    const layerSpacing = totalThickness / edgeLayers;
-                    const faceColor = Color(0xFF6C3FB5);
+                    if (!glitching) {
+                      return Image.asset(
+                        'assets/logo.png',
+                        width: size,
+                        height: size,
+                        filterQuality: FilterQuality.medium,
+                      );
+                    }
 
-                    final faceScaleX = cosA.abs().clamp(0.01, 1.0);
-                    final edgeDir = sinA > 0 ? 1.0 : -1.0;
-
-                    // Light source from top-left (-0.7, -0.6)
-                    // How much edge faces the light: dot(edgeNormal, lightDir)
-                    // Edge normal points along sinA direction
-                    final lightDot = (-0.7 * sinA).clamp(-1.0, 1.0);
-                    // Face lighting: how much the face normal (cosA) aligns with light
-                    final faceLightDot = (-0.7 * cosA).clamp(-1.0, 1.0);
-                    // Face brightness overlay
-                    final faceHighlight = ((faceLightDot + 1.0) / 2.0)
-                        .clamp(0.0, 1.0); // 0=dark, 1=bright
-
-                    // Drop shadow: shifts opposite to light, stronger when edge-on
-                    final shadowOpacity =
-                        (0.5 * (1.0 - cosA.abs())).clamp(0.0, 0.4);
-                    final shadowDx = sinA * 3.0;
+                    final frame = (t * 8).floor();
+                    final r = Random(_glitchSeed + frame);
+                    final dx = (r.nextDouble() - 0.5) * 6;
+                    final split = 1.0 + r.nextDouble() * 3.0;
+                    final showBar = r.nextInt(3) == 0;
+                    final barY = r.nextDouble() * size;
 
                     return SizedBox(
-                      width: 40,
-                      height: 28, // extra for shadow
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          // Drop shadow
-                          Transform.translate(
-                            offset: Offset(shadowDx, 2.5),
-                            child: Container(
-                              width: 22 * faceScaleX + totalThickness * sinA.abs(),
-                              height: 22,
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(4),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(
-                                        alpha: shadowOpacity),
-                                    blurRadius: 6,
-                                    spreadRadius: 1,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          // Edge layers with directional lighting
-                          for (int i = edgeLayers; i >= 1; i--)
-                            Builder(builder: (context) {
-                              final frac = i / edgeLayers;
-                              final dx = edgeDir * i * layerSpacing;
-
-                              // Per-layer lighting: layers closer to light are brighter
-                              // Map frac to light exposure based on direction
-                              final layerLight = ((lightDot + 1.0) / 2.0 *
-                                      (1.0 - frac * 0.3))
-                                  .clamp(0.0, 1.0);
-
-                              // Base edge color modulated by light
-                              final litColor = Color.lerp(
-                                const Color(0xFF1E0A3A), // deep shadow
-                                const Color(0xFFB088E8), // bright highlight
-                                layerLight,
-                              )!;
-
-                              // Rim specular: bright line on edge closest to viewer
-                              final rimFactor =
-                                  frac < 0.1 ? (1.0 - frac / 0.1) * 0.3 : 0.0;
-                              final color = Color.lerp(
-                                litColor,
-                                Colors.white,
-                                rimFactor,
-                              )!;
-
-                              final heightShrink = frac * 1.2;
-                              return Transform.translate(
-                                offset: Offset(dx, 0),
-                                child: Container(
-                                  width: layerSpacing + 0.5,
-                                  height: 24 - heightShrink,
-                                  decoration: BoxDecoration(
-                                    color: color,
-                                    borderRadius: BorderRadius.circular(2),
+                      width: size + 8,
+                      height: size,
+                      child: ClipRect(
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            // Red channel offset
+                            Transform.translate(
+                              offset: Offset(split + dx, 0),
+                              child: ColorFiltered(
+                                colorFilter: const ColorFilter.mode(
+                                  Color(0xFFFF0040),
+                                  BlendMode.modulate,
+                                ),
+                                child: Opacity(
+                                  opacity: 0.5,
+                                  child: Image.asset(
+                                    'assets/logo.png',
+                                    width: size,
+                                    height: size,
                                   ),
                                 ),
-                              );
-                            }),
-                          // Front face with lighting overlay
-                          Transform(
-                            alignment: Alignment.center,
-                            transform: Matrix4.diagonal3Values(
-                              faceScaleX, 1.0, 1.0,
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: Stack(
-                                children: [
-                                  if (showFront)
-                                    Image.asset(
-                                      'assets/logo.png',
-                                      width: 24,
-                                      height: 24,
-                                      filterQuality: FilterQuality.medium,
-                                    )
-                                  else
-                                    Container(
-                                      width: 24,
-                                      height: 24,
-                                      color: faceColor,
-                                    ),
-                                  // Light/shadow overlay on face
-                                  Container(
-                                    width: 24,
-                                    height: 24,
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                        colors: [
-                                          Colors.white.withValues(
-                                            alpha: faceHighlight * 0.15,
-                                          ),
-                                          Colors.black.withValues(
-                                            alpha: (1.0 - faceHighlight) * 0.25,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
                               ),
                             ),
-                          ),
-                        ],
+                            // Cyan channel offset
+                            Transform.translate(
+                              offset: Offset(-split + dx, 0),
+                              child: ColorFiltered(
+                                colorFilter: const ColorFilter.mode(
+                                  Color(0xFF00FFFF),
+                                  BlendMode.modulate,
+                                ),
+                                child: Opacity(
+                                  opacity: 0.5,
+                                  child: Image.asset(
+                                    'assets/logo.png',
+                                    width: size,
+                                    height: size,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            // Main image
+                            Transform.translate(
+                              offset: Offset(dx, 0),
+                              child: Image.asset(
+                                'assets/logo.png',
+                                width: size,
+                                height: size,
+                                filterQuality: FilterQuality.medium,
+                              ),
+                            ),
+                            // Glitch scan bar
+                            if (showBar)
+                              Positioned(
+                                top: barY,
+                                left: -4,
+                                right: -4,
+                                child: Container(
+                                  height: 2,
+                                  color: Colors.white.withValues(alpha: 0.15),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
                     );
                   },
@@ -454,7 +437,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           ),
           const SizedBox(width: 8),
           Text(
-            isConnected ? 'Connected' : 'Disconnected',
+            isConnected ? 'Підключено' : 'Відключено',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.5),
               fontSize: 12,
@@ -511,7 +494,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               ),
             ),
           Tooltip(
-            message: 'Settings',
+            message: 'Налаштування',
             child: InkWell(
               onTap: () => showSettingsDialog(context),
               borderRadius: BorderRadius.circular(4),
@@ -527,7 +510,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           ),
           const SizedBox(width: 4),
           Tooltip(
-            message: 'Debug Console (Cmd+`)',
+            message: 'Консоль (Cmd+`)',
             child: InkWell(
               onTap: () => setState(() => _debugOpen = !_debugOpen),
               borderRadius: BorderRadius.circular(4),
@@ -734,7 +717,7 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
     }
 
     return Tooltip(
-      message: enabled ? 'Stop all agents' : 'No active agents',
+      message: enabled ? 'Зупинити всіх агентів' : 'Немає активних агентів',
       child: MouseRegion(
         cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         onEnter: (_) => setState(() => _hovered = true),
@@ -765,7 +748,7 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
                 Icon(Icons.stop_circle_outlined, size: 14, color: fgColor),
                 const SizedBox(width: 4),
                 Text(
-                  'Stop All',
+                  'Стоп',
                   style: TextStyle(
                     color: fgColor,
                     fontSize: 11,

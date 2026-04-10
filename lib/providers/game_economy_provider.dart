@@ -164,6 +164,12 @@ class GameEconomyNotifier extends Notifier<GameState> {
       grymni: state.grymni + refund,
       agents: updated,
     );
+
+    // If the fired agent was selected, switch to manager
+    if (ref.read(selectedAgentProvider) == agentId) {
+      ref.read(selectedAgentProvider.notifier).state = 'manager';
+    }
+
     _scheduleSave();
     _syncToServer();
   }

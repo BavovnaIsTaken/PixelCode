@@ -359,12 +359,14 @@ enum ChatRole { user, assistant }
 class ChatMessage {
   final ChatRole role;
   final String text;
+  final String agentId;
   final DateTime timestamp;
   final bool isStreaming;
 
   ChatMessage({
     required this.role,
     required this.text,
+    required this.agentId,
     DateTime? timestamp,
     this.isStreaming = false,
   }) : timestamp = timestamp ?? DateTime.now();
@@ -372,6 +374,7 @@ class ChatMessage {
   ChatMessage copyWith({String? text, bool? isStreaming}) => ChatMessage(
         role: role,
         text: text ?? this.text,
+        agentId: agentId,
         timestamp: timestamp,
         isStreaming: isStreaming ?? this.isStreaming,
       );
@@ -379,12 +382,14 @@ class ChatMessage {
   Map<String, dynamic> toJson() => {
         'role': role == ChatRole.user ? 'user' : 'assistant',
         'text': text,
+        'agentId': agentId,
         'timestamp': timestamp.toIso8601String(),
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         role: json['role'] == 'user' ? ChatRole.user : ChatRole.assistant,
         text: json['text'] as String,
+        agentId: json['agentId'] as String? ?? 'manager',
         timestamp: DateTime.parse(json['timestamp'] as String),
       );
 }

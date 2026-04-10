@@ -1092,34 +1092,34 @@ class _ArkanoidPainter extends CustomPainter {
 
     switch (phase) {
       case _Phase.waitingLaunch:
-        _drawText(canvas, size.width, cy - 12, 'CLICK TO LAUNCH', 24,
+        _drawText(canvas, size.width, cy - 12, 'КЛІК ДЛЯ ЗАПУСКУ', 24,
             Colors.white);
-        _drawText(canvas, size.width, cy + 20, 'Move mouse to aim', 11,
+        _drawText(canvas, size.width, cy + 20, 'Мишкою цільтесь', 11,
             Colors.white.withValues(alpha: 0.5));
       case _Phase.paused:
         _drawText(
-            canvas, size.width, cy - 12, 'PAUSED', 24, Colors.white);
+            canvas, size.width, cy - 12, 'ПАУЗА', 24, Colors.white);
         _drawText(
             canvas,
             size.width,
             cy + 20,
-            'Click to resume \u00b7 R to restart',
+            'Клік для продовження \u00b7 R для перезапуску',
             11,
             Colors.white.withValues(alpha: 0.5));
       case _Phase.gameOver:
         _drawText(
-            canvas, size.width, cy - 24, 'GAME OVER', 24, Colors.white);
-        final sub = 'Score: $score${highScore > 0 ? '  Best: $highScore' : ''}';
+            canvas, size.width, cy - 24, 'КІНЕЦЬ ГРИ', 24, Colors.white);
+        final sub = 'Рахунок: $score${highScore > 0 ? '  Рекорд: $highScore' : ''}';
         _drawText(canvas, size.width, cy + 12, sub, 12,
             Colors.white.withValues(alpha: 0.7));
-        _drawText(canvas, size.width, cy + 34, 'Click to restart', 11,
+        _drawText(canvas, size.width, cy + 34, 'Клік для перезапуску', 11,
             Colors.white.withValues(alpha: 0.5));
       case _Phase.won:
-        _drawText(canvas, size.width, cy - 24, 'LEVEL COMPLETE!', 24,
+        _drawText(canvas, size.width, cy - 24, 'РІВЕНЬ ПРОЙДЕНО!', 24,
             Colors.white);
-        _drawText(canvas, size.width, cy + 12, 'Score: $score', 12,
+        _drawText(canvas, size.width, cy + 12, 'Рахунок: $score', 12,
             Colors.white.withValues(alpha: 0.7));
-        _drawText(canvas, size.width, cy + 34, 'Click for next level', 11,
+        _drawText(canvas, size.width, cy + 34, 'Клік для наступного рівня', 11,
             Colors.white.withValues(alpha: 0.5));
       case _Phase.running:
         break;

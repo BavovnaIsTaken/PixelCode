@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _keyServerUrl = 'settings_server_url';
 const _keyShowArkanoidButton = 'settings_show_arkanoid_button';
+const _keyDeskHeight = 'settings_desk_height';
 const defaultServerUrl = 'ws://localhost:9720';
 
 // ─── Settings model ─────────────────────────────────────────────────────────
@@ -15,16 +16,23 @@ const defaultServerUrl = 'ws://localhost:9720';
 class AppSettings {
   final String serverUrl;
   final bool showArkanoidButton;
+  final double deskHeight;
 
   const AppSettings({
     this.serverUrl = defaultServerUrl,
     this.showArkanoidButton = false,
+    this.deskHeight = 74.0,
   });
 
-  AppSettings copyWith({String? serverUrl, bool? showArkanoidButton}) =>
+  AppSettings copyWith({
+    String? serverUrl,
+    bool? showArkanoidButton,
+    double? deskHeight,
+  }) =>
       AppSettings(
         serverUrl: serverUrl ?? this.serverUrl,
         showArkanoidButton: showArkanoidButton ?? this.showArkanoidButton,
+        deskHeight: deskHeight ?? this.deskHeight,
       );
 }
 
@@ -43,6 +51,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     return AppSettings(
       serverUrl: prefs.getString(_keyServerUrl) ?? defaultServerUrl,
       showArkanoidButton: prefs.getBool(_keyShowArkanoidButton) ?? false,
+      deskHeight: prefs.getDouble(_keyDeskHeight) ?? 74.0,
     );
   }
 
@@ -56,6 +65,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setBool(_keyShowArkanoidButton, value);
     state = state.copyWith(showArkanoidButton: value);
+  }
+
+  Future<void> setDeskHeight(double value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    await prefs.setDouble(_keyDeskHeight, value);
+    state = state.copyWith(deskHeight: value);
   }
 }
 

@@ -137,7 +137,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               color: Colors.white.withValues(alpha: 0.5), size: 18),
           const SizedBox(width: 8),
           const Text(
-            'Team',
+            'Команда',
             style: TextStyle(
               color: Colors.white,
               fontSize: 13,
@@ -154,7 +154,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              active > 0 ? '$active active' : 'all idle',
+              active > 0 ? '$active активн.' : 'усі вільні',
               style: TextStyle(
                 color: active > 0
                     ? const Color(0xFF00C0D1)
@@ -181,7 +181,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           ),
           const SizedBox(height: 12),
           Text(
-            'Waiting for server connection...',
+            'Очікування підключення до сервера...',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.2),
               fontSize: 13,
@@ -272,7 +272,11 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   void _onCanvasTap(Offset pos, BoxConstraints constraints) {
     final hit = _hitTestCharacter(pos, constraints);
     if (hit != null) {
-      ref.read(selectedAgentProvider.notifier).state = hit;
+      // Only allow selecting hired agents
+      final ch = _gameState.characters[hit];
+      if (ch != null && ch.isHired) {
+        ref.read(selectedAgentProvider.notifier).state = hit;
+      }
     }
   }
 
@@ -312,9 +316,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       final (nick, role) = _agentNickAndRole(station.agentId);
 
       final highlighted = isSelected || isHovered;
-      final borderColor = isSelected
-          ? color
-          : const Color(0xFFFFC107); // amber for hover
+      const borderColor = Color(0xFFFFC107); // amber for both hover & select
 
       widgets.add(
         Positioned(
@@ -338,13 +340,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                     const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
                 decoration: BoxDecoration(
                   color: highlighted
-                      ? borderColor.withValues(alpha: 0.08)
-                      : Colors.transparent,
+                      ? borderColor.withValues(alpha: 0.15)
+                      : const Color(0xCC1A1A2E),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                     color: highlighted
                         ? borderColor.withValues(alpha: 0.4)
-                        : Colors.transparent,
+                        : Colors.white.withValues(alpha: 0.08),
                     width: 1,
                   ),
                 ),
@@ -356,13 +358,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: highlighted
-                            ? (isSelected ? color : const Color(0xFFFFC107))
+                            ? const Color(0xFFFFC107)
                             : isActive
                                 ? color
-                                : Colors.white.withValues(alpha: 0.4),
+                                : Colors.white.withValues(alpha: 0.85),
                         fontSize: 9,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 0.5,
+                        shadows: const [
+                          Shadow(
+                            color: Color(0xCC000000),
+                            blurRadius: 2,
+                          ),
+                        ],
                       ),
                     ),
                     // Role (always visible)
@@ -371,8 +379,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: highlighted
-                            ? Colors.white.withValues(alpha: 0.4)
-                            : Colors.white.withValues(alpha: 0.2),
+                            ? Colors.white.withValues(alpha: 0.7)
+                            : Colors.white.withValues(alpha: 0.5),
                         fontSize: 7,
                         fontWeight: FontWeight.w400,
                       ),
@@ -402,13 +410,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   static (String nick, String role) _agentNickAndRole(String id) =>
       switch (id) {
-        'manager' => ('Менеджер', 'координатор'),
-        'tech-lead' => ('Тех Лід', 'технічний лідер'),
-        'coder' => ('Кодер', 'розробник'),
-        'reviewer' => ("Рев'юер", 'рецензент'),
-        'tester' => ('Тестер', 'контроль якості'),
-        'security' => ("Сек'юріті", 'безпека'),
-        'ui-ux-designer' => ('Дизайнер', 'UI/UX'),
+        'manager' => ('Капітан', 'координатор'),
+        'tech-lead' => ('Архітект', 'технічний лідер'),
+        'coder' => ('Майстер', 'розробник'),
+        'reviewer' => ('Детектив', 'рецензент'),
+        'tester' => ('Крашер', 'контроль якості'),
+        'security' => ('Страж', 'безпека'),
+        'ui-ux-designer' => ('Піксельник', 'UI/UX'),
         _ => (id, ''),
       };
 
@@ -585,7 +593,7 @@ class _CommGraphPanelState extends State<_CommGraphPanel> {
     180: '3h',
     600: '10h',
     1440: '24h',
-    null: 'All',
+    null: 'Все',
   };
 
   @override
@@ -622,7 +630,7 @@ class _CommGraphPanelState extends State<_CommGraphPanel> {
                   size: 14, color: Colors.white.withValues(alpha: 0.4)),
               const SizedBox(width: 6),
               Text(
-                'Comms',
+                'Комунікації',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 10,
@@ -672,7 +680,7 @@ class _CommGraphPanelState extends State<_CommGraphPanel> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                'No communications in this window',
+                'Немає комунікацій у цьому вікні',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.15),
                   fontSize: 9,
@@ -731,7 +739,7 @@ class _CommEdge extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            from == 'user' ? 'You' : from,
+            from == 'user' ? 'Ви' : from,
             style: TextStyle(
               color: fromColor,
               fontSize: 9,
@@ -747,7 +755,7 @@ class _CommEdge extends StatelessWidget {
             ),
           ),
           Text(
-            to == 'user' ? 'You' : to,
+            to == 'user' ? 'Ви' : to,
             style: TextStyle(
               color: toColor,
               fontSize: 9,
@@ -813,7 +821,7 @@ class _TeamMetricsBar extends StatelessWidget {
                   size: 14, color: Colors.white.withValues(alpha: 0.4)),
               const SizedBox(width: 6),
               Text(
-                'Team Metrics',
+                'Метрики команди',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.5),
                   fontSize: 10,
@@ -998,7 +1006,7 @@ class _ActivityLogPanelState extends State<_ActivityLogPanel> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    'Activity Log',
+                    'Журнал активності',
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.5),
                       fontSize: 10,
@@ -1053,7 +1061,7 @@ class _ActivityLogPanelState extends State<_ActivityLogPanel> {
               child: count == 0
                   ? Center(
                       child: Text(
-                        'No activity yet',
+                        'Поки що немає активності',
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.15),
                           fontSize: 11,

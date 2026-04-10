@@ -319,8 +319,7 @@ class PixelOfficePainter extends CustomPainter {
 
     // Selection / hover glow under feet
     if (isSelected || isHovered) {
-      final outlineColor =
-          isSelected ? glowColor : const Color(0xFFFFC107);
+      const outlineColor = Color(0xFFFFC107);
       final outlineAlpha = isSelected ? 0.35 : 0.25;
       drawables.add(_Drawable(charZY - 0.002, (c) {
         c.drawOval(

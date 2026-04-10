@@ -17,8 +17,10 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
 
   // Use the last opened project path, or fall back to the current directory.
+  // Fire-and-forget: don't block UI on server process spawn.
+  // The WebSocket service has reconnect logic that will retry until the server is up.
   final savedPath = ProjectPersistenceService.loadCurrentProjectPath(prefs);
-  await serverProcess.start(projectPath: savedPath);
+  serverProcess.start(projectPath: savedPath);
 
   runApp(
     ProviderScope(

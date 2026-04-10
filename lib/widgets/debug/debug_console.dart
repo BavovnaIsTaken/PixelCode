@@ -69,7 +69,7 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
                 const Icon(Icons.terminal_rounded, size: 13, color: Color(0xFF00C0D1)),
                 const SizedBox(width: 6),
                 Text(
-                  'Debug Console',
+                  'Консоль',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.6),
                     fontSize: 11,
@@ -94,14 +94,14 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
                 _ToolbarButton(
                   icon: Icons.vertical_align_bottom_rounded,
                   active: _autoScroll,
-                  tooltip: 'Auto-scroll',
+                  tooltip: 'Автопрокрутка',
                   onTap: () => setState(() => _autoScroll = !_autoScroll),
                 ),
                 const SizedBox(width: 4),
                 // Copy all
                 _ToolbarButton(
                   icon: Icons.copy_rounded,
-                  tooltip: 'Copy all',
+                  tooltip: 'Копіювати все',
                   onTap: () {
                     final text = filtered.map((l) {
                       final ts = _formatTime(l.timestamp);
@@ -114,7 +114,7 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
                 // Clear log
                 _ToolbarButton(
                   icon: Icons.delete_outline_rounded,
-                  tooltip: 'Clear log',
+                  tooltip: 'Очистити',
                   onTap: () => ref.read(debugLogProvider.notifier).clear(),
                 ),
               ],
@@ -125,7 +125,7 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
             child: filtered.isEmpty
                 ? Center(
                     child: Text(
-                      'Waiting for server logs...',
+                      'Очікування логів сервера...',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.12),
                         fontSize: 11,

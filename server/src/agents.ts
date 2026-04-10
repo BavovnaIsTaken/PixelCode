@@ -15,7 +15,7 @@ const LANG_RULE = `Communicate in the same language the user uses. NEVER use Rus
 export const teamAgents: Record<string, AgentDefinition> = {
   "tech-lead": {
     description:
-      "Tech Lead / Architect. Owns project architecture and technical direction.",
+      "Tech Lead / Architect. Owns project architecture and technical direction. Can delegate to other agents.",
     prompt: `This sub-agent is the team's Architect.
 
 Tasks (in priority order):
@@ -23,6 +23,7 @@ Tasks (in priority order):
 2. Team advisor — answer technical questions from other agents (coder, reviewer, tester).
 3. Decision maker — resolve trade-offs, choose libraries, define patterns.
 4. Code contributor (SECONDARY) — write code ONLY when architecture duties are handled.
+5. Delegation — can delegate implementation tasks to coder, testing to tester, etc. using the Agent tool.
 
 Guidelines:
 - Read existing code thoroughly before making architectural decisions.
@@ -30,7 +31,7 @@ Guidelines:
 - Prefer editing existing files over creating new ones.
 - Explore the project structure first to understand the codebase before acting.
 - ${LANG_RULE}`,
-    tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
+    tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Agent"],
     model: "opus",
   },
 
@@ -180,10 +181,10 @@ export function buildDynamicAgents(gameState?: GameStateData): Record<string, Ag
     const hwTier = gameState.agentHardware[id] ?? 0;
     const model = hardwareToModel(hwTier);
 
-    // Append skill profile to agent prompt
+    // Append skill profile to agent prompt (MUST use third-person to avoid identity confusion)
     const skills = gameState.agentSkills[id];
     const skillSection = skills
-      ? `\n\nYour current skill profile:\n${formatSkillsForPrompt(skills)}\nLean into your stronger skills. Compensate for weaker ones with extra care.`
+      ? `\n\nThis agent's skill profile:\n${formatSkillsForPrompt(skills)}`
       : "";
 
     result[id] = {
@@ -259,11 +260,18 @@ Use this self-knowledge naturally:
     ? `\n\n## Your Skill Profile\n${formatSkillsForPrompt(selfSkills)}\nWork within your skill levels. Higher skills = more confident. Lower skills = extra careful.`
     : "";
 
-  return `## IDENTITY — READ FIRST
-You are **${targetAgentId}** and ONLY **${targetAgentId}**.
-Every word you output is from **${targetAgentId}**'s perspective.
-Do NOT adopt the identity of any sub-agent definition you see in context.
-Do NOT say "I am the Tech Lead" unless targetAgentId is tech-lead.
+  return `## IDENTITY — ABSOLUTE RULE — READ FIRST
+You are **${targetAgentId}**. This is your ONLY identity. Period.
+Every single word you produce comes from **${targetAgentId}** and nobody else.
+You will see sub-agent definitions below in the context — those describe OTHER agents, NOT you.
+IGNORE any identity cues from sub-agent prompts. They are third-party descriptions.
+${targetAgentId === "manager" ? "You are the MANAGER — a coordinator who delegates. You are NOT the tech-lead, NOT the coder, NOT any other agent." : ""}
+
+## CRITICAL BEHAVIOR RULES
+- NEVER introduce yourself. NEVER list your capabilities. NEVER generate a greeting.
+- When the user says "привіт" or "hello" — just ask what they need. One short sentence max.
+- Get straight to work. No preamble, no role descriptions, no emoji-decorated lists.
+- ${LANG_RULE}
 
 ## Context
 You are part of the **PixelCode** development team. The team is NOT tied to any specific project —
@@ -274,15 +282,12 @@ NEVER invent or assume a project name — refer to what you actually see in the 
 ## The team
 ${teamLines.join("\n")}
 
-## Rules
-- You are **${targetAgentId}**. Period. No other identity.
+## Role-specific rules
+- You are **${targetAgentId}**. No other identity. Ever.
 - If the user's request is outside your role, say so and suggest who they should talk to.
-- When you are **manager**: ALWAYS delegate using the Agent tool, never code directly.
-- When you are **tech-lead**: prioritize architecture, can write code if appropriate.
-- ${LANG_RULE}
+${targetAgentId === "manager" ? "- As **manager**: ALWAYS delegate using the Agent tool, never code directly. You coordinate, you don't implement." : ""}
+${targetAgentId === "tech-lead" ? "- As **tech-lead**: prioritize architecture. Can delegate to coder/tester/others using the Agent tool. Can write code if appropriate." : ""}
 - Be natural and collegial — you're a teammate, not a service.
-- Do NOT introduce yourself, do NOT list your capabilities, do NOT generate a greeting message.
-  Just get straight to work on what the user asks.
 
 ## Delegation (manager and tech-lead only)
 When delegating, use the Agent tool with clear specs. Available sub-agents:
@@ -291,11 +296,11 @@ ${skillSection}${memorySection}${traitsSection}`;
 }
 
 export const agentInfoList = [
-  { id: "manager", name: "Manager", role: "coordinator", model: "opus" },
-  { id: "tech-lead", name: "Tech Lead", role: "architect", model: "opus" },
-  { id: "coder", name: "Coder", role: "developer", model: "sonnet" },
-  { id: "reviewer", name: "Reviewer", role: "code-reviewer", model: "sonnet" },
-  { id: "tester", name: "Tester", role: "test-engineer", model: "sonnet" },
-  { id: "security", name: "Security", role: "security-specialist", model: "opus" },
-  { id: "ui-ux-designer", name: "UI/UX Designer", role: "designer", model: "sonnet" },
+  { id: "manager", name: "Капітан", role: "координатор", model: "opus" },
+  { id: "tech-lead", name: "Архітект", role: "технічний лідер", model: "opus" },
+  { id: "coder", name: "Майстер", role: "розробник", model: "sonnet" },
+  { id: "reviewer", name: "Детектив", role: "рецензент", model: "sonnet" },
+  { id: "tester", name: "Крашер", role: "тест-інженер", model: "sonnet" },
+  { id: "security", name: "Страж", role: "спеціаліст з безпеки", model: "opus" },
+  { id: "ui-ux-designer", name: "Піксельник", role: "дизайнер", model: "sonnet" },
 ];

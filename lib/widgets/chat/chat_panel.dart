@@ -5,6 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/agent_message.dart';
 import '../../providers/agent_provider.dart';
 
+String _agentNickname(String id) => switch (id) {
+      'manager' => 'Капітан',
+      'tech-lead' => 'Архітект',
+      'coder' => 'Майстер',
+      'reviewer' => 'Детектив',
+      'tester' => 'Крашер',
+      'security' => 'Страж',
+      'ui-ux-designer' => 'Піксельник',
+      _ => id,
+    };
+
 class ChatPanel extends ConsumerStatefulWidget {
   const ChatPanel({super.key});
 
@@ -17,6 +28,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   final _scrollController = ScrollController();
   late final FocusNode _focusNode;
   bool _autoScroll = true;
+
+  String _lastAgentId = '';
 
   @override
   void initState() {
@@ -85,7 +98,19 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final currentAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
+
+    // When agent changes, reset scroll to bottom
+    if (_lastAgentId != currentAgent) {
+      _lastAgentId = currentAgent;
+      _autoScroll = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    }
 
     // Auto-scroll when new messages arrive
     ref.listen(chatProvider, (prev, next) {
@@ -111,24 +136,11 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
                 const SizedBox(width: 8),
                 Text(
-                  ref.watch(selectedAgentProvider),
+                  _agentNickname(ref.watch(selectedAgentProvider)),
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  onPressed: () => ref.read(chatProvider.notifier).newChat(),
-                  icon: const Icon(Icons.add_comment_outlined),
-                  color: Colors.white.withValues(alpha: 0.4),
-                  iconSize: 18,
-                  tooltip: 'New Chat',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(
-                    minWidth: 32,
-                    minHeight: 32,
                   ),
                 ),
               ],
@@ -205,7 +217,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Start a conversation',
+            'Почніть розмову',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.3),
               fontSize: 14,
@@ -273,7 +285,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
               minLines: 1,
               style: const TextStyle(color: Colors.white, fontSize: 14),
               decoration: InputDecoration(
-                hintText: 'Message ${ref.watch(selectedAgentProvider)}...',
+                hintText: 'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
                 hintStyle: TextStyle(
                   color: Colors.white.withValues(alpha: 0.25),
                 ),

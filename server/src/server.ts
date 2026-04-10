@@ -721,11 +721,14 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const targetHardware = gameState?.agentHardware[targetAgentId] ?? 0;
     const targetModel = hardwareToModel(targetHardware);
 
-    // Determine tools based on target agent
-    const isCoordinator = targetAgentId === "manager";
-    const allowedTools = isCoordinator
-      ? ["Read", "Glob", "Grep", "Bash", "Agent"]
-      : ["Read", "Edit", "Write", "Glob", "Grep", "Bash"];
+    // Determine tools based on target agent's definition + delegation capability
+    const agentDef = teamAgents[targetAgentId];
+    const baseTools = agentDef?.tools ?? ["Read", "Glob", "Grep", "Bash"];
+    // Manager and tech-lead can delegate to other agents
+    const canDelegate = targetAgentId === "manager" || targetAgentId === "tech-lead";
+    const allowedTools = canDelegate
+      ? [...new Set([...baseTools, "Agent"])]
+      : [...baseTools];
 
     // Resume from existing session if available, persist for future resume.
     const existingSessionId = clientSessions.get(ws);

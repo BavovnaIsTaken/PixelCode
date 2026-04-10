@@ -37,16 +37,24 @@ class ServerProcessService {
     // Launch via shell so that PATH from the user's profile is inherited.
     // This ensures node/npm/npx are found even when the app is launched
     // from Finder or Xcode rather than from the terminal.
-    _process = await Process.start(
-      '/bin/zsh',
-      ['-l', '-c', 'npm run dev'],
-      workingDirectory: serverDir,
-      environment: {
-        ...Platform.environment,
-        'PORT': '9720',
-        'PROJECT_CWD': projectPath ?? Directory.current.path,
-      },
-    );
+    try {
+      _process = await Process.start(
+        '/bin/zsh',
+        ['-l', '-c', 'npm run dev'],
+        workingDirectory: serverDir,
+        environment: {
+          ...Platform.environment,
+          'PORT': '9720',
+          'PROJECT_CWD': projectPath ?? Directory.current.path,
+        },
+      ).timeout(const Duration(seconds: 10));
+    } on TimeoutException {
+      _emitLog('error', 'Server process start timed out after 10s');
+      return;
+    } catch (e) {
+      _emitLog('error', 'Failed to start server: $e');
+      return;
+    }
 
     _process!.stdout.transform(const SystemEncoding().decoder).listen((data) {
       for (final line in data.split('\n')) {

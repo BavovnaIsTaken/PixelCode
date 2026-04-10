@@ -74,9 +74,16 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   StreamSubscription<ServerMessage>? _sub;
   Timer? _saveTimer;
 
+  /// All messages across all agents.
+  Map<String, List<ChatMessage>> _allMessages = {};
+
+  /// The agent whose responses are currently being streamed.
+  String? _activeStreamAgent;
+
   @override
   List<ChatMessage> build() {
     final ws = ref.watch(wsServiceProvider);
+    final selectedAgent = ref.watch(selectedAgentProvider);
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() {
@@ -84,9 +91,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       _saveTimer?.cancel();
     });
 
-    // Restore persisted messages
+    // Restore persisted messages for all agents
     final prefs = ref.read(sharedPrefsProvider);
-    final restored = ChatPersistenceService.loadMessages(prefs);
+    _allMessages = ChatPersistenceService.loadAllMessages(prefs);
 
     // Resume server session if we have a stored session ID
     final sessionId = ChatPersistenceService.loadSessionId(prefs);
@@ -96,14 +103,27 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       });
     }
 
-    return restored;
+    return _allMessages[selectedAgent] ?? [];
+  }
+
+  String get _selectedAgent => ref.read(selectedAgentProvider);
+
+  List<ChatMessage> _agentMessages(String agentId) =>
+      _allMessages[agentId] ?? [];
+
+  void _setAgentMessages(String agentId, List<ChatMessage> messages) {
+    _allMessages = {..._allMessages, agentId: messages};
+    // Only update state if this is the currently viewed agent
+    if (agentId == _selectedAgent) {
+      state = messages;
+    }
   }
 
   void _scheduleSave() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 1), () {
       final prefs = ref.read(sharedPrefsProvider);
-      ChatPersistenceService.saveMessages(prefs, state);
+      ChatPersistenceService.saveAllMessages(prefs, _allMessages);
     });
   }
 
@@ -116,8 +136,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
 
       case AssistantTextMessage(:final text):
-        // Streaming text — append to last message or create new
-        final messages = [...state];
+        // Use the agent that started the stream, fallback to selected
+        final agentId = _activeStreamAgent ?? _selectedAgent;
+        final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
             messages.last.isStreaming) {
@@ -128,14 +149,15 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           messages.add(ChatMessage(
             role: ChatRole.assistant,
             text: text,
+            agentId: agentId,
             isStreaming: true,
           ));
         }
-        state = messages;
+        _setAgentMessages(agentId, messages);
 
       case AssistantDoneMessage(:final text):
-        // Finalize the streaming message
-        final messages = [...state];
+        final agentId = _activeStreamAgent ?? _selectedAgent;
+        final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
             messages.last.isStreaming) {
@@ -144,16 +166,27 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             isStreaming: false,
           );
         } else {
-          messages.add(ChatMessage(role: ChatRole.assistant, text: text));
+          messages.add(ChatMessage(
+            role: ChatRole.assistant,
+            text: text,
+            agentId: agentId,
+          ));
         }
-        state = messages;
+        _setAgentMessages(agentId, messages);
+        _activeStreamAgent = null;
         _scheduleSave();
 
       case ErrorMessage(:final message):
-        state = [
-          ...state,
-          ChatMessage(role: ChatRole.assistant, text: '⚠️ $message'),
-        ];
+        final agentId = _activeStreamAgent ?? _selectedAgent;
+        _setAgentMessages(agentId, [
+          ..._agentMessages(agentId),
+          ChatMessage(
+            role: ChatRole.assistant,
+            text: '⚠️ $message',
+            agentId: agentId,
+          ),
+        ]);
+        _activeStreamAgent = null;
         _scheduleSave();
 
       default:
@@ -162,16 +195,22 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   }
 
   void sendMessage(String text) {
-    final agentId = ref.read(selectedAgentProvider);
-    state = [...state, ChatMessage(role: ChatRole.user, text: text)];
+    final agentId = _selectedAgent;
+    _activeStreamAgent = agentId;
+    _setAgentMessages(agentId, [
+      ..._agentMessages(agentId),
+      ChatMessage(role: ChatRole.user, text: text, agentId: agentId),
+    ]);
     ref.read(wsServiceProvider).sendMessage(text, agentId: agentId);
     _scheduleSave();
   }
 
   void newChat() {
+    final agentId = _selectedAgent;
+    _allMessages = {..._allMessages, agentId: []};
     state = [];
     final prefs = ref.read(sharedPrefsProvider);
-    ChatPersistenceService.clear(prefs);
+    ChatPersistenceService.saveAllMessages(prefs, _allMessages);
     ref.read(activityLogProvider.notifier).clear();
     ref.read(debugLogProvider.notifier).clear();
     ref.read(wsServiceProvider).newChat();

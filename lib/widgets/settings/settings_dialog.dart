@@ -39,7 +39,7 @@ class _SettingsPage extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: const Color(0xFF1A1A1F),
         title: const Text(
-          'Settings',
+          'Налаштування',
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
         ),
         leading: IconButton(
@@ -68,7 +68,7 @@ class _SettingsDialog extends ConsumerWidget {
       color: Colors.transparent,
       child: Container(
         width: 480,
-        constraints: const BoxConstraints(maxHeight: 520),
+        constraints: const BoxConstraints(maxHeight: 640),
         decoration: BoxDecoration(
           color: const Color(0xFF1A1A1F),
           borderRadius: BorderRadius.circular(12),
@@ -92,7 +92,7 @@ class _SettingsDialog extends ConsumerWidget {
               child: Row(
                 children: [
                   const Text(
-                    'Settings',
+                    'Налаштування',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 16,
@@ -161,12 +161,12 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1E1F27),
         title: const Text(
-          'Clear all SDK sessions?',
+          'Очистити всі SDK-сесії?',
           style: TextStyle(color: Colors.white, fontSize: 14),
         ),
         content: Text(
-          'This will delete all cached sessions from disk. '
-          'The current conversation context will be lost.',
+          'Усі кешовані сесії буде видалено з диска. '
+          'Поточний контекст розмови буде втрачено.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.6),
             fontSize: 12,
@@ -176,7 +176,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child: Text(
-              'Cancel',
+              'Скасувати',
               style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
             ),
           ),
@@ -187,7 +187,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
               ref.read(chatProvider.notifier).newChat();
             },
             child: const Text(
-              'Clear',
+              'Очистити',
               style: TextStyle(color: Color(0xFFEF4444)),
             ),
           ),
@@ -208,7 +208,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Server URL saved. Reconnect to apply.'),
+          content: const Text('URL сервера збережено. Перепідключіться для застосування.'),
           backgroundColor: const Color(0xFF2A2A30),
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -231,10 +231,10 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── Section: Connection ──────────────────────────────────────────
-        _SectionHeader(title: 'Connection'),
+        _SectionHeader(title: "З'єднання"),
         const SizedBox(height: 12),
         Text(
-          'Server URL',
+          'URL сервера',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.7),
             fontSize: 13,
@@ -243,8 +243,8 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         ),
         const SizedBox(height: 6),
         Text(
-          'WebSocket address of the PixelCode server. '
-          'Use your Tailscale IP for remote devices.',
+          'WebSocket-адреса сервера PixelCode. '
+          'Використовуйте Tailscale IP для віддалених пристроїв.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.35),
             fontSize: 12,
@@ -312,7 +312,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  child: const Text('Reset to default'),
+                  child: const Text('За замовчуванням'),
                 ),
               ),
             ),
@@ -340,21 +340,49 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
                             color: Colors.black,
                           ),
                         )
-                      : const Text('Save'),
+                      : const Text('Зберегти'),
                 ),
               ),
             ),
           ],
         ),
 
+        // ── Section: Ergonomics ────────────────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Ергономіка робочого місця'),
+        const SizedBox(height: 12),
+        Text(
+          'Висота робочого столу',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.7),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Мікрорегулювання висоти для оптимальної ергономічної '
+          'позиції під час кодування.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _DeskHeightControl(
+          value: ref.watch(settingsProvider).deskHeight,
+          onChanged: (v) =>
+              ref.read(settingsProvider.notifier).setDeskHeight(v),
+        ),
+
         // ── Danger zone (hidden by default) ─────────────────────────────
         ...[
           const SizedBox(height: 32),
-          _SectionHeader(title: 'Danger Zone'),
+          _SectionHeader(title: 'Небезпечна зона'),
           const SizedBox(height: 12),
           Text(
-            'Clears all cached SDK sessions from disk. '
-            'The current conversation context will be lost.',
+            'Видаляє всі кешовані SDK-сесії з диска. '
+            'Поточний контекст розмови буде втрачено.',
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.35),
               fontSize: 12,
@@ -367,7 +395,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             child: FilledButton.icon(
               onPressed: () => _confirmClearSessions(context),
               icon: const Icon(Icons.cleaning_services_rounded, size: 16),
-              label: const Text('Clear all SDK sessions'),
+              label: const Text('Очистити всі SDK-сесії'),
               style: FilledButton.styleFrom(
                 backgroundColor: const Color(0xFF00C0D1),
                 foregroundColor: Colors.black,
@@ -378,6 +406,161 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             ),
           ),
         ],
+      ],
+    );
+  }
+}
+
+// ─── Desk height ergonomics control ────────────────────────────────────────
+
+class _DeskHeightControl extends StatelessWidget {
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  const _DeskHeightControl({required this.value, required this.onChanged});
+
+  static String _statusText(double h) {
+    if (h < 65) {
+      return 'Компактна конфігурація · Зосереджений режим роботи';
+    }
+    if (h < 72) {
+      return 'Знижена позиція · Оптимально для тривалих сесій';
+    }
+    if (h < 78) return 'Стандартна позиція · Рекомендовано ISO 11064-4';
+    if (h < 90) {
+      return 'Підвищена позиція · Покращена вентиляція робочої зони';
+    }
+    if (h < 110) return 'Високий стіл · Стимулює творче мислення';
+    return 'Максимальна висота · Панорамний огляд коду';
+  }
+
+  /// Deterministic "ergonomic score" — always lands between 92 and 98.
+  static int _ergoScore(double h) => 92 + ((h * 7.3) % 7).round();
+
+  @override
+  Widget build(BuildContext context) {
+    final score = _ergoScore(value);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Slider row
+        Row(
+          children: [
+            Text(
+              '60',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 10,
+              ),
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderThemeData(
+                  activeTrackColor: const Color(0xFF00C0D1),
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+                  thumbColor: const Color(0xFF00C0D1),
+                  overlayColor: const Color(0xFF00C0D1).withValues(alpha: 0.12),
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                ),
+                child: Slider(
+                  value: value,
+                  min: 60,
+                  max: 130,
+                  divisions: 70,
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+            Text(
+              '130',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+        // Current value
+        Center(
+          child: Text(
+            '${value.round()} см',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w300,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        // Status indicator
+        Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFF4ADE80),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _statusText(value),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        // Ergonomic rating bar
+        Row(
+          children: [
+            Text(
+              'Ергономічний рейтинг',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.35),
+                fontSize: 11,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '$score%',
+              style: TextStyle(
+                color: const Color(0xFF4ADE80).withValues(alpha: 0.8),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(2),
+          child: LinearProgressIndicator(
+            value: score / 100,
+            backgroundColor: Colors.white.withValues(alpha: 0.06),
+            valueColor: const AlwaysStoppedAnimation(Color(0xFF4ADE80)),
+            minHeight: 4,
+          ),
+        ),
+        const SizedBox(height: 10),
+        // Certification
+        Text(
+          'Сертифіковано Комітетом з Віртуальної Ергономіки PixelCode™',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.15),
+            fontSize: 10,
+            fontStyle: FontStyle.italic,
+          ),
+        ),
       ],
     );
   }

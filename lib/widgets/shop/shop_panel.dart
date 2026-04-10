@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
+import 'spinning_coin.dart';
 
 // ─── Colors ────────────────────────────────────────────────────────────────
 
@@ -129,35 +130,8 @@ class _BalanceHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Currency icon
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [_gold, _gold.withValues(alpha: 0.6)],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _gold.withValues(alpha: 0.3),
-                  blurRadius: 8,
-                ),
-              ],
-            ),
-            child: const Center(
-              child: Text(
-                '₲',
-                style: TextStyle(
-                  color: Color(0xFF1A1A1F),
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-          ),
+          // Currency icon — spinning pixel-art coin
+          const SpinningCoin(pixelSize: 2.0),
           const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
