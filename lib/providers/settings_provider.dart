@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 const _keyServerUrl = 'settings_server_url';
 const _keyShowArkanoidButton = 'settings_show_arkanoid_button';
 const _keyDeskHeight = 'settings_desk_height';
-const defaultServerUrl = 'ws://localhost:9720';
+const defaultServerUrl = 'ws://100.x.y.z:9720';
 
 // ─── Settings model ─────────────────────────────────────────────────────────
 

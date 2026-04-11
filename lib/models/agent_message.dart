@@ -83,6 +83,7 @@ sealed class ServerMessage {
       'board_state' => BoardStateMessage.fromJson(json),
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
+      'input_text' => InputTextMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -350,6 +351,13 @@ class AgentTraitsMessage implements ServerMessage {
                 .toList() ??
             [],
       );
+}
+
+class InputTextMessage implements ServerMessage {
+  final String text;
+  InputTextMessage({required this.text});
+  factory InputTextMessage.fromJson(Map<String, dynamic> json) =>
+      InputTextMessage(text: json['text'] as String? ?? '');
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

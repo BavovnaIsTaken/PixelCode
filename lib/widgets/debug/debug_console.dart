@@ -257,12 +257,15 @@ class _LogEntry extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Timestamp
-          Text(
-            time,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.18),
-              fontSize: 10,
-              fontFamily: 'monospace',
+          SizedBox(
+            width: 78,
+            child: Text(
+              time,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.18),
+                fontSize: 10,
+                fontFamily: 'monospace',
+              ),
             ),
           ),
           const SizedBox(width: 6),

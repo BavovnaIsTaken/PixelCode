@@ -45,6 +45,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         return KeyEventResult.ignored;
       },
     );
+    _controller.addListener(_onInputChanged);
     _scrollController.addListener(_onScroll);
     // Scroll to bottom on initial load so the user sees the latest messages
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -54,8 +55,13 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     });
   }
 
+  void _onInputChanged() {
+    ref.read(wsServiceProvider).sendInputText(_controller.text);
+  }
+
   @override
   void dispose() {
+    _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
     _controller.dispose();
     _scrollController.dispose();
@@ -79,6 +85,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     if (text.isEmpty) return;
     ref.read(chatProvider.notifier).sendMessage(text);
     _controller.clear();
+    // Notify other devices that input was cleared
+    ref.read(wsServiceProvider).sendInputText('');
+    ref.read(remoteInputTextProvider.notifier).clear();
     _focusNode.requestFocus();
     setState(() => _autoScroll = true);
     _scrollToBottom();
@@ -264,8 +273,10 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Widget _buildInput() {
+    // Extra bottom padding on iPhone when keyboard is hidden (home indicator)
+    final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
+    final remoteText = ref.watch(remoteInputTextProvider);
     return Container(
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1F),
         border: Border(
@@ -274,53 +285,91 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
         ),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              focusNode: _focusNode,
-              autofocus: true,
-              maxLines: 4,
-              minLines: 1,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-              decoration: InputDecoration(
-                hintText: 'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
-                hintStyle: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.25),
-                ),
-                filled: true,
-                fillColor: const Color(0xFF0E0E11),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.1),
+          if (remoteText.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Row(
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF00C0D1),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.1),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      remoteText,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
                   ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: const BorderSide(
-                    color: Color(0xFF00C0D1),
-                    width: 1,
-                  ),
-                ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            onPressed: _send,
-            icon: const Icon(Icons.send_rounded),
-            color: const Color(0xFF00C0D1),
-            iconSize: 20,
+          Padding(
+            padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomPad),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    autofocus: MediaQuery.of(context).size.width >= 600,
+                    maxLines: 4,
+                    minLines: 1,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      hintText: 'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.25),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF0E0E11),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF00C0D1),
+                          width: 1,
+                        ),
+                      ),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: _send,
+                  icon: const Icon(Icons.send_rounded),
+                  color: const Color(0xFF00C0D1),
+                  iconSize: 20,
+                ),
+              ],
+            ),
           ),
         ],
       ),

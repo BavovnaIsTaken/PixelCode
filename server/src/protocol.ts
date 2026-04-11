@@ -42,7 +42,9 @@ export type ClientMessage =
       tag: string;
       lesson: string;
     }
-  | { type: "remove_lesson"; lessonId: string };
+  | { type: "remove_lesson"; lessonId: string }
+  // Live input sync
+  | { type: "input_text"; text: string };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -172,6 +174,8 @@ export type ServerMessage =
       type: "summary_result";
       summary: string;
     }
+  // Live input sync
+  | { type: "input_text"; text: string }
   // Agent traits
   | {
       type: "agent_traits";

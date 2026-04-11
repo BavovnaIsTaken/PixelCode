@@ -1194,6 +1194,17 @@ wss.on("connection", (ws) => {
           sendTraits(ws);
           break;
         }
+
+        // ─── Live input sync ──────────────────────────────────────────────
+        case "input_text": {
+          const broadcast: ServerMessage = { type: "input_text", text: msg.text };
+          for (const client of wss.clients) {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(broadcast));
+            }
+          }
+          break;
+        }
       }
     } catch (err) {
       const errMsg = `Invalid message: ${err}`;

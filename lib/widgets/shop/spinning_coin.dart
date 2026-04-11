@@ -1,270 +1,183 @@
-/// A pixel-art coin that spins around its Y axis using sprite animation.
+/// A 3D coin spinning around Y using stacked layers + perspective.
 ///
-/// 6 hand-drawn frames show the coin rotating from face-on → edge → back →
-/// edge → face-on. Each frame is a 16×16 grid rendered pixel by pixel.
+/// The same proven technique as CSS 3D coins: one outer [Transform] with
+/// `rotateY` + perspective wraps a [Stack] of thin coloured circles at
+/// different Z depths.  The perspective projection creates natural volume —
+/// no manual sin/cos geometry needed.
 library;
 
-import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-// ─── Palette ────────────────────────────────────────────────────────────────
-
-const _coinColors = <String, Color>{
-  '.': Color(0x00000000), // transparent
-  'G': Color(0xFFFFE066), // gold highlight
-  'g': Color(0xFFFFD700), // gold
-  'D': Color(0xFFDAA520), // dark gold
-  'R': Color(0xFFB8860B), // rim
-  'r': Color(0xFF8B6914), // rim dark
-  'S': Color(0xFF6B4F0A), // shadow
-  'T': Color(0xFF4A3000), // symbol / deep shadow
-};
-
-// ─── Frames ─────────────────────────────────────────────────────────────────
-//
-// 8 frames of a 16×16 coin rotating around Y.
-// Frame 0: face-on (full circle)
-// Frame 1-3: turning towards edge
-// Frame 4: edge-on (thin cylinder)
-// Frame 5-7: turning back (showing back face)
-
-/// Frame 0 — front face, full circle with ₲ symbol.
-const _frame0 = [
-  '......gggg......',
-  '....GGggggDD....',
-  '...GGggggggDD...',
-  '..GGggTTTTggDD..',
-  '..GgggT..TggDD..',
-  '.GggggTTTTgggDD.',
-  '.GggggT..TgggDD.',
-  '.GggggT..TgggDD.',
-  '.GggggTTTTgggDD.',
-  '.GggggT...gggDD.',
-  '.GggggT...gggDD.',
-  '..GgggggggggDD..',
-  '..GGggggggggDD..',
-  '...GGggggggDD...',
-  '....GGggggDD....',
-  '......gggg......',
-];
-
-/// Frame 1 — slightly turned.
-const _frame1 = [
-  '.......ggg......',
-  '.....GGgggD.....',
-  '....GGgggggD....',
-  '...GGgTTTggDD...',
-  '...GggT.TggDD...',
-  '..GgggTTTgggDD..',
-  '..GgggT.TgggDD..',
-  '..GgggT.TgggDD..',
-  '..GgggTTTgggDD..',
-  '..GgggT..gggDD..',
-  '..GgggT..gggDD..',
-  '...GggggggggD...',
-  '...GGgggggggD...',
-  '....GGgggggD....',
-  '.....GGgggD.....',
-  '.......ggg......',
-];
-
-/// Frame 2 — more turned, narrower.
-const _frame2 = [
-  '........gg......',
-  '.......GggD.....',
-  '......GgggDD....',
-  '.....GGTTggDD...',
-  '.....GgT.ggDD...',
-  '....GgTTTggDDD..',
-  '....GgT.TggDDD..',
-  '....GgT.TggDDD..',
-  '....GgTTTggDDD..',
-  '....GgT..ggDDD..',
-  '....GgT..ggDDD..',
-  '.....GgggggDD...',
-  '.....GGggggDD...',
-  '......GgggDD....',
-  '.......GggD.....',
-  '........gg......',
-];
-
-/// Frame 3 — nearly edge, very narrow face.
-const _frame3 = [
-  '.........g......',
-  '........gRD.....',
-  '.......gRRDD....',
-  '.......gRRDD....',
-  '......gRRRDD....',
-  '......gRRRDDD...',
-  '......gRRRDDD...',
-  '......gRRRDDD...',
-  '......gRRRDDD...',
-  '......gRRRDDD...',
-  '......gRRRDD....',
-  '.......gRRDD....',
-  '.......gRRDD....',
-  '.......gRDD.....',
-  '........gRD.....',
-  '.........g......',
-];
-
-/// Frame 4 — edge-on (thinnest, just the rim).
-const _frame4 = [
-  '..........R.....',
-  '.........RR.....',
-  '.........RR.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '........RRS.....',
-  '.........RR.....',
-  '.........RR.....',
-  '..........R.....',
-];
-
-/// Frame 5 — past edge, showing back face (mirrored of frame 3).
-const _frame5 = [
-  '......g.........',
-  '.....DR.........',
-  '....DDRRg.......',
-  '....DDRRg.......',
-  '....DDRRRg......',
-  '...DDDRRRg......',
-  '...DDDRRRg......',
-  '...DDDRRRg......',
-  '...DDDRRRg......',
-  '...DDDRRRg......',
-  '....DDRRRg......',
-  '....DDRRg.......',
-  '....DDRRg.......',
-  '.....DDRg.......',
-  '.....DRg........',
-  '......g.........',
-];
-
-/// Frame 6 — back face, wider (mirrored of frame 2).
-const _frame6 = [
-  '......gg........',
-  '.....DggG.......',
-  '....DDggG.......',
-  '...DDggTGG......',
-  '...DDgg.TGG.....',
-  '..DDDggTTTgG....',
-  '..DDDggT.TgG....',
-  '..DDDggT.TgG....',
-  '..DDDggTTTgG....',
-  '..DDDgg..TgG....',
-  '..DDDgg..TgG....',
-  '...DDgggggG.....',
-  '...DDggggGG.....',
-  '....DDgggG......',
-  '.....DggG.......',
-  '......gg........',
-];
-
-/// Frame 7 — back face, almost full (mirrored of frame 1).
-const _frame7 = [
-  '......ggg.......',
-  '.....DgggGG.....',
-  '....DgggggGG....',
-  '...DDggTTTgGG...',
-  '...DDgg.T.gGG...',
-  '..DDgggTTTggGG..',
-  '..DDggT..TggGG..',
-  '..DDggT..TggGG..',
-  '..DDgggTTTggGG..',
-  '..DDggg..TggGG..',
-  '..DDggg..TggGG..',
-  '...DgggggggGG...',
-  '...DgggggggGG...',
-  '....DgggggGG....',
-  '.....DgggGG.....',
-  '......ggg.......',
-];
-
-const _frames = [
-  _frame0, _frame1, _frame2, _frame3,
-  _frame4, _frame5, _frame6, _frame7,
-];
-
-// ─── Widget ─────────────────────────────────────────────────────────────────
-
-/// Pixel-art spinning coin. Renders a 16×16 sprite animation.
-///
-/// [pixelSize] controls how large each logical pixel is drawn on screen.
 class SpinningCoin extends StatefulWidget {
-  final double pixelSize;
+  /// Diameter of the coin face.
+  final double size;
 
-  const SpinningCoin({super.key, this.pixelSize = 2.0});
+  /// Number of edge layers (more = thicker coin).
+  final int layers;
+
+  const SpinningCoin({super.key, this.size = 32, this.layers = 5});
 
   @override
   State<SpinningCoin> createState() => _SpinningCoinState();
 }
 
-class _SpinningCoinState extends State<SpinningCoin> {
-  int _frame = 0;
-  Timer? _timer;
+class _SpinningCoinState extends State<SpinningCoin>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      setState(() => _frame = (_frame + 1) % _frames.length);
-    });
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2400),
+    )..repeat();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final px = widget.pixelSize;
-    return CustomPaint(
-      size: Size(16 * px, 16 * px),
-      painter: _CoinSpritePainter(frame: _frames[_frame], px: px),
+    final size = widget.size;
+    final layers = widget.layers;
+
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, _) {
+          final angle = _ctrl.value * 2 * math.pi;
+          final cosA = math.cos(angle);
+          // true when the front face points toward the viewer.
+          final showFront = cosA >= 0;
+
+          return Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(3, 2, 0.004) // perspective
+              ..rotateX(0.15) // ~8° tilt — breaks symmetry
+              ..rotateY(angle),
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // ── Far face ──
+                  Transform(
+                    transform:
+                        Matrix4.translationValues(0, 0, -layers.toDouble()),
+                    child: _Face(size: size, isFront: !showFront),
+                  ),
+
+                  // ── Edge layers ──
+                  for (int i = layers; i >= 1; i--)
+                    Transform(
+                      transform: Matrix4.translationValues(0, 0, -i.toDouble()),
+                      child:
+                          _EdgeLayer(size: size, depth: i, total: layers),
+                    ),
+
+                  // ── Near face ──
+                  _Face(size: size, isFront: showFront),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }
 
-// ─── Painter ────────────────────────────────────────────────────────────────
+// ─── Gold constants ─────────────────────────────────────────────────────────
 
-class _CoinSpritePainter extends CustomPainter {
-  final List<String> frame;
-  final double px;
+const _faceGold = [Color(0xFFFFE066), Color(0xFFFFD700), Color(0xFFDAA520)];
+const _backGold = [Color(0xFFDAA520), Color(0xFFB8860B), Color(0xFF8B6914)];
+const _rimBright = Color(0xFFB8860B);
+const _rimDark = Color(0xFF6B4F0A);
 
-  const _CoinSpritePainter({required this.frame, required this.px});
+// ─── Face ───────────────────────────────────────────────────────────────────
+
+class _Face extends StatelessWidget {
+  final double size;
+  final bool isFront;
+
+  const _Face({required this.size, required this.isFront});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..style = PaintingStyle.fill;
+  Widget build(BuildContext context) {
+    final colors = isFront ? _faceGold : _backGold;
 
-    for (var y = 0; y < frame.length; y++) {
-      final row = frame[y];
-      for (var x = 0; x < row.length; x++) {
-        final key = row[x];
-        if (key == '.') continue;
-        final color = _coinColors[key];
-        if (color == null) continue;
-
-        paint.color = color;
-        canvas.drawRect(
-          Rect.fromLTWH(x * px, y * px, px, px),
-          paint,
-        );
-      }
-    }
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: isFront ? Alignment.topLeft : Alignment.topRight,
+          end: isFront ? Alignment.bottomRight : Alignment.bottomLeft,
+          colors: colors,
+        ),
+      ),
+      child: Center(
+        child: isFront
+            ? Text(
+                '₲',
+                style: TextStyle(
+                  color: const Color(0xFF4A3000),
+                  fontSize: size * 0.55,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                ),
+              )
+            : Container(
+                width: size * 0.4,
+                height: size * 0.4,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF4A3000).withValues(alpha: 0.3),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+      ),
+    );
   }
+}
+
+// ─── Edge layer ─────────────────────────────────────────────────────────────
+
+class _EdgeLayer extends StatelessWidget {
+  final double size;
+  final int depth;
+  final int total;
+
+  const _EdgeLayer({
+    required this.size,
+    required this.depth,
+    required this.total,
+  });
 
   @override
-  bool shouldRepaint(_CoinSpritePainter old) => old.frame != frame;
+  Widget build(BuildContext context) {
+    // Slightly darker toward the middle of the edge for a rounded look.
+    final t = depth / total;
+    final color = Color.lerp(_rimBright, _rimDark, (t - 0.5).abs() * 2)!;
+
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+      ),
+    );
+  }
 }

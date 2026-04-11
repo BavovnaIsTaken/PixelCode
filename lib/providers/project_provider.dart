@@ -100,10 +100,18 @@ class ProjectNotifier extends Notifier<Project?> {
     final decayed = ProjectMemoryEntry.applyDecay(memories);
     final memoryText = ProjectMemoryEntry.formatForPrompt(decayed);
     if (memoryText.isNotEmpty) {
-      // Wait for connection, then send context
-      ws.connectionStatus.firstWhere((connected) => connected).then((_) {
+      if (ws.isConnected) {
         ws.setProjectContext(memoryText);
-      });
+      } else {
+        // Listen for connection, then send context (auto-cancels on first match)
+        StreamSubscription<bool>? sub;
+        sub = ws.connectionStatus.listen((connected) {
+          if (connected) {
+            sub?.cancel();
+            ws.setProjectContext(memoryText);
+          }
+        });
+      }
     }
 
     ref.invalidate(recentProjectsProvider);

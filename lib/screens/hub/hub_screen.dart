@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/project_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
@@ -36,6 +40,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   double _shutdownHeight = 0;
   int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop
   bool _showGames = false;
+  int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop
 
   final _rng = Random();
 
@@ -54,10 +59,19 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   // Periodic glitch effect on the logo
-  late final AnimationController _glitchCtrl = AnimationController(
-    vsync: this,
-  );
+  late final AnimationController _glitchCtrl = AnimationController(vsync: this);
   int _glitchSeed = 0;
+  ui.Image? _logoImage;
+
+  /// Fraction of pixel blocks affected during glitch (0.0–1.0).
+  static const double _glitchPixelPercent = 0.12;
+
+  Future<void> _loadLogoImage() async {
+    final data = await rootBundle.load('assets/logo.png');
+    final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+    final frame = await codec.getNextFrame();
+    if (mounted) setState(() => _logoImage = frame.image);
+  }
 
   void _scheduleGlitch() {
     if (_isShuttingDown || !mounted) return;
@@ -75,7 +89,9 @@ class _HubScreenState extends ConsumerState<HubScreen>
   // Shutdown animation
   late final AnimationController _shutdownCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 5000), // TODO: revert to 1600ms after debug
+    duration: const Duration(
+      milliseconds: 5000,
+    ), // TODO: revert to 1600ms after debug
   );
 
   // Bright flash at the center
@@ -89,7 +105,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   // Intentionally faster than the native 550ms so it finishes first.
   late final AnimationController _liftCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 350),
+    duration: const Duration(milliseconds: 500),
   );
 
   // Opening animation — content scales up from center
@@ -106,7 +122,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _shutdownCtrl.forward();
     // Start native window collapse slightly after content starts shrinking
     Future.delayed(const Duration(milliseconds: 640), () {
-      _windowChannel.invokeMethod('animateShutdown');
+      final platform = defaultTargetPlatform;
+      if (platform == TargetPlatform.macOS || platform == TargetPlatform.iOS) {
+        _windowChannel.invokeMethod('animateShutdown');
+      }
       _liftCtrl.forward();
     });
   }
@@ -114,19 +133,18 @@ class _HubScreenState extends ConsumerState<HubScreen>
   @override
   void initState() {
     super.initState();
+    _loadLogoImage();
     _scheduleGlitch();
-    // Give the server a moment to start, then connect
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        final url = ref.read(settingsProvider).serverUrl;
-        ref.read(wsServiceProvider).connect(url: url);
-      }
-    });
+    // Connect immediately — the WS service has built-in reconnection logic
+    // that will retry every 3s if the server isn't ready yet.
+    final url = ref.read(settingsProvider).serverUrl;
+    ref.read(wsServiceProvider).connect(url: url);
   }
 
   @override
   void dispose() {
     _arkanoidTimer?.cancel();
+    _logoImage?.dispose();
     _glitchCtrl.dispose();
     _shutdownCtrl.dispose();
     _liftCtrl.dispose();
@@ -134,9 +152,12 @@ class _HubScreenState extends ConsumerState<HubScreen>
     super.dispose();
   }
 
+  bool get _isMobile => MediaQuery.sizeOf(context).width < 600;
+
   @override
   Widget build(BuildContext context) {
-    final isConnected = ref.watch(connectionStatusProvider).valueOrNull ?? false;
+    final isConnected =
+        ref.watch(connectionStatusProvider).valueOrNull ?? false;
 
     // Eagerly initialize providers so they collect data even when their
     // panels are closed.
@@ -155,9 +176,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           // Lift content UP + fade out, finishing before the native window
           // collapse so the animation never lags behind the shrinking frame.
           final t = Curves.easeOut.transform(_liftCtrl.value);
-          final liftY = _isShuttingDown
-              ? -t * (_shutdownHeight - 50) / 2
-              : 0.0;
+          final liftY = _isShuttingDown ? -t * (_shutdownHeight - 50) / 2 : 0.0;
           final contentOpacity = _isShuttingDown ? 1.0 - t : 1.0;
           return Stack(
             children: [
@@ -184,104 +203,253 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ],
           );
         },
-        child: CallbackShortcuts(
-          bindings: <ShortcutActivator, VoidCallback>{
-            const SingleActivator(LogicalKeyboardKey.backquote, meta: true):
-                () => setState(() => _debugOpen = !_debugOpen),
-          },
-          child: Focus(
-            child: Column(
-              children: [
-                // Title bar
-                _buildTitleBar(isConnected),
-                // Main content
-                Expanded(
-                  child: Row(
-                    children: [
-                      // Left: Chat panel or Easter egg games
-                      SizedBox(
-                        width: 440,
-                        child: _showGames
-                            ? EasterEggGames(
-                                onClose: () =>
-                                    setState(() => _showGames = false),
-                              )
-                            : const ChatPanel(),
-                      ),
-                      // Divider
-                      Container(
-                        width: 1,
-                        color: Colors.white.withValues(alpha: 0.06),
-                      ),
-                      // Right: Agent canvas, Task board, or Shop
-                      Expanded(
-                        child: AnimatedSwitcher(
-                          duration: _viewIndex == 0
-                              ? const Duration(milliseconds: 350)
-                              : Duration.zero,
-                          switchInCurve: Curves.easeOutCubic,
-                          switchOutCurve: Curves.easeInCubic,
-                          transitionBuilder: (child, animation) {
-                            return AnimatedBuilder(
-                              animation: animation,
-                              builder: (context, _) {
-                                return ClipRect(
-                                  child: Align(
-                                    heightFactor: animation.value,
-                                    widthFactor: animation.value,
-                                    child: child,
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                          layoutBuilder: (currentChild, previousChildren) {
-                            return Stack(
-                              alignment: Alignment.center,
-                              children: [
-                                ...previousChildren,
-                                if (currentChild != null) currentChild,
-                              ],
-                            );
-                          },
-                          child: KeyedSubtree(
-                            key: ValueKey(_viewIndex),
-                            child: switch (_viewIndex) {
-                              1 => const TaskBoardPanel(),
-                              2 => const ShopPanel(),
-                              _ => const AgentCanvas(),
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
+        child: _isMobile
+            ? _buildMobileLayout(isConnected)
+            : _buildDesktopLayout(isConnected),
+      ),
+    );
+  }
+
+  Widget _buildDesktopLayout(bool isConnected) {
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.backquote, meta: true): () =>
+            setState(() => _debugOpen = !_debugOpen),
+      },
+      child: Focus(
+        child: Column(
+          children: [
+            // Title bar
+            _buildTitleBar(isConnected),
+            // Main content
+            Expanded(
+              child: Row(
+                children: [
+                  // Left: Chat panel or Easter egg games
+                  SizedBox(
+                    width: 440,
+                    child: _showGames
+                        ? EasterEggGames(
+                            onClose: () => setState(() => _showGames = false),
+                          )
+                        : const ChatPanel(),
                   ),
-                ),
-                // Debug console
-                if (_debugOpen) ...[
-                  // Resize handle
-                  MouseRegion(
-                    cursor: SystemMouseCursors.resizeRow,
-                    child: GestureDetector(
-                      onVerticalDragUpdate: (d) {
-                        setState(() {
-                          _debugHeight =
-                              (_debugHeight - d.delta.dy).clamp(100.0, 500.0);
-                        });
+                  // Divider
+                  Container(
+                    width: 1,
+                    color: Colors.white.withValues(alpha: 0.06),
+                  ),
+                  // Right: Agent canvas, Task board, or Shop
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: _viewIndex == 0
+                          ? const Duration(milliseconds: 350)
+                          : Duration.zero,
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      transitionBuilder: (child, animation) {
+                        return AnimatedBuilder(
+                          animation: animation,
+                          builder: (context, _) {
+                            return ClipRect(
+                              child: Align(
+                                heightFactor: animation.value,
+                                widthFactor: animation.value,
+                                child: child,
+                              ),
+                            );
+                          },
+                        );
                       },
-                      child: Container(
-                        height: 4,
-                        color: Colors.white.withValues(alpha: 0.06),
+                      layoutBuilder: (currentChild, previousChildren) {
+                        return Stack(
+                          alignment: Alignment.center,
+                          children: [...previousChildren, ?currentChild],
+                        );
+                      },
+                      child: KeyedSubtree(
+                        key: ValueKey(_viewIndex),
+                        child: switch (_viewIndex) {
+                          1 => const TaskBoardPanel(),
+                          2 => const ShopPanel(),
+                          _ => const AgentCanvas(),
+                        },
                       ),
                     ),
                   ),
-                  SizedBox(
-                    height: _debugHeight,
-                    child: const DebugConsole(),
-                  ),
                 ],
-              ],
+              ),
             ),
+            // Debug console
+            if (_debugOpen) ...[
+              // Resize handle
+              MouseRegion(
+                cursor: SystemMouseCursors.resizeRow,
+                child: GestureDetector(
+                  onVerticalDragUpdate: (d) {
+                    setState(() {
+                      _debugHeight = (_debugHeight - d.delta.dy).clamp(
+                        100.0,
+                        500.0,
+                      );
+                    });
+                  },
+                  child: Container(
+                    height: 4,
+                    color: Colors.white.withValues(alpha: 0.06),
+                  ),
+                ),
+              ),
+              SizedBox(height: _debugHeight, child: const DebugConsole()),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMobileLayout(bool isConnected) {
+    return SafeArea(
+      bottom: false, // bottom handled by nav bar
+      child: Column(
+        children: [
+          // Compact title bar
+          _buildMobileTitleBar(isConnected),
+          // Content — one panel at a time
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: KeyedSubtree(
+                key: ValueKey(_mobileTab),
+                child: switch (_mobileTab) {
+                  1 => const AgentCanvas(),
+                  2 => const TaskBoardPanel(),
+                  3 => const ShopPanel(),
+                  _ =>
+                    _showGames
+                        ? EasterEggGames(
+                            onClose: () => setState(() => _showGames = false),
+                          )
+                        : const ChatPanel(),
+                },
+              ),
+            ),
+          ),
+          // Bottom navigation
+          _buildMobileBottomNav(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMobileTitleBar(bool isConnected) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1F),
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
+      child: Row(
+        children: [
+          // Logo
+          GestureDetector(
+            onTap: _triggerShutdown,
+            onLongPressDown: (_) => _onLogoPointerDown(),
+            onLongPressUp: _onLogoPointerUp,
+            onLongPressCancel: _onLogoPointerUp,
+            child: Image.asset(
+              'assets/logo.png',
+              width: 22,
+              height: 22,
+              filterQuality: FilterQuality.medium,
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text(
+            'PixelCode',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Connection dot — tap for server actions
+          _ConnectionIndicator(
+            isConnected: isConnected,
+            compact: true,
+            onReconnect: () {
+              final url = ref.read(settingsProvider).serverUrl;
+              ref.read(wsServiceProvider).reconnect(url: url);
+            },
+            onRestartServer: () async {
+              final url = ref.read(settingsProvider).serverUrl;
+              final project = ref.read(projectProvider);
+              await ref
+                  .read(serverProcessProvider)
+                  .restart(projectPath: project?.path);
+              await Future<void>.delayed(const Duration(seconds: 2));
+              if (mounted) {
+                ref.read(wsServiceProvider).reconnect(url: url);
+              }
+            },
+          ),
+          const Spacer(),
+          // Currency
+          _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
+          const SizedBox(width: 8),
+          // Stop button
+          if (isConnected) const _StopAllButton(),
+          const SizedBox(width: 4),
+          // Settings
+          IconButton(
+            onPressed: () => showSettingsDialog(context),
+            icon: Icon(
+              Icons.settings_outlined,
+              size: 18,
+              color: Colors.white.withValues(alpha: 0.3),
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMobileBottomNav() {
+    const items = <(IconData, String)>[
+      (Icons.chat_outlined, 'Чат'),
+      (Icons.grid_view_rounded, 'Офіс'),
+      (Icons.dashboard_outlined, 'Дошка'),
+      (Icons.storefront_outlined, 'Крамниця'),
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1F),
+        border: Border(
+          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              for (int i = 0; i < items.length; i++)
+                _MobileNavItem(
+                  icon: items[i].$1,
+                  label: items[i].$2,
+                  isActive: _mobileTab == i,
+                  onTap: () => setState(() => _mobileTab = i),
+                ),
+            ],
           ),
         ),
       ),
@@ -289,16 +457,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   Widget _buildTitleBar(bool isConnected) {
-
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1F),
         border: Border(
-          bottom: BorderSide(
-            color: Colors.white.withValues(alpha: 0.06),
-          ),
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
         ),
       ),
       child: Row(
@@ -318,7 +483,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
                   builder: (context, _) {
                     const size = 24.0;
                     final t = _glitchCtrl.value;
-                    final glitching = _glitchCtrl.isAnimating && t > 0;
+                    final glitching =
+                        _glitchCtrl.isAnimating && t > 0 && _logoImage != null;
 
                     if (!glitching) {
                       return Image.asset(
@@ -330,77 +496,17 @@ class _HubScreenState extends ConsumerState<HubScreen>
                     }
 
                     final frame = (t * 8).floor();
-                    final r = Random(_glitchSeed + frame);
-                    final dx = (r.nextDouble() - 0.5) * 6;
-                    final split = 1.0 + r.nextDouble() * 3.0;
-                    final showBar = r.nextInt(3) == 0;
-                    final barY = r.nextDouble() * size;
 
                     return SizedBox(
-                      width: size + 8,
+                      width: size,
                       height: size,
-                      child: ClipRect(
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            // Red channel offset
-                            Transform.translate(
-                              offset: Offset(split + dx, 0),
-                              child: ColorFiltered(
-                                colorFilter: const ColorFilter.mode(
-                                  Color(0xFFFF0040),
-                                  BlendMode.modulate,
-                                ),
-                                child: Opacity(
-                                  opacity: 0.5,
-                                  child: Image.asset(
-                                    'assets/logo.png',
-                                    width: size,
-                                    height: size,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            // Cyan channel offset
-                            Transform.translate(
-                              offset: Offset(-split + dx, 0),
-                              child: ColorFiltered(
-                                colorFilter: const ColorFilter.mode(
-                                  Color(0xFF00FFFF),
-                                  BlendMode.modulate,
-                                ),
-                                child: Opacity(
-                                  opacity: 0.5,
-                                  child: Image.asset(
-                                    'assets/logo.png',
-                                    width: size,
-                                    height: size,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            // Main image
-                            Transform.translate(
-                              offset: Offset(dx, 0),
-                              child: Image.asset(
-                                'assets/logo.png',
-                                width: size,
-                                height: size,
-                                filterQuality: FilterQuality.medium,
-                              ),
-                            ),
-                            // Glitch scan bar
-                            if (showBar)
-                              Positioned(
-                                top: barY,
-                                left: -4,
-                                right: -4,
-                                child: Container(
-                                  height: 2,
-                                  color: Colors.white.withValues(alpha: 0.15),
-                                ),
-                              ),
-                          ],
+                      child: CustomPaint(
+                        size: const Size(size, size),
+                        painter: _PixelGlitchPainter(
+                          image: _logoImage!,
+                          seed: _glitchSeed + frame,
+                          pixelPercent: _glitchPixelPercent,
+                          displaySize: size,
                         ),
                       ),
                     );
@@ -419,29 +525,25 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ),
           ),
           const SizedBox(width: 12),
-          // Connection indicator
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isConnected ? const Color(0xFF00C0D1) : Colors.red,
-              boxShadow: [
-                BoxShadow(
-                  color: (isConnected ? const Color(0xFF00C0D1) : Colors.red)
-                      .withValues(alpha: 0.5),
-                  blurRadius: 6,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            isConnected ? 'Підключено' : 'Відключено',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.5),
-              fontSize: 12,
-            ),
+          // Connection indicator — right-click for server actions
+          _ConnectionIndicator(
+            isConnected: isConnected,
+            onReconnect: () {
+              final url = ref.read(settingsProvider).serverUrl;
+              ref.read(wsServiceProvider).reconnect(url: url);
+            },
+            onRestartServer: () async {
+              final url = ref.read(settingsProvider).serverUrl;
+              final project = ref.read(projectProvider);
+              await ref
+                  .read(serverProcessProvider)
+                  .restart(projectPath: project?.path);
+              // Reconnect after server restart
+              await Future<void>.delayed(const Duration(seconds: 2));
+              if (mounted) {
+                ref.read(wsServiceProvider).reconnect(url: url);
+              }
+            },
           ),
           const SizedBox(width: 16),
           Container(
@@ -477,8 +579,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               child: Tooltip(
                 message: _showGames ? 'Закрити гру' : 'Ігри',
                 child: InkWell(
-                  onTap: () =>
-                      setState(() => _showGames = !_showGames),
+                  onTap: () => setState(() => _showGames = !_showGames),
                   borderRadius: BorderRadius.circular(4),
                   child: Padding(
                     padding: const EdgeInsets.all(4),
@@ -654,9 +755,7 @@ class _ViewToggle extends StatelessWidget {
               Icon(
                 icon,
                 size: 13,
-                color: isActive
-                    ? accent
-                    : Colors.white.withValues(alpha: 0.3),
+                color: isActive ? accent : Colors.white.withValues(alpha: 0.3),
               ),
               const SizedBox(width: 4),
               Text(
@@ -669,6 +768,176 @@ class _ViewToggle extends StatelessWidget {
                   fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MobileNavItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _MobileNavItem({
+    required this.icon,
+    required this.label,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFF00C0D1);
+    final color = isActive ? accent : Colors.white.withValues(alpha: 0.3);
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: SizedBox(
+        width: 64,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22, color: color),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectionIndicator extends StatelessWidget {
+  final bool isConnected;
+  final bool compact;
+  final VoidCallback onReconnect;
+  final VoidCallback onRestartServer;
+
+  const _ConnectionIndicator({
+    required this.isConnected,
+    this.compact = false,
+    required this.onReconnect,
+    required this.onRestartServer,
+  });
+
+  void _showContextMenu(BuildContext context, Offset position) {
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        position.dx,
+        position.dy,
+      ),
+      color: const Color(0xFF1E1E24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      items: [
+        PopupMenuItem(
+          value: 'reconnect',
+          height: 36,
+          child: Row(
+            children: [
+              Icon(
+                Icons.refresh,
+                size: 15,
+                color: Colors.white.withValues(alpha: 0.7),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Перепідключити',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'restart',
+          height: 36,
+          child: Row(
+            children: [
+              Icon(
+                Icons.restart_alt,
+                size: 15,
+                color: Colors.white.withValues(alpha: 0.7),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Перезавантажити сервер',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == 'reconnect') onReconnect();
+      if (value == 'restart') onRestartServer();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dotColor = isConnected ? const Color(0xFF00C0D1) : Colors.red;
+
+    return GestureDetector(
+      onSecondaryTapUp: (details) =>
+          _showContextMenu(context, details.globalPosition),
+      onLongPressStart: (details) =>
+          _showContextMenu(context, details.globalPosition),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Tooltip(
+          message: 'Правий клік — дії з сервером',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: compact ? 7 : 8,
+                height: compact ? 7 : 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: dotColor,
+                  boxShadow: compact
+                      ? null
+                      : [
+                          BoxShadow(
+                            color: dotColor.withValues(alpha: 0.5),
+                            blurRadius: 6,
+                          ),
+                        ],
+                ),
+              ),
+              if (!compact) ...[
+                const SizedBox(width: 8),
+                Text(
+                  isConnected ? 'Підключено' : 'Відключено',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -762,4 +1031,65 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
       ),
     );
   }
+}
+
+/// Draws the logo image with random pixel blocks displaced to simulate
+/// a digital pixel-lag glitch effect.
+class _PixelGlitchPainter extends CustomPainter {
+  _PixelGlitchPainter({
+    required this.image,
+    required this.seed,
+    required this.pixelPercent,
+    required this.displaySize,
+  });
+
+  final ui.Image image;
+  final int seed;
+  final double pixelPercent;
+  final double displaySize;
+
+  static const int _blockSize = 2;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..filterQuality = FilterQuality.none;
+    final rng = Random(seed);
+
+    final cols = (displaySize / _blockSize).ceil();
+    final rows = (displaySize / _blockSize).ceil();
+    final srcBlockW = image.width / cols;
+    final srcBlockH = image.height / rows;
+
+    canvas.clipRect(Rect.fromLTWH(0, 0, displaySize, displaySize));
+
+    for (int row = 0; row < rows; row++) {
+      for (int col = 0; col < cols; col++) {
+        final glitched = rng.nextDouble() < pixelPercent;
+        double ox = 0, oy = 0;
+        if (glitched) {
+          ox = (rng.nextInt(5) - 2).toDouble(); // −2 … +2 px
+          oy = (rng.nextInt(3) - 1).toDouble(); // −1 … +1 px
+        }
+
+        final src = Rect.fromLTWH(
+          col * srcBlockW,
+          row * srcBlockH,
+          srcBlockW,
+          srcBlockH,
+        );
+        final dst = Rect.fromLTWH(
+          col * _blockSize + ox,
+          row * _blockSize + oy,
+          _blockSize.toDouble(),
+          _blockSize.toDouble(),
+        );
+
+        canvas.drawImageRect(image, src, dst, paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PixelGlitchPainter old) =>
+      seed != old.seed || pixelPercent != old.pixelPercent;
 }

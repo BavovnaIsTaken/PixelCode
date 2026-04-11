@@ -14,18 +14,32 @@ import 'agent_provider.dart';
 
 class TaskBoardNotifier extends Notifier<BoardState> {
   StreamSubscription<ServerMessage>? _sub;
+  StreamSubscription<bool>? _connSub;
 
   @override
   BoardState build() {
     final ws = ref.watch(wsServiceProvider);
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
-    ref.onDispose(() => _sub?.cancel());
 
-    // Request board state once connected
-    ws.connectionStatus.firstWhere((c) => c).then((_) {
-      debugPrint('[TaskBoard] Connected — requesting board state');
+    // Request board state once connected (with proper cancellation)
+    _connSub?.cancel();
+    if (ws.isConnected) {
+      debugPrint('[TaskBoard] Already connected — requesting board state');
       ws.boardGetState();
+    } else {
+      _connSub = ws.connectionStatus.listen((connected) {
+        if (connected) {
+          _connSub?.cancel();
+          debugPrint('[TaskBoard] Connected — requesting board state');
+          ws.boardGetState();
+        }
+      });
+    }
+
+    ref.onDispose(() {
+      _sub?.cancel();
+      _connSub?.cancel();
     });
 
     return const BoardState();

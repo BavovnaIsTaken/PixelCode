@@ -10,7 +10,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 
 class AgentWsService {
-  static const _defaultUrl = 'ws://localhost:9720';
+  static const _defaultUrl = 'ws://100.x.y.z:9720';
 
   WebSocket? _ws;
   final _messageController = StreamController<ServerMessage>.broadcast();
@@ -19,7 +19,15 @@ class AgentWsService {
   Timer? _reconnectTimer;
 
   Stream<ServerMessage> get messages => _messageController.stream;
-  Stream<bool> get connectionStatus => _connectionController.stream;
+
+  /// Connection status stream that immediately yields the current state,
+  /// then forwards all subsequent changes from the broadcast controller.
+  /// This prevents StreamProviders from sitting in `loading` state.
+  Stream<bool> get connectionStatus async* {
+    yield _isConnected;
+    yield* _connectionController.stream;
+  }
+
   bool get isConnected => _isConnected;
 
   Future<void> connect({String url = _defaultUrl}) async {
@@ -95,29 +103,21 @@ class AgentWsService {
     _send({
       'type': 'board_create_task',
       'title': title,
-      if (description != null) 'description': description,
-      if (color != null) 'color': color,
-      if (priority != null) 'priority': priority,
+      'description': ?description,
+      'color': ?color,
+      'priority': ?priority,
     });
   }
 
   void boardMoveTask({required String taskId, required String column}) {
-    _send({
-      'type': 'board_move_task',
-      'taskId': taskId,
-      'column': column,
-    });
+    _send({'type': 'board_move_task', 'taskId': taskId, 'column': column});
   }
 
   void boardUpdateTask({
     required String taskId,
     required Map<String, dynamic> updates,
   }) {
-    _send({
-      'type': 'board_update_task',
-      'taskId': taskId,
-      'updates': updates,
-    });
+    _send({'type': 'board_update_task', 'taskId': taskId, 'updates': updates});
   }
 
   void boardDeleteTask({required String taskId}) {
@@ -193,6 +193,24 @@ class AgentWsService {
     _send({'type': 'remove_lesson', 'lessonId': lessonId});
   }
 
+  // ─── Live input sync ─────────────────────────────────────────────────────
+
+  void sendInputText(String text) {
+    _send({'type': 'input_text', 'text': text});
+  }
+
+  /// Force-close the current connection and reconnect immediately.
+  Future<void> reconnect({String url = _defaultUrl}) async {
+    _reconnectTimer?.cancel();
+    try {
+      await _ws?.close();
+    } catch (_) {}
+    _ws = null;
+    _isConnected = false;
+    _connectionController.add(false);
+    await connect(url: url);
+  }
+
   void _send(Map<String, dynamic> msg) {
     if (_ws != null && _isConnected) {
       _ws!.add(jsonEncode(msg));
@@ -203,7 +221,10 @@ class AgentWsService {
 
   void _scheduleReconnect(String url) {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(const Duration(seconds: 3), () => connect(url: url));
+    _reconnectTimer = Timer(
+      const Duration(seconds: 3),
+      () => connect(url: url),
+    );
   }
 
   Future<void> dispose() async {

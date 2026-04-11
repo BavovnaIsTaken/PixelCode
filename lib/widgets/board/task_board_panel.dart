@@ -200,7 +200,9 @@ class _AddTaskButton extends StatelessWidget {
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           child: Container(
-            width: 400,
+            width: MediaQuery.sizeOf(ctx).width < 600
+                ? MediaQuery.sizeOf(ctx).width - 48
+                : 400,
             padding: const EdgeInsets.all(20),
             child: Column(
               mainAxisSize: MainAxisSize.min,

@@ -72,6 +72,7 @@ final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
 
 class ChatNotifier extends Notifier<List<ChatMessage>> {
   StreamSubscription<ServerMessage>? _sub;
+  StreamSubscription<bool>? _connSub;
   Timer? _saveTimer;
 
   /// All messages across all agents.
@@ -88,6 +89,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() {
       _sub?.cancel();
+      _connSub?.cancel();
       _saveTimer?.cancel();
     });
 
@@ -98,9 +100,17 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // Resume server session if we have a stored session ID
     final sessionId = ChatPersistenceService.loadSessionId(prefs);
     if (sessionId != null) {
-      ws.connectionStatus.firstWhere((connected) => connected).then((_) {
+      _connSub?.cancel();
+      if (ws.isConnected) {
         ws.resumeSession(sessionId);
-      });
+      } else {
+        _connSub = ws.connectionStatus.listen((connected) {
+          if (connected) {
+            _connSub?.cancel();
+            ws.resumeSession(sessionId);
+          }
+        });
+      }
     }
 
     return _allMessages[selectedAgent] ?? [];
@@ -216,6 +226,32 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ref.read(wsServiceProvider).newChat();
   }
 }
+
+// ─── Remote input text (live typing sync) ───────────────────────────────────
+
+class _RemoteInputTextNotifier extends Notifier<String> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  String build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen((msg) {
+      if (msg is InputTextMessage) {
+        state = msg.text;
+      }
+    });
+    ref.onDispose(() => _sub?.cancel());
+    return '';
+  }
+
+  void clear() => state = '';
+}
+
+final remoteInputTextProvider =
+    NotifierProvider<_RemoteInputTextNotifier, String>(
+  _RemoteInputTextNotifier.new,
+);
 
 final chatProvider = NotifierProvider<ChatNotifier, List<ChatMessage>>(
   ChatNotifier.new,

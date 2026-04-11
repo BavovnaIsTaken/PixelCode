@@ -14,10 +14,20 @@ class ServerProcessService {
   /// Stream of server process logs (stdout/stderr).
   Stream<ServerProcessLog> get logs => _logController.stream;
 
-  /// Resolves the server directory from the project root.
-  /// In debug mode, `Directory.current` is the project root.
-  /// In release, falls back to the executable's parent directory.
+  /// Resolves the server directory by walking up the directory tree from the
+  /// executable path looking for a `server/package.json`. Falls back to
+  /// `Directory.current` if nothing is found (terminal debug mode).
   static String get _serverDir {
+    // Walk up from the executable (handles .app bundles at any nesting depth).
+    var dir = File(Platform.resolvedExecutable).parent;
+    for (var i = 0; i < 12; i++) {
+      final candidate = '${dir.path}/server';
+      if (File('$candidate/package.json').existsSync()) return candidate;
+      final parent = dir.parent;
+      if (parent.path == dir.path) break; // reached filesystem root
+      dir = parent;
+    }
+    // Fallback — will be caught by the existsSync check in start()
     return '${Directory.current.path}/server';
   }
 
@@ -88,6 +98,20 @@ class ServerProcessService {
     _process = null;
     // Kill the process group so child processes (node) are also terminated.
     Process.killPid(proc.pid, ProcessSignal.sigterm);
+  }
+
+  /// Restarts the server process, optionally with a new project path.
+  Future<void> restart({String? projectPath}) async {
+    _emitLog('info', 'Restarting server…');
+    await stop();
+    // Give the OS a moment to release the port.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await start(projectPath: projectPath);
+  }
+
+  /// Kills the server and closes the log stream. Call only on final disposal.
+  Future<void> dispose() async {
+    await stop();
     await _logController.close();
   }
 }

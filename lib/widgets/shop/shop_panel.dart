@@ -130,8 +130,8 @@ class _BalanceHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Currency icon — spinning pixel-art coin
-          const SpinningCoin(pixelSize: 2.0),
+          // Currency icon — spinning 3D coin
+          const SpinningCoin(size: 32, layers: 5),
           const SizedBox(width: 12),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,

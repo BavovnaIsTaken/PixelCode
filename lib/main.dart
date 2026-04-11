@@ -48,7 +48,7 @@ class _PixelCodeAppState extends State<PixelCodeApp> {
     super.initState();
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: () async {
-        await serverProcess.stop();
+        await serverProcess.dispose();
         return AppExitResponse.exit;
       },
     );
@@ -57,7 +57,7 @@ class _PixelCodeAppState extends State<PixelCodeApp> {
   @override
   void dispose() {
     _lifecycleListener.dispose();
-    serverProcess.stop();
+    serverProcess.dispose();
     super.dispose();
   }
 
@@ -72,6 +72,10 @@ class _PixelCodeAppState extends State<PixelCodeApp> {
           seedColor: const Color(0xFF00C0D1),
           brightness: Brightness.dark,
         ),
+      ),
+      builder: (context, child) => GestureDetector(
+        onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+        child: child,
       ),
       home: const HubScreen(),
     );
