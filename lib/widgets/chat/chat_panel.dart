@@ -1,9 +1,27 @@
+import 'dart:convert';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pasteboard/pasteboard.dart';
 
 import '../../models/agent_message.dart';
 import '../../providers/agent_provider.dart';
+
+/// Parses numbered choice options from agent text.
+/// Returns a list of choice labels if 2+ consecutive items starting from 1 are found.
+List<String>? _extractChoices(String text) {
+  final pattern = RegExp(r'(?:^|\n)\s*(\d+)[.)]\s+(.+)', multiLine: true);
+  final matches = pattern.allMatches(text).toList();
+  if (matches.length < 2) return null;
+  final numbers = matches.map((m) => int.tryParse(m.group(1)!) ?? 0).toList();
+  if (numbers.first != 1) return null;
+  for (int i = 1; i < numbers.length; i++) {
+    if (numbers[i] != numbers[i - 1] + 1) return null;
+  }
+  return matches.map((m) => m.group(2)!.trim()).toList();
+}
 
 String _agentNickname(String id) => switch (id) {
       'manager' => 'Капітан',
@@ -30,6 +48,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   bool _autoScroll = true;
 
   String _lastAgentId = '';
+  final List<Uint8List> _attachedImages = [];
+  bool _applyingRemoteUpdate = false;
 
   @override
   void initState() {
@@ -47,7 +67,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     );
     _controller.addListener(_onInputChanged);
     _scrollController.addListener(_onScroll);
-    // Scroll to bottom on initial load so the user sees the latest messages
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
@@ -56,6 +75,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   void _onInputChanged() {
+    if (_applyingRemoteUpdate) return;
     ref.read(wsServiceProvider).sendInputText(_controller.text);
   }
 
@@ -82,15 +102,39 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   void _send() {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
-    ref.read(chatProvider.notifier).sendMessage(text);
+    if (text.isEmpty && _attachedImages.isEmpty) return;
+    ref
+        .read(chatProvider.notifier)
+        .sendMessage(text, images: List.of(_attachedImages));
     _controller.clear();
-    // Notify other devices that input was cleared
+    setState(() => _attachedImages.clear());
     ref.read(wsServiceProvider).sendInputText('');
     ref.read(remoteInputTextProvider.notifier).clear();
     _focusNode.requestFocus();
     setState(() => _autoScroll = true);
     _scrollToBottom();
+  }
+
+  Future<void> _pickImages() async {
+    const typeGroup = XTypeGroup(
+      label: 'Images',
+      extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
+      uniformTypeIdentifiers: ['public.image'],
+    );
+    final files = await openFiles(acceptedTypeGroups: [typeGroup]);
+    if (files.isEmpty) return;
+    final bytes = await Future.wait(files.map((f) => f.readAsBytes()));
+    setState(() => _attachedImages.addAll(bytes));
+  }
+
+  Future<void> _pasteImage() async {
+    final bytes = await Pasteboard.image;
+    if (bytes == null) return;
+    setState(() => _attachedImages.add(bytes));
+  }
+
+  void _removeImage(int index) {
+    setState(() => _attachedImages.removeAt(index));
   }
 
   void _scrollToBottom() {
@@ -110,7 +154,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     final currentAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
 
-    // When agent changes, reset scroll to bottom
     if (_lastAgentId != currentAgent) {
       _lastAgentId = currentAgent;
       _autoScroll = true;
@@ -121,9 +164,18 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
       });
     }
 
-    // Auto-scroll when new messages arrive
     ref.listen(chatProvider, (prev, next) {
       if (_autoScroll) _scrollToBottom();
+    });
+
+    ref.listen(remoteInputTextProvider, (prev, next) {
+      if (next == _controller.text) return;
+      _applyingRemoteUpdate = true;
+      _controller.value = TextEditingValue(
+        text: next,
+        selection: TextSelection.collapsed(offset: next.length),
+      );
+      _applyingRemoteUpdate = false;
     });
 
     return Container(
@@ -132,7 +184,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -152,6 +204,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                const Spacer(),
+                _BypassToggle(),
               ],
             ),
           ),
@@ -273,9 +327,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Widget _buildInput() {
-    // Extra bottom padding on iPhone when keyboard is hidden (home indicator)
     final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
-    final remoteText = ref.watch(remoteInputTextProvider);
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1F),
@@ -289,39 +341,84 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (remoteText.isNotEmpty)
+          // Attached image previews
+          if (_attachedImages.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Row(
-                children: [
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF00C0D1),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      remoteText,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.45),
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                  ),
-                ],
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: SizedBox(
+                height: 80,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _attachedImages.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.memory(
+                            _attachedImages[index],
+                            width: 80,
+                            height: 80,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        Positioned(
+                          top: 2,
+                          right: 2,
+                          child: GestureDetector(
+                            onTap: () => _removeImage(index),
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.7),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.close,
+                                size: 12,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           Padding(
-            padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomPad),
+            padding: EdgeInsets.fromLTRB(12, 10, 12, 12 + bottomPad),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
+                // Attach image from file
+                Tooltip(
+                  message: 'Додати зображення',
+                  child: IconButton(
+                    onPressed: _pickImages,
+                    icon: const Icon(Icons.attach_file_rounded),
+                    color: Colors.white.withValues(alpha: 0.4),
+                    iconSize: 20,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+                // Paste image from clipboard
+                Tooltip(
+                  message: 'Вставити зображення з буфера',
+                  child: IconButton(
+                    onPressed: _pasteImage,
+                    icon: const Icon(Icons.content_paste_rounded),
+                    color: Colors.white.withValues(alpha: 0.4),
+                    iconSize: 20,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  ),
+                ),
+                const SizedBox(width: 4),
                 Expanded(
                   child: TextField(
                     controller: _controller,
@@ -331,7 +428,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     minLines: 1,
                     style: const TextStyle(color: Colors.white, fontSize: 14),
                     decoration: InputDecoration(
-                      hintText: 'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
+                      hintText:
+                          'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
                       hintStyle: TextStyle(
                         color: Colors.white.withValues(alpha: 0.25),
                       ),
@@ -356,8 +454,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                           width: 1,
                         ),
                       ),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 12),
                     ),
                   ),
                 ),
@@ -377,14 +475,16 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 }
 
-class _ChatBubble extends StatelessWidget {
+class _ChatBubble extends ConsumerWidget {
   final ChatMessage message;
 
   const _ChatBubble({required this.message});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isUser = message.role == ChatRole.user;
+    final choices =
+        (!isUser && !message.isStreaming) ? _extractChoices(message.text) : null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -394,7 +494,6 @@ class _ChatBubble extends StatelessWidget {
             isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            // Agent avatar
             Container(
               width: 28,
               height: 28,
@@ -409,44 +508,328 @@ class _ChatBubble extends StatelessWidget {
             const SizedBox(width: 8),
           ],
           Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: isUser
-                    ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
-                    : const Color(0xFF1E1F27),
-                borderRadius: BorderRadius.circular(12).copyWith(
-                  bottomRight: isUser ? const Radius.circular(4) : null,
-                  bottomLeft: !isUser ? const Radius.circular(4) : null,
-                ),
-                border: Border.all(
-                  color: isUser
-                      ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
-                      : Colors.white.withValues(alpha: 0.06),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SelectableText(
-                    message.text,
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.9),
-                      fontSize: 13,
-                      height: 1.5,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isUser
+                        ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
+                        : const Color(0xFF1E1F27),
+                    borderRadius: BorderRadius.circular(12).copyWith(
+                      bottomRight: isUser ? const Radius.circular(4) : null,
+                      bottomLeft: !isUser ? const Radius.circular(4) : null,
+                    ),
+                    border: Border.all(
+                      color: isUser
+                          ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+                          : Colors.white.withValues(alpha: 0.06),
                     ),
                   ),
-                  if (message.isStreaming)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: _TypingDots(),
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (message.imageBase64s.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: message.imageBase64s.map((b64) {
+                              return ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.memory(
+                                  base64Decode(b64),
+                                  width: 180,
+                                  height: 130,
+                                  fit: BoxFit.cover,
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      if (message.text.isNotEmpty)
+                        SelectableText(
+                          message.text,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontSize: 13,
+                            height: 1.5,
+                          ),
+                        ),
+                      if (message.isStreaming)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: _TypingDots(),
+                        ),
+                    ],
+                  ),
+                ),
+                // Choice buttons below the bubble
+                if (choices != null) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: choices.asMap().entries.map((entry) {
+                      final idx = entry.key + 1;
+                      final label = entry.value;
+                      return _ChoiceButton(
+                        label: '$idx. $label',
+                        onTap: () => ref
+                            .read(chatProvider.notifier)
+                            .sendMessage('$idx'),
+                      );
+                    }).toList(),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
           if (isUser) const SizedBox(width: 36),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Choice Button ────────────────────────────────────────────────────────────
+
+class _ChoiceButton extends StatefulWidget {
+  final String label;
+  final VoidCallback onTap;
+
+  const _ChoiceButton({required this.label, required this.onTap});
+
+  @override
+  State<_ChoiceButton> createState() => _ChoiceButtonState();
+}
+
+class _ChoiceButtonState extends State<_ChoiceButton> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) {
+        setState(() => _pressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _pressed = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _pressed
+              ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+              : const Color(0xFF1E1F27),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: _pressed
+                ? const Color(0xFF00C0D1)
+                : const Color(0xFF00C0D1).withValues(alpha: 0.35),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          widget.label,
+          style: TextStyle(
+            color: _pressed
+                ? const Color(0xFF00C0D1)
+                : const Color(0xFF00C0D1).withValues(alpha: 0.8),
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Bypass Permissions Toggle ───────────────────────────────────────────────
+
+class _BypassToggle extends ConsumerWidget {
+  const _BypassToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(bypassPermissionsProvider);
+    return Tooltip(
+      message: enabled ? 'Режим "Без обмежень" увімкнено' : 'Вмикнути режим "Без обмежень"',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Без обмежень',
+            style: TextStyle(
+              color: enabled
+                  ? const Color(0xFF00C0D1)
+                  : Colors.white.withValues(alpha: 0.35),
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.2,
+            ),
+          ),
+          const SizedBox(width: 8),
+          _BoatSwitch(
+            value: enabled,
+            onChanged: (val) {
+              ref.read(bypassPermissionsProvider.notifier).state = val;
+              ref.read(wsServiceProvider).setBypassPermissions(val);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Boat Switch ─────────────────────────────────────────────────────────────
+
+class _BoatSwitch extends StatefulWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _BoatSwitch({required this.value, required this.onChanged});
+
+  @override
+  State<_BoatSwitch> createState() => _BoatSwitchState();
+}
+
+class _BoatSwitchState extends State<_BoatSwitch>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 180),
+      value: widget.value ? 1.0 : 0.0,
+    );
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void didUpdateWidget(_BoatSwitch old) {
+    super.didUpdateWidget(old);
+    if (widget.value != old.value) {
+      widget.value ? _ctrl.forward() : _ctrl.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => widget.onChanged(!widget.value),
+      child: AnimatedBuilder(
+        animation: _anim,
+        builder: (context, _) {
+          final t = _anim.value;
+          final onColor = const Color(0xFF00C0D1);
+          const offBg = Color(0xFF1A1B24);
+          final trackColor = Color.lerp(offBg, onColor.withValues(alpha: 0.2), t)!;
+          final borderColor =
+              Color.lerp(Colors.white.withValues(alpha: 0.15), onColor, t)!;
+
+          return Container(
+            width: 40,
+            height: 22,
+            decoration: BoxDecoration(
+              color: trackColor,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: borderColor, width: 1.2),
+              boxShadow: t > 0.3
+                  ? [
+                      BoxShadow(
+                        color: onColor.withValues(alpha: 0.35 * t),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Stack(
+              children: [
+                // Tick marks on the track
+                Positioned.fill(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: List.generate(
+                      4,
+                      (_) => Container(
+                        width: 1,
+                        height: 10,
+                        color: Colors.white.withValues(alpha: 0.12),
+                      ),
+                    ),
+                  ),
+                ),
+                // Knob — slides from left to right
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 180),
+                  curve: Curves.easeInOut,
+                  left: widget.value ? 22 : 2,
+                  top: 2,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: t > 0.5
+                            ? [const Color(0xFF00D4E7), const Color(0xFF0099A8)]
+                            : [
+                                const Color(0xFF4A4B5A),
+                                const Color(0xFF2E2F3D),
+                              ],
+                      ),
+                      borderRadius: BorderRadius.circular(3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          blurRadius: 3,
+                          offset: const Offset(0, 1),
+                        ),
+                        if (t > 0.5)
+                          BoxShadow(
+                            color: const Color(0xFF00C0D1)
+                                .withValues(alpha: 0.6 * t),
+                            blurRadius: 4,
+                          ),
+                      ],
+                    ),
+                    // Ridges on the knob
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(
+                        3,
+                        (_) => Container(
+                          width: 10,
+                          height: 1,
+                          margin: const EdgeInsets.symmetric(vertical: 1),
+                          color: Colors.white.withValues(alpha: t > 0.5 ? 0.5 : 0.2),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

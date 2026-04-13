@@ -84,6 +84,7 @@ sealed class ServerMessage {
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
       'input_text' => InputTextMessage.fromJson(json),
+      'chat_history' => ChatHistoryMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -106,22 +107,37 @@ class InitMessage implements ServerMessage {
 class AssistantTextMessage implements ServerMessage {
   final String text;
   final bool isPartial;
-  AssistantTextMessage({required this.text, required this.isPartial});
+  final String agentId;
+  AssistantTextMessage({required this.text, required this.isPartial, this.agentId = 'manager'});
   factory AssistantTextMessage.fromJson(Map<String, dynamic> json) =>
       AssistantTextMessage(
         text: json['text'] as String,
         isPartial: json['isPartial'] as bool,
+        agentId: json['agentId'] as String? ?? 'manager',
       );
 }
 
 class AssistantDoneMessage implements ServerMessage {
   final String messageId;
   final String text;
-  AssistantDoneMessage({required this.messageId, required this.text});
+  final String agentId;
+  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager'});
   factory AssistantDoneMessage.fromJson(Map<String, dynamic> json) =>
       AssistantDoneMessage(
         messageId: json['messageId'] as String,
         text: json['text'] as String,
+        agentId: json['agentId'] as String? ?? 'manager',
+      );
+}
+
+class ChatHistoryMessage implements ServerMessage {
+  final List<ChatMessage> messages;
+  ChatHistoryMessage({required this.messages});
+  factory ChatHistoryMessage.fromJson(Map<String, dynamic> json) =>
+      ChatHistoryMessage(
+        messages: (json['messages'] as List)
+            .map((e) => ChatMessage.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }
 
@@ -370,6 +386,7 @@ class ChatMessage {
   final String agentId;
   final DateTime timestamp;
   final bool isStreaming;
+  final List<String> imageBase64s;
 
   ChatMessage({
     required this.role,
@@ -377,6 +394,7 @@ class ChatMessage {
     required this.agentId,
     DateTime? timestamp,
     this.isStreaming = false,
+    this.imageBase64s = const [],
   }) : timestamp = timestamp ?? DateTime.now();
 
   ChatMessage copyWith({String? text, bool? isStreaming}) => ChatMessage(
@@ -385,6 +403,7 @@ class ChatMessage {
         agentId: agentId,
         timestamp: timestamp,
         isStreaming: isStreaming ?? this.isStreaming,
+        imageBase64s: imageBase64s,
       );
 
   Map<String, dynamic> toJson() => {
@@ -392,6 +411,7 @@ class ChatMessage {
         'text': text,
         'agentId': agentId,
         'timestamp': timestamp.toIso8601String(),
+        if (imageBase64s.isNotEmpty) 'images': imageBase64s,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -399,5 +419,7 @@ class ChatMessage {
         text: json['text'] as String,
         agentId: json['agentId'] as String? ?? 'manager',
         timestamp: DateTime.parse(json['timestamp'] as String),
+        imageBase64s:
+            (json['images'] as List?)?.cast<String>() ?? const [],
       );
 }

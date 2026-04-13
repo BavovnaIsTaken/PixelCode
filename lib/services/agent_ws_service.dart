@@ -32,7 +32,8 @@ class AgentWsService {
 
   Future<void> connect({String url = _defaultUrl}) async {
     try {
-      _ws = await WebSocket.connect(url);
+      _ws = await WebSocket.connect(url)
+          .timeout(const Duration(seconds: 10));
       _isConnected = true;
       _connectionController.add(true);
       _reconnectTimer?.cancel();
@@ -64,8 +65,17 @@ class AgentWsService {
     }
   }
 
-  void sendMessage(String content, {String agentId = 'manager'}) {
-    _send({'type': 'send_message', 'content': content, 'agentId': agentId});
+  void sendMessage(
+    String content, {
+    String agentId = 'manager',
+    List<String>? images,
+  }) {
+    _send({
+      'type': 'send_message',
+      'content': content,
+      'agentId': agentId,
+      if (images != null && images.isNotEmpty) 'images': images,
+    });
   }
 
   void resumeSession(String sessionId) {
@@ -197,6 +207,12 @@ class AgentWsService {
 
   void sendInputText(String text) {
     _send({'type': 'input_text', 'text': text});
+  }
+
+  // ─── Permissions bypass ───────────────────────────────────────────────────
+
+  void setBypassPermissions(bool enabled) {
+    _send({'type': 'set_bypass_permissions', 'enabled': enabled});
   }
 
   /// Force-close the current connection and reconnect immediately.

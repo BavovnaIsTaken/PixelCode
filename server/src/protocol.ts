@@ -44,7 +44,9 @@ export type ClientMessage =
     }
   | { type: "remove_lesson"; lessonId: string }
   // Live input sync
-  | { type: "input_text"; text: string };
+  | { type: "input_text"; text: string }
+  // Permissions bypass toggle
+  | { type: "set_bypass_permissions"; enabled: boolean };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -97,11 +99,22 @@ export type ServerMessage =
       type: "assistant_text";
       text: string;
       isPartial: boolean;
+      agentId: string;
     }
   | {
       type: "assistant_message_done";
       messageId: string;
       text: string;
+      agentId: string;
+    }
+  | {
+      type: "chat_history";
+      messages: Array<{
+        role: "user" | "assistant";
+        text: string;
+        agentId: string;
+        timestamp: string;
+      }>;
     }
   | {
       type: "agent_status";

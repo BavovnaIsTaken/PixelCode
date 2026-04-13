@@ -34,6 +34,12 @@ class ServerProcessService {
   /// Starts the Node.js server if it is not already running.
   /// If [projectPath] is provided, it will be used as PROJECT_CWD.
   Future<void> start({String? projectPath}) async {
+    // Process.start is not supported on iOS/Android (OS sandbox restriction).
+    if (Platform.isIOS || Platform.isAndroid) {
+      _emitLog('info', 'Server process not supported on mobile platforms');
+      return;
+    }
+
     if (_process != null) return;
 
     final serverDir = _serverDir;

@@ -1,7 +1,7 @@
 /// Project selector — title bar dropdown for switching projects.
 library;
 
-import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -65,8 +65,8 @@ class _ProjectSelectorState extends ConsumerState<ProjectSelector> {
 
   Future<void> _pickFolder() async {
     _close();
-    final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: 'Обрати проєкт',
+    final result = await getDirectoryPath(
+      confirmButtonText: 'Обрати',
     );
     if (result == null) return;
     setState(() => _isSwitching = true);

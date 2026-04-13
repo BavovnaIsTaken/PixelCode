@@ -25,6 +25,7 @@ import {
   formatTraitsForPrompt, getAllTraits,
   type TraitStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
+import { ChatHistory } from "./chat_history.js";
 
 const PORT = parseInt(process.env.PORT ?? "9720", 10);
 let PROJECT_CWD = process.env.PROJECT_CWD ?? process.cwd();
@@ -186,11 +187,9 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       // Top-level assistant message — this is the addressed agent talking
       const text = extractText(asst);
       if (text) {
-        send(ws, {
-          type: "assistant_message_done",
-          messageId: asst.uuid,
-          text,
-        });
+        chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        chatHistory.save(historyFilePath(PROJECT_CWD));
+        broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId });
       }
 
       // Parse tool uses from addressed agent
@@ -255,11 +254,7 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
         event.type === "content_block_delta" &&
         event.delta.type === "text_delta"
       ) {
-        send(ws, {
-          type: "assistant_text",
-          text: event.delta.text,
-          isPartial: true,
-        });
+        broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId: targetAgentId });
       }
       break;
     }
@@ -350,6 +345,17 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
   }
 }
 
+// ─── Chat history ────────────────────────────────────────────────────────────
+
+/** Returns the path where chat history is persisted for a given project dir. */
+function historyFilePath(projectCwd: string): string {
+  const cwdKey = projectCwd.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".claude", "projects", cwdKey, "chat_history.json");
+}
+
+const chatHistory = new ChatHistory();
+chatHistory.load(historyFilePath(PROJECT_CWD));
+
 // ─── Per-client shared session ───────────────────────────────────────────────
 
 /** One shared session per WebSocket client. All agents share conversation context. */
@@ -357,6 +363,9 @@ const clientSessions = new WeakMap<WebSocket, string>();
 
 /** Per-client project memory text, injected into system prompts. */
 const clientProjectContext = new WeakMap<WebSocket, string>();
+
+/** Per-client bypass permissions flag. When true, agents skip all permission prompts. */
+const clientBypassPermissions = new WeakMap<WebSocket, boolean>();
 
 /** Per-client game economy state (hired agents, hardware, skills). */
 const clientGameState = new WeakMap<WebSocket, GameStateData>();
@@ -741,7 +750,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       agents: dynamicAgents,
       cwd: PROJECT_CWD,
       includePartialMessages: true,
-      permissionMode: "acceptEdits" as const,
+      permissionMode: (clientBypassPermissions.get(ws) ? "bypassPermissions" : "acceptEdits") as "bypassPermissions" | "acceptEdits",
       maxTurns: 50,
       persistSession: true,
       continue: false,
@@ -973,6 +982,27 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
 
 const wss = new WebSocketServer({ port: PORT });
 
+/** Broadcast a message to every connected client. */
+function broadcastAll(msg: ServerMessage): void {
+  const data = JSON.stringify(msg);
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(data);
+  }
+}
+
+/** Broadcast to every client except the sender. */
+function broadcastExcept(sender: WebSocket, msg: ServerMessage): void {
+  const data = JSON.stringify(msg);
+  for (const client of wss.clients) {
+    if (client !== sender && client.readyState === WebSocket.OPEN) client.send(data);
+  }
+}
+
+/** Send the full chat history snapshot to a single client (e.g. on connect). */
+function sendChatHistory(ws: WebSocket): void {
+  if (!chatHistory.isEmpty) send(ws, chatHistory.snapshot());
+}
+
 console.log(`🏗️  PixelCode server listening on ws://localhost:${PORT}`);
 console.log(`   Working directory: ${PROJECT_CWD}`);
 console.log(`   Agents: ${agentInfoList.map((a) => a.name).join(", ")}`);
@@ -991,6 +1021,8 @@ wss.on("connection", (ws) => {
   sendDebug(ws, "info", "ws", "Connected to PixelCode server");
   sendBoardState(ws);
   sendTraits(ws);
+  // Send existing chat history so new clients are in sync
+  sendChatHistory(ws);
 
   ws.on("message", async (data) => {
     try {
@@ -1001,6 +1033,11 @@ wss.on("connection", (ws) => {
         case "send_message": {
           const targetAgent = msg.agentId || "manager";
           sendDebug(ws, "info", "ws", `User → ${targetAgent}: "${msg.content.slice(0, 60)}…"`);
+          // Store user message and broadcast snapshot to all other clients.
+          // (Sender already added the message optimistically in the UI.)
+          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString() });
+          chatHistory.save(historyFilePath(PROJECT_CWD));
+          broadcastExcept(ws, chatHistory.snapshot());
           await runQuery(ws, msg.content, targetAgent);
           break;
         }
@@ -1021,6 +1058,8 @@ wss.on("connection", (ws) => {
           dbg("info", "ws", `New chat requested. Old session: ${oldSession ?? "none"}`);
           sendDebug(ws, "warn", "session", `New chat. Dropped session=${oldSession?.slice(0, 12) ?? "none"}`);
           clientSessions.delete(ws);
+          chatHistory.clear();
+          chatHistory.save(historyFilePath(PROJECT_CWD));
           send(ws, {
             type: "init",
             sessionId: "pending",
@@ -1095,8 +1134,9 @@ wss.on("connection", (ws) => {
           const newPath = msg.path;
           dbg("info", "project", `Switching project to: ${newPath}`);
           PROJECT_CWD = newPath;
-          // Reload trait memory for the new project
+          // Reload trait memory and chat history for the new project
           traitStore = loadTraits(PROJECT_CWD);
+          chatHistory.load(historyFilePath(PROJECT_CWD));
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
           // Clear all per-client state
           clientSessions.delete(ws);
@@ -1192,6 +1232,15 @@ wss.on("connection", (ws) => {
             sendDebug(ws, "info", "traits", `Lesson removed: ${msg.lessonId}`);
           }
           sendTraits(ws);
+          break;
+        }
+
+        // ─── Permissions bypass ───────────────────────────────────────────
+        case "set_bypass_permissions": {
+          const enabled = (msg as { type: "set_bypass_permissions"; enabled: boolean }).enabled;
+          clientBypassPermissions.set(ws, enabled);
+          dbg("info", "ws", `Bypass permissions: ${enabled ? "ON" : "OFF"}`);
+          sendDebug(ws, "info", "ws", `Bypass permissions: ${enabled ? "ENABLED — agents will not ask for permission" : "DISABLED — agents will ask for permission"}`);
           break;
         }
 

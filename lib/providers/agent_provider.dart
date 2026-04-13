@@ -2,6 +2,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -67,6 +69,10 @@ final workingDirectoryProvider =
 // ─── Selected agent ──────────────────────────────────────────────────────
 
 final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
+
+// ─── Bypass permissions toggle ───────────────────────────────────────────
+
+final bypassPermissionsProvider = StateProvider<bool>((ref) => false);
 
 // ─── Chat messages ───────────────────────────────────────────────────────────
 
@@ -145,9 +151,17 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           ChatPersistenceService.saveSessionId(prefs, sessionId);
         }
 
-      case AssistantTextMessage(:final text):
-        // Use the agent that started the stream, fallback to selected
-        final agentId = _activeStreamAgent ?? _selectedAgent;
+      case ChatHistoryMessage(:final messages):
+        // Replace local history with the authoritative server history
+        final grouped = <String, List<ChatMessage>>{};
+        for (final m in messages) {
+          (grouped[m.agentId] ??= []).add(m);
+        }
+        _allMessages = grouped;
+        state = _allMessages[_selectedAgent] ?? [];
+        _scheduleSave();
+
+      case AssistantTextMessage(:final text, :final agentId):
         final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
@@ -165,8 +179,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
         _setAgentMessages(agentId, messages);
 
-      case AssistantDoneMessage(:final text):
-        final agentId = _activeStreamAgent ?? _selectedAgent;
+      case AssistantDoneMessage(:final text, :final agentId):
         final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
@@ -204,14 +217,24 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
-  void sendMessage(String text) {
+  void sendMessage(String text, {List<Uint8List> images = const []}) {
     final agentId = _selectedAgent;
     _activeStreamAgent = agentId;
+    final imageBase64s = images.map((b) => base64Encode(b)).toList();
     _setAgentMessages(agentId, [
       ..._agentMessages(agentId),
-      ChatMessage(role: ChatRole.user, text: text, agentId: agentId),
+      ChatMessage(
+        role: ChatRole.user,
+        text: text,
+        agentId: agentId,
+        imageBase64s: imageBase64s,
+      ),
     ]);
-    ref.read(wsServiceProvider).sendMessage(text, agentId: agentId);
+    ref.read(wsServiceProvider).sendMessage(
+          text,
+          agentId: agentId,
+          images: imageBase64s.isNotEmpty ? imageBase64s : null,
+        );
     _scheduleSave();
   }
 
