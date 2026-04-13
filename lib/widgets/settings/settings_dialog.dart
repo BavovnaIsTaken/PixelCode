@@ -4,8 +4,11 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/session_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../session/session_form_dialog.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
 /// or a centered dialog on desktop.
@@ -131,31 +134,179 @@ class _SettingsDialog extends ConsumerWidget {
 
 // ─── Shared settings content ────────────────────────────────────────────────
 
-class _SettingsContent extends ConsumerStatefulWidget {
+class _SettingsContent extends ConsumerWidget {
   const _SettingsContent();
 
   @override
-  ConsumerState<_SettingsContent> createState() => _SettingsContentState();
-}
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(sessionProvider);
+    final isConnected =
+        ref.watch(connectionStatusProvider).valueOrNull ?? false;
 
-class _SettingsContentState extends ConsumerState<_SettingsContent> {
-  late final TextEditingController _urlController;
-  bool _dirty = false;
-  bool _saving = false;
-  @override
-  void initState() {
-    super.initState();
-    final current = ref.read(settingsProvider).serverUrl;
-    _urlController = TextEditingController(text: current);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Section: Sessions ──────────────────────────────────────────
+        _SectionHeader(title: 'Сесії'),
+        const SizedBox(height: 12),
+        Text(
+          'Серверні профілі для підключення. '
+          'Оберіть активну сесію в заголовку вікна.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Profile list
+        for (final profile in session.profiles) ...[
+          _SessionProfileTile(
+            profile: profile,
+            isActive: profile.id == session.activeProfileId,
+            isConnected: profile.id == session.activeProfileId && isConnected,
+            onEdit: () => _editProfile(context, ref, profile),
+            onDelete: session.profiles.length > 1
+                ? () => _deleteProfile(context, ref, profile)
+                : null,
+          ),
+          const SizedBox(height: 8),
+        ],
+
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: OutlinedButton.icon(
+            onPressed: () => _addProfile(context, ref),
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('Додати сесію'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF00C0D1),
+              side: BorderSide(
+                color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ),
+
+        // ── Section: Ergonomics ────────────────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Ергономіка робочого місця'),
+        const SizedBox(height: 12),
+        Text(
+          'Висота робочого столу',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.7),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Мікрорегулювання висоти для оптимальної ергономічної '
+          'позиції під час кодування.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _DeskHeightControl(
+          value: ref.watch(settingsProvider).deskHeight,
+          onChanged: (v) =>
+              ref.read(settingsProvider.notifier).setDeskHeight(v),
+        ),
+
+        // ── Danger zone ─────────────────────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Небезпечна зона'),
+        const SizedBox(height: 12),
+        Text(
+          'Видаляє всі кешовані SDK-сесії з диска. '
+          'Поточний контекст розмови буде втрачено.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: FilledButton.icon(
+            onPressed: () => _confirmClearSessions(context, ref),
+            icon: const Icon(Icons.cleaning_services_rounded, size: 16),
+            label: const Text('Очистити всі SDK-сесії'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF00C0D1),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
-  @override
-  void dispose() {
-    _urlController.dispose();
-    super.dispose();
+  Future<void> _addProfile(BuildContext context, WidgetRef ref) async {
+    final profile = await showSessionFormDialog(context);
+    if (profile == null) return;
+    await ref.read(sessionProvider.notifier).addProfile(profile);
   }
 
-  void _confirmClearSessions(BuildContext context) {
+  Future<void> _editProfile(
+    BuildContext context,
+    WidgetRef ref,
+    SessionProfile profile,
+  ) async {
+    final updated = await showSessionFormDialog(context, existing: profile);
+    if (updated == null) return;
+    await ref.read(sessionProvider.notifier).updateProfile(updated);
+  }
+
+  void _deleteProfile(
+    BuildContext context,
+    WidgetRef ref,
+    SessionProfile profile,
+  ) {
+    showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1F27),
+        title: Text(
+          'Видалити "${profile.name}"?',
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(
+              'Скасувати',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.5)),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              ref.read(sessionProvider.notifier).deleteProfile(profile.id);
+            },
+            child: const Text(
+              'Видалити',
+              style: TextStyle(color: Color(0xFFEF4444)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmClearSessions(BuildContext context, WidgetRef ref) {
     showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -195,218 +346,103 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       ),
     );
   }
+}
 
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    await ref.read(settingsProvider.notifier).setServerUrl(
-          _urlController.text.trim(),
-        );
-    if (mounted) {
-      setState(() {
-        _dirty = false;
-        _saving = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('URL сервера збережено. Перепідключіться для застосування.'),
-          backgroundColor: const Color(0xFF2A2A30),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
+// ─── Session profile tile ──────────────────────────────────────────────────
 
-  void _reset() {
-    _urlController.text = defaultServerUrl;
-    setState(() => _dirty = true);
-  }
+class _SessionProfileTile extends StatelessWidget {
+  final SessionProfile profile;
+  final bool isActive;
+  final bool isConnected;
+  final VoidCallback onEdit;
+  final VoidCallback? onDelete;
+
+  const _SessionProfileTile({
+    required this.profile,
+    required this.isActive,
+    required this.isConnected,
+    required this.onEdit,
+    this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // ── Section: Connection ──────────────────────────────────────────
-        _SectionHeader(title: "З'єднання"),
-        const SizedBox(height: 12),
-        Text(
-          'URL сервера',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.7),
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          'WebSocket-адреса сервера PixelCode. '
-          'Використовуйте Tailscale IP для віддалених пристроїв.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          controller: _urlController,
-          onChanged: (v) {
-            if (!_dirty) setState(() => _dirty = true);
-          },
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 14,
-            fontFamily: 'monospace',
-          ),
-          decoration: InputDecoration(
-            hintText: defaultServerUrl,
-            hintStyle: TextStyle(
-              color: Colors.white.withValues(alpha: 0.2),
-              fontFamily: 'monospace',
-            ),
-            filled: true,
-            fillColor: const Color(0xFF0E0E11),
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 14,
-            ),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: Colors.white.withValues(alpha: 0.1),
-              ),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: BorderSide(
-                color: Colors.white.withValues(alpha: 0.1),
-              ),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(
-                color: Color(0xFF00C0D1),
-              ),
-            ),
-          ),
-          keyboardType: TextInputType.url,
-          autocorrect: false,
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Expanded(
-              child: SizedBox(
-                height: 44,
-                child: OutlinedButton(
-                  onPressed: _reset,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white.withValues(alpha: 0.6),
-                    side: BorderSide(
-                      color: Colors.white.withValues(alpha: 0.1),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: const Text('За замовчуванням'),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: SizedBox(
-                height: 44,
-                child: FilledButton(
-                  onPressed: _dirty && !_saving ? _save : null,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF00C0D1),
-                    disabledBackgroundColor:
-                        const Color(0xFF00C0D1).withValues(alpha: 0.3),
-                    foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.black,
-                          ),
-                        )
-                      : const Text('Зберегти'),
-                ),
-              ),
-            ),
-          ],
-        ),
+    final dotColor = isActive
+        ? (isConnected ? const Color(0xFF00C0D1) : Colors.red)
+        : Colors.white.withValues(alpha: 0.15);
 
-        // ── Section: Ergonomics ────────────────────────────────────────
-        const SizedBox(height: 32),
-        _SectionHeader(title: 'Ергономіка робочого місця'),
-        const SizedBox(height: 12),
-        Text(
-          'Висота робочого столу',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.7),
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isActive
+            ? const Color(0xFF00C0D1).withValues(alpha: 0.06)
+            : Colors.white.withValues(alpha: 0.02),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isActive
+              ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+              : Colors.white.withValues(alpha: 0.06),
         ),
-        const SizedBox(height: 6),
-        Text(
-          'Мікрорегулювання висоти для оптимальної ергономічної '
-          'позиції під час кодування.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
-        const SizedBox(height: 14),
-        _DeskHeightControl(
-          value: ref.watch(settingsProvider).deskHeight,
-          onChanged: (v) =>
-              ref.read(settingsProvider.notifier).setDeskHeight(v),
-        ),
-
-        // ── Danger zone (hidden by default) ─────────────────────────────
-        ...[
-          const SizedBox(height: 32),
-          _SectionHeader(title: 'Небезпечна зона'),
-          const SizedBox(height: 12),
-          Text(
-            'Видаляє всі кешовані SDK-сесії з диска. '
-            'Поточний контекст розмови буде втрачено.',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.35),
-              fontSize: 12,
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dotColor,
             ),
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            height: 44,
-            child: FilledButton.icon(
-              onPressed: () => _confirmClearSessions(context),
-              icon: const Icon(Icons.cleaning_services_rounded, size: 16),
-              label: const Text('Очистити всі SDK-сесії'),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF00C0D1),
-                foregroundColor: Colors.black,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  profile.name,
+                  style: TextStyle(
+                    color:
+                        Colors.white.withValues(alpha: isActive ? 0.9 : 0.6),
+                    fontSize: 13,
+                    fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 2),
+                Text(
+                  '${profile.host}:${profile.port}',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.25),
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
             ),
           ),
+          IconButton(
+            onPressed: onEdit,
+            icon: Icon(
+              Icons.edit_outlined,
+              size: 16,
+              color: Colors.white.withValues(alpha: 0.3),
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+          if (onDelete != null)
+            IconButton(
+              onPressed: onDelete,
+              icon: Icon(
+                Icons.delete_outline,
+                size: 16,
+                color: Colors.white.withValues(alpha: 0.3),
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            ),
         ],
-      ],
+      ),
     );
   }
 }
