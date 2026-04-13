@@ -10,7 +10,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
-import '../../providers/project_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
@@ -19,6 +18,7 @@ import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
+import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
 import '../../widgets/shop/shop_panel.dart';
 
@@ -135,10 +135,6 @@ class _HubScreenState extends ConsumerState<HubScreen>
     super.initState();
     _loadLogoImage();
     _scheduleGlitch();
-    // Connect immediately — the WS service has built-in reconnection logic
-    // that will retry every 3s if the server isn't ready yet.
-    final url = ref.read(settingsProvider).serverUrl;
-    ref.read(wsServiceProvider).connect(url: url);
   }
 
   @override
@@ -377,26 +373,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ),
           ),
           const SizedBox(width: 8),
-          // Connection dot — tap for server actions
-          _ConnectionIndicator(
-            isConnected: isConnected,
-            compact: true,
-            onReconnect: () {
-              final url = ref.read(settingsProvider).serverUrl;
-              ref.read(wsServiceProvider).reconnect(url: url);
-            },
-            onRestartServer: () async {
-              final url = ref.read(settingsProvider).serverUrl;
-              final project = ref.read(projectProvider);
-              await ref
-                  .read(serverProcessProvider)
-                  .restart(projectPath: project?.path);
-              await Future<void>.delayed(const Duration(seconds: 2));
-              if (mounted) {
-                ref.read(wsServiceProvider).reconnect(url: url);
-              }
-            },
-          ),
+          const SessionPicker(compact: true),
           const Spacer(),
           // Currency
           _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
@@ -525,27 +502,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ),
           ),
           const SizedBox(width: 12),
-          // Connection indicator — right-click for server actions
-          _ConnectionIndicator(
-            isConnected: isConnected,
-            onReconnect: () {
-              final url = ref.read(settingsProvider).serverUrl;
-              ref.read(wsServiceProvider).reconnect(url: url);
-            },
-            onRestartServer: () async {
-              final url = ref.read(settingsProvider).serverUrl;
-              final project = ref.read(projectProvider);
-              await ref
-                  .read(serverProcessProvider)
-                  .restart(projectPath: project?.path);
-              // Reconnect after server restart
-              await Future<void>.delayed(const Duration(seconds: 2));
-              if (mounted) {
-                ref.read(wsServiceProvider).reconnect(url: url);
-              }
-            },
-          ),
-          const SizedBox(width: 16),
+          const SessionPicker(),
+          const SizedBox(width: 12),
           Container(
             width: 1,
             height: 16,
@@ -819,132 +777,7 @@ class _MobileNavItem extends StatelessWidget {
   }
 }
 
-class _ConnectionIndicator extends StatelessWidget {
-  final bool isConnected;
-  final bool compact;
-  final VoidCallback onReconnect;
-  final VoidCallback onRestartServer;
 
-  const _ConnectionIndicator({
-    required this.isConnected,
-    this.compact = false,
-    required this.onReconnect,
-    required this.onRestartServer,
-  });
-
-  void _showContextMenu(BuildContext context, Offset position) {
-    showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx,
-        position.dy,
-      ),
-      color: const Color(0xFF1E1E24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-      ),
-      items: [
-        PopupMenuItem(
-          value: 'reconnect',
-          height: 36,
-          child: Row(
-            children: [
-              Icon(
-                Icons.refresh,
-                size: 15,
-                color: Colors.white.withValues(alpha: 0.7),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Перепідключити',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-        PopupMenuItem(
-          value: 'restart',
-          height: 36,
-          child: Row(
-            children: [
-              Icon(
-                Icons.restart_alt,
-                size: 15,
-                color: Colors.white.withValues(alpha: 0.7),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Перезавантажити сервер',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    ).then((value) {
-      if (value == 'reconnect') onReconnect();
-      if (value == 'restart') onRestartServer();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final dotColor = isConnected ? const Color(0xFF00C0D1) : Colors.red;
-
-    return GestureDetector(
-      onSecondaryTapUp: (details) =>
-          _showContextMenu(context, details.globalPosition),
-      onLongPressStart: (details) =>
-          _showContextMenu(context, details.globalPosition),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Tooltip(
-          message: 'Правий клік — дії з сервером',
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: compact ? 7 : 8,
-                height: compact ? 7 : 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: dotColor,
-                  boxShadow: compact
-                      ? null
-                      : [
-                          BoxShadow(
-                            color: dotColor.withValues(alpha: 0.5),
-                            blurRadius: 6,
-                          ),
-                        ],
-                ),
-              ),
-              if (!compact) ...[
-                const SizedBox(width: 8),
-                Text(
-                  isConnected ? 'Підключено' : 'Відключено',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _StopAllButton extends ConsumerStatefulWidget {
   const _StopAllButton();

@@ -33,7 +33,8 @@ class ServerProcessService {
 
   /// Starts the Node.js server if it is not already running.
   /// If [projectPath] is provided, it will be used as PROJECT_CWD.
-  Future<void> start({String? projectPath}) async {
+  /// If [apiKey] is provided, it will be set as ANTHROPIC_API_KEY.
+  Future<void> start({String? projectPath, String? apiKey}) async {
     // Process.start is not supported on iOS/Android (OS sandbox restriction).
     if (Platform.isIOS || Platform.isAndroid) {
       _emitLog('info', 'Server process not supported on mobile platforms');
@@ -62,6 +63,7 @@ class ServerProcessService {
           ...Platform.environment,
           'PORT': '9720',
           'PROJECT_CWD': projectPath ?? Directory.current.path,
+          if (apiKey != null && apiKey.isNotEmpty) 'ANTHROPIC_API_KEY': apiKey,
         },
       ).timeout(const Duration(seconds: 10));
     } on TimeoutException {
@@ -106,13 +108,13 @@ class ServerProcessService {
     Process.killPid(proc.pid, ProcessSignal.sigterm);
   }
 
-  /// Restarts the server process, optionally with a new project path.
-  Future<void> restart({String? projectPath}) async {
+  /// Restarts the server process, optionally with a new project path and API key.
+  Future<void> restart({String? projectPath, String? apiKey}) async {
     _emitLog('info', 'Restarting server…');
     await stop();
     // Give the OS a moment to release the port.
     await Future<void>.delayed(const Duration(milliseconds: 500));
-    await start(projectPath: projectPath);
+    await start(projectPath: projectPath, apiKey: apiKey);
   }
 
   /// Kills the server and closes the log stream. Call only on final disposal.

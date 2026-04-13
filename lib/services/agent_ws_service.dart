@@ -10,8 +10,6 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 
 class AgentWsService {
-  static const _defaultUrl = 'ws://100.x.y.z:9720';
-
   WebSocket? _ws;
   final _messageController = StreamController<ServerMessage>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
@@ -30,7 +28,7 @@ class AgentWsService {
 
   bool get isConnected => _isConnected;
 
-  Future<void> connect({String url = _defaultUrl}) async {
+  Future<void> connect({required String url}) async {
     try {
       _ws = await WebSocket.connect(url)
           .timeout(const Duration(seconds: 10));
@@ -216,7 +214,7 @@ class AgentWsService {
   }
 
   /// Force-close the current connection and reconnect immediately.
-  Future<void> reconnect({String url = _defaultUrl}) async {
+  Future<void> reconnect({required String url}) async {
     _reconnectTimer?.cancel();
     try {
       await _ws?.close();

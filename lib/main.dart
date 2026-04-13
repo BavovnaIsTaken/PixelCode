@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/agent_provider.dart';
+import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/hub/hub_screen.dart';
 import 'services/project_persistence_service.dart';
@@ -15,12 +17,6 @@ final serverProcess = ServerProcessService();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-
-  // Use the last opened project path, or fall back to the current directory.
-  // Fire-and-forget: don't block UI on server process spawn.
-  // The WebSocket service has reconnect logic that will retry until the server is up.
-  final savedPath = ProjectPersistenceService.loadCurrentProjectPath(prefs);
-  serverProcess.start(projectPath: savedPath);
 
   runApp(
     ProviderScope(
@@ -33,14 +29,14 @@ void main() async {
   );
 }
 
-class PixelCodeApp extends StatefulWidget {
+class PixelCodeApp extends ConsumerStatefulWidget {
   const PixelCodeApp({super.key});
 
   @override
-  State<PixelCodeApp> createState() => _PixelCodeAppState();
+  ConsumerState<PixelCodeApp> createState() => _PixelCodeAppState();
 }
 
-class _PixelCodeAppState extends State<PixelCodeApp> {
+class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
 
   @override
@@ -52,6 +48,27 @@ class _PixelCodeAppState extends State<PixelCodeApp> {
         return AppExitResponse.exit;
       },
     );
+    _initSession();
+  }
+
+  Future<void> _initSession() async {
+    final session = ref.read(sessionProvider.notifier);
+    await session.migrateFromLegacy();
+
+    final profile = ref.read(sessionProvider).activeProfile;
+    if (profile == null) return;
+
+    final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
+      ref.read(sharedPrefsProvider),
+    );
+
+    // Start local server if this profile has an API key and we're on desktop
+    if (profile.hasApiKey && !Platform.isIOS && !Platform.isAndroid) {
+      serverProcess.start(projectPath: savedPath, apiKey: profile.apiKey);
+    }
+
+    // Connect WebSocket
+    ref.read(wsServiceProvider).connect(url: profile.wsUrl);
   }
 
   @override
