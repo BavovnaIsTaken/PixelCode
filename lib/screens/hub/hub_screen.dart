@@ -42,6 +42,15 @@ class _HubScreenState extends ConsumerState<HubScreen>
   bool _showGames = false;
   int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop
 
+  // Icon fly-to-opposite-corner on shutdown
+  bool _iconMoving = false;
+  Offset _iconStart = Offset.zero;
+  Offset _iconEnd = Offset.zero;
+  late final AnimationController _iconMoveCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  );
+
   final _rng = Random();
 
   // Easter egg: 5-second long press on logo → Games
@@ -88,7 +97,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   void _startGlitchLoop() {
     if (!_logoHovered || _isShuttingDown || !mounted) return;
     _glitchSeed = _rng.nextInt(10000);
-    final dur = 200 + _rng.nextInt(401); // 200–600ms
+    final dur = 400 + _rng.nextInt(801); // 400–1200ms (2× slower)
     _glitchCtrl
       ..duration = Duration(milliseconds: dur)
       ..forward(from: 0.0).then((_) {
@@ -126,10 +135,20 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   void _triggerShutdown() {
     if (_isShuttingDown) return;
-    _shutdownHeight = MediaQuery.of(context).size.height;
-    setState(() => _isShuttingDown = true);
+    final size = MediaQuery.of(context).size;
+    _shutdownHeight = size.height;
+    const iconSize = 24.0;
+    setState(() {
+      _isShuttingDown = true;
+      _iconMoving = true;
+      // Icon lives at left padding=16, vertically centred in the 48px title bar
+      _iconStart = const Offset(16, (48 - iconSize) / 2);
+      // Opposite corner: bottom-right
+      _iconEnd = Offset(size.width - iconSize - 16, size.height - iconSize - 16);
+    });
     _glitchCtrl.stop();
     _shutdownCtrl.forward();
+    _iconMoveCtrl.forward();
     // Start native window collapse slightly after content starts shrinking
     Future.delayed(const Duration(milliseconds: 640), () {
       final platform = defaultTargetPlatform;
@@ -154,6 +173,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _shutdownCtrl.dispose();
     _liftCtrl.dispose();
     _openCtrl.dispose();
+    _iconMoveCtrl.dispose();
     super.dispose();
   }
 
@@ -173,7 +193,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
     return Scaffold(
       backgroundColor: const Color(0xFF0E0E11),
       body: AnimatedBuilder(
-        animation: Listenable.merge([_shutdownCtrl, _liftCtrl, _openCtrl]),
+        animation: Listenable.merge([_shutdownCtrl, _liftCtrl, _openCtrl, _iconMoveCtrl]),
         builder: (context, child) {
           final sy = _isShuttingDown
               ? 1.0
