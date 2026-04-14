@@ -4,7 +4,6 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:pasteboard/pasteboard.dart';
 
 import '../../models/agent_message.dart';
 import '../../providers/agent_provider.dart';
@@ -128,9 +127,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Future<void> _pasteImage() async {
-    final bytes = await Pasteboard.image;
-    if (bytes == null) return;
-    setState(() => _attachedImages.add(bytes));
+    // Pasteboard image paste is desktop-only (pasteboard package removed — iOS crash)
   }
 
   void _removeImage(int index) {
@@ -327,7 +324,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Widget _buildInput() {
-    final bottomPad = MediaQuery.viewPaddingOf(context).bottom;
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A1F),
@@ -390,7 +386,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
               ),
             ),
           Padding(
-            padding: EdgeInsets.fromLTRB(12, 10, 12, 12 + bottomPad),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [

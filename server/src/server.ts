@@ -8,7 +8,8 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { rmSync, readdirSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, hostname } from "os";
+import { Bonjour } from "bonjour-service";
 import {
   query,
   type SDKMessage,
@@ -981,6 +982,25 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
 // ─── WebSocket server ───────────────────────────────────────────────────────
 
 const wss = new WebSocketServer({ port: PORT });
+
+// ─── mDNS advertisement ──────────────────────────────────────────────────────
+// Advertise this server on the local network so PixelCode clients can
+// discover it automatically without manual IP entry.
+const bonjour = new Bonjour();
+const mdnsService = bonjour.publish({
+  name: `PixelCode @ ${hostname()}`,
+  type: "pixelcode",
+  protocol: "tcp",
+  port: PORT,
+});
+mdnsService.on("up", () => {
+  dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${mdnsService.name}"`);
+});
+
+process.on("exit", () => {
+  bonjour.unpublishAll();
+  bonjour.destroy();
+});
 
 /** Broadcast a message to every connected client. */
 function broadcastAll(msg: ServerMessage): void {

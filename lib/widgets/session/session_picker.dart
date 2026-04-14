@@ -2,7 +2,6 @@
 library;
 
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,8 +9,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/session_provider.dart';
-import '../../providers/settings_provider.dart';
-import '../../services/project_persistence_service.dart';
 import 'session_form_dialog.dart';
 
 /// A compact dropdown in the title bar showing the active session.
@@ -57,7 +54,7 @@ class _AddSessionButton extends ConsumerWidget {
       onTap: () => _openAddDialog(context, ref),
       child: Container(
         height: compact ? 28 : 32,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        padding: const EdgeInsets.only(left: 6, right: 10),
         decoration: BoxDecoration(
           color: const Color(0xFF00C0D1).withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(6),
@@ -71,7 +68,7 @@ class _AddSessionButton extends ConsumerWidget {
             const Icon(Icons.add, size: 14, color: Color(0xFF00C0D1)),
             const SizedBox(width: 4),
             const Text(
-              'Додати сесію',
+              'Сесія',
               style: TextStyle(
                 color: Color(0xFF00C0D1),
                 fontSize: 12,
@@ -273,29 +270,13 @@ class _SessionDropdownButton extends ConsumerWidget {
     WidgetRef ref,
     String id,
   ) async {
-    // 1. Set active profile in state
     await ref.read(sessionProvider.notifier).setActive(id);
 
-    // 2. Stop current server
-    final server = ref.read(serverProcessProvider);
-    await server.stop();
-
-    // 3. On desktop, start server with apiKey if available
     final newProfile = ref
         .read(sessionProvider)
         .profiles
         .firstWhere((p) => p.id == id);
 
-    final isDesktop = !Platform.isIOS && !Platform.isAndroid;
-    if (isDesktop && newProfile.hasApiKey) {
-      final prefs = ref.read(sharedPrefsProvider);
-      final projectPath = ProjectPersistenceService.loadCurrentProjectPath(prefs);
-      await server.start(projectPath: projectPath, apiKey: newProfile.apiKey);
-      // Wait for server to boot before connecting
-      await Future<void>.delayed(const Duration(seconds: 2));
-    }
-
-    // 4. Reconnect WebSocket to new profile URL
     if (context.mounted) {
       await ref.read(wsServiceProvider).connect(url: newProfile.wsUrl);
     }

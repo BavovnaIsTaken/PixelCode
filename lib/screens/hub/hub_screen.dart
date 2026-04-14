@@ -58,13 +58,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _arkanoidTimer?.cancel();
   }
 
-  // Periodic glitch effect on the logo
+  // Glitch effect on the logo (triggered on hover)
   late final AnimationController _glitchCtrl = AnimationController(vsync: this);
   int _glitchSeed = 0;
   ui.Image? _logoImage;
+  bool _logoHovered = false;
 
   /// Fraction of pixel blocks affected during glitch (0.0–1.0).
-  static const double _glitchPixelPercent = 0.12;
+  static const double _glitchPixelPercent = 0.06;
 
   Future<void> _loadLogoImage() async {
     final data = await rootBundle.load('assets/logo.png');
@@ -73,17 +74,26 @@ class _HubScreenState extends ConsumerState<HubScreen>
     if (mounted) setState(() => _logoImage = frame.image);
   }
 
-  void _scheduleGlitch() {
-    if (_isShuttingDown || !mounted) return;
-    final delay = 10000 + _rng.nextInt(30001); // 10–40s
-    Future.delayed(Duration(milliseconds: delay), () {
-      if (_isShuttingDown || !mounted) return;
-      _glitchSeed = _rng.nextInt(10000);
-      final dur = 200 + _rng.nextInt(401); // 200–600ms
+  void _onLogoHoverChanged(bool hovered) {
+    _logoHovered = hovered;
+    if (hovered && !_isShuttingDown) {
+      _startGlitchLoop();
+    } else {
       _glitchCtrl
-        ..duration = Duration(milliseconds: dur)
-        ..forward(from: 0.0).then((_) => _scheduleGlitch());
-    });
+        ..stop()
+        ..reset();
+    }
+  }
+
+  void _startGlitchLoop() {
+    if (!_logoHovered || _isShuttingDown || !mounted) return;
+    _glitchSeed = _rng.nextInt(10000);
+    final dur = 200 + _rng.nextInt(401); // 200–600ms
+    _glitchCtrl
+      ..duration = Duration(milliseconds: dur)
+      ..forward(from: 0.0).then((_) {
+        if (_logoHovered) _startGlitchLoop();
+      });
   }
 
   // Shutdown animation
@@ -134,7 +144,6 @@ class _HubScreenState extends ConsumerState<HubScreen>
   void initState() {
     super.initState();
     _loadLogoImage();
-    _scheduleGlitch();
   }
 
   @override
@@ -364,22 +373,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ),
           ),
           const SizedBox(width: 8),
-          const Text(
-            'PixelCode',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 8),
           const SessionPicker(compact: true),
           const Spacer(),
           // Currency
           _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
           const SizedBox(width: 8),
           // Stop button
-          if (isConnected) const _StopAllButton(),
+          if (isConnected) const _StopAllButton(iconOnly: true),
           const SizedBox(width: 4),
           // Settings
           IconButton(
@@ -453,6 +453,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
             onLongPressCancel: _onLogoPointerUp,
             child: MouseRegion(
               cursor: SystemMouseCursors.basic,
+              onEnter: (_) => _onLogoHoverChanged(true),
+              onExit: (_) => _onLogoHoverChanged(false),
               child: Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: AnimatedBuilder(
@@ -780,7 +782,9 @@ class _MobileNavItem extends StatelessWidget {
 
 
 class _StopAllButton extends ConsumerStatefulWidget {
-  const _StopAllButton();
+  const _StopAllButton({this.iconOnly = false});
+
+  final bool iconOnly;
 
   @override
   ConsumerState<_StopAllButton> createState() => _StopAllButtonState();
@@ -838,7 +842,10 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
           onTapCancel: () => setState(() => _pressed = false),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 120),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            padding: EdgeInsets.symmetric(
+              horizontal: widget.iconOnly ? 6 : 10,
+              vertical: 4,
+            ),
             decoration: BoxDecoration(
               color: baseColor,
               borderRadius: BorderRadius.circular(6),
@@ -848,15 +855,17 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.stop_circle_outlined, size: 14, color: fgColor),
-                const SizedBox(width: 4),
-                Text(
-                  'Стоп',
-                  style: TextStyle(
-                    color: fgColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                if (!widget.iconOnly) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    'Стоп',
+                    style: TextStyle(
+                      color: fgColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -866,8 +875,8 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
   }
 }
 
-/// Draws the logo image with random pixel blocks displaced to simulate
-/// a digital pixel-lag glitch effect.
+/// Draws the logo image with random pixel blocks coloured red or green
+/// to simulate a digital glitch effect.
 class _PixelGlitchPainter extends CustomPainter {
   _PixelGlitchPainter({
     required this.image,
@@ -881,11 +890,17 @@ class _PixelGlitchPainter extends CustomPainter {
   final double pixelPercent;
   final double displaySize;
 
-  static const int _blockSize = 2;
+  static const int _blockSize = 1;
+
+  static const _glitchColors = [
+    Color(0xFFFF2020), // red
+    Color(0xFF00FF41), // green
+  ];
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..filterQuality = FilterQuality.none;
+    final imgPaint = Paint()..filterQuality = FilterQuality.none;
+    final colorPaint = Paint();
     final rng = Random(seed);
 
     final cols = (displaySize / _blockSize).ceil();
@@ -898,26 +913,26 @@ class _PixelGlitchPainter extends CustomPainter {
     for (int row = 0; row < rows; row++) {
       for (int col = 0; col < cols; col++) {
         final glitched = rng.nextDouble() < pixelPercent;
-        double ox = 0, oy = 0;
-        if (glitched) {
-          ox = (rng.nextInt(5) - 2).toDouble(); // −2 … +2 px
-          oy = (rng.nextInt(3) - 1).toDouble(); // −1 … +1 px
-        }
 
-        final src = Rect.fromLTWH(
-          col * srcBlockW,
-          row * srcBlockH,
-          srcBlockW,
-          srcBlockH,
-        );
         final dst = Rect.fromLTWH(
-          col * _blockSize + ox,
-          row * _blockSize + oy,
+          col * _blockSize.toDouble(),
+          row * _blockSize.toDouble(),
           _blockSize.toDouble(),
           _blockSize.toDouble(),
         );
 
-        canvas.drawImageRect(image, src, dst, paint);
+        if (glitched) {
+          final color = _glitchColors[rng.nextInt(_glitchColors.length)];
+          canvas.drawRect(dst, colorPaint..color = color);
+        } else {
+          final src = Rect.fromLTWH(
+            col * srcBlockW,
+            row * srcBlockH,
+            srcBlockW,
+            srcBlockH,
+          );
+          canvas.drawImageRect(image, src, dst, imgPaint);
+        }
       }
     }
   }

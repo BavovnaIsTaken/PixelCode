@@ -1,12 +1,13 @@
 /// Dialog for creating or editing a session profile.
 library;
 
-import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../models/session_profile.dart';
+import '../../services/network_discovery_service.dart';
 
 /// Opens a dialog to create (or edit) a [SessionProfile].
 ///
@@ -165,10 +166,12 @@ class _SessionFormContentState extends State<_SessionFormContent> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _hostCtrl;
   late final TextEditingController _portCtrl;
-  late final TextEditingController _apiKeyCtrl;
-  bool _obscureApiKey = true;
 
-  bool get _isMobile => Platform.isIOS || Platform.isAndroid;
+  // ── Network discovery ──────────────────────────────────────────────────────
+  List<DiscoveredServer> _discovered = [];
+  bool _scanning = false;
+  StreamSubscription<DiscoveredServer>? _scanSub;
+
   bool get _isEdit => widget.existing != null;
 
   @override
@@ -178,24 +181,46 @@ class _SessionFormContentState extends State<_SessionFormContent> {
     _nameCtrl = TextEditingController(text: e?.name ?? '');
     _hostCtrl = TextEditingController(text: e?.host ?? '');
     _portCtrl = TextEditingController(text: (e?.port ?? 9720).toString());
-    _apiKeyCtrl = TextEditingController(text: e?.apiKey ?? '');
   }
 
   @override
   void dispose() {
+    _scanSub?.cancel();
     _nameCtrl.dispose();
     _hostCtrl.dispose();
     _portCtrl.dispose();
-    _apiKeyCtrl.dispose();
     super.dispose();
+  }
+
+  void _startScan() {
+    if (_scanning) return;
+    setState(() {
+      _scanning = true;
+      _discovered = [];
+    });
+    _scanSub = discoverServers().listen(
+      (server) {
+        if (mounted) setState(() => _discovered.add(server));
+      },
+      onDone: () {
+        if (mounted) setState(() => _scanning = false);
+      },
+      onError: (_) {
+        if (mounted) setState(() => _scanning = false);
+      },
+    );
+  }
+
+  void _selectDiscovered(DiscoveredServer server) {
+    _hostCtrl.text = server.host;
+    _portCtrl.text = server.port.toString();
+    if (_nameCtrl.text.isEmpty) _nameCtrl.text = server.name;
   }
 
   void _submit() {
     final name = _nameCtrl.text.trim();
     final host = _hostCtrl.text.trim();
-    final portText = _portCtrl.text.trim();
-    final port = int.tryParse(portText) ?? 9720;
-    final apiKey = _isMobile ? null : _apiKeyCtrl.text.trim();
+    final port = int.tryParse(_portCtrl.text.trim()) ?? 9720;
 
     if (name.isEmpty || host.isEmpty) return;
 
@@ -205,7 +230,6 @@ class _SessionFormContentState extends State<_SessionFormContent> {
       name: name,
       host: host,
       port: port,
-      apiKey: (apiKey != null && apiKey.isNotEmpty) ? apiKey : null,
     );
     widget.onSubmit(profile);
   }
@@ -215,6 +239,15 @@ class _SessionFormContentState extends State<_SessionFormContent> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Network discovery ────────────────────────────────────────────
+        _ScanSection(
+          scanning: _scanning,
+          discovered: _discovered,
+          onScan: _startScan,
+          onSelect: _selectDiscovered,
+        ),
+        const SizedBox(height: 16),
+
         // ── Name ────────────────────────────────────────────────────────
         _FieldLabel('Назва'),
         const SizedBox(height: 6),
@@ -247,28 +280,6 @@ class _SessionFormContentState extends State<_SessionFormContent> {
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         ),
         const SizedBox(height: 16),
-
-        // ── API Key (desktop only) ────────────────────────────────────
-        if (!_isMobile) ...[
-          _FieldLabel('API Key'),
-          const SizedBox(height: 6),
-          _ApiKeyField(
-            controller: _apiKeyCtrl,
-            obscure: _obscureApiKey,
-            onToggleObscure: () =>
-                setState(() => _obscureApiKey = !_obscureApiKey),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'ANTHROPIC_API_KEY для локального сервера. '
-            'Залиш порожнім для віддалених сесій.',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.35),
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 16),
-        ],
 
         // ── Buttons ──────────────────────────────────────────────────────
         Row(
@@ -343,8 +354,6 @@ class _FormField extends StatelessWidget {
     this.keyboardType = TextInputType.text,
     this.monospace = false,
     this.inputFormatters,
-    this.obscureText = false,
-    this.suffixIcon,
   });
 
   final TextEditingController controller;
@@ -352,15 +361,12 @@ class _FormField extends StatelessWidget {
   final TextInputType keyboardType;
   final bool monospace;
   final List<TextInputFormatter>? inputFormatters;
-  final bool obscureText;
-  final Widget? suffixIcon;
 
   @override
   Widget build(BuildContext context) {
     final fontFamily = monospace ? 'monospace' : null;
     return TextField(
       controller: controller,
-      obscureText: obscureText,
       keyboardType: keyboardType,
       autocorrect: false,
       inputFormatters: inputFormatters,
@@ -375,7 +381,6 @@ class _FormField extends StatelessWidget {
           color: Colors.white.withValues(alpha: 0.2),
           fontFamily: fontFamily,
         ),
-        suffixIcon: suffixIcon,
         filled: true,
         fillColor: const Color(0xFF0E0E11),
         contentPadding: const EdgeInsets.symmetric(
@@ -403,33 +408,192 @@ class _FormField extends StatelessWidget {
   }
 }
 
-// ─── API Key field with show/hide toggle ─────────────────────────────────────
+// ─── Network scan section ────────────────────────────────────────────────────
 
-class _ApiKeyField extends StatelessWidget {
-  const _ApiKeyField({
-    required this.controller,
-    required this.obscure,
-    required this.onToggleObscure,
+class _ScanSection extends StatelessWidget {
+  const _ScanSection({
+    required this.scanning,
+    required this.discovered,
+    required this.onScan,
+    required this.onSelect,
   });
 
-  final TextEditingController controller;
-  final bool obscure;
-  final VoidCallback onToggleObscure;
+  final bool scanning;
+  final List<DiscoveredServer> discovered;
+  final VoidCallback onScan;
+  final ValueChanged<DiscoveredServer> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    return _FormField(
-      controller: controller,
-      hintText: 'sk-ant-...',
-      monospace: true,
-      obscureText: obscure,
-      suffixIcon: IconButton(
-        icon: Icon(
-          obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-          size: 18,
-          color: Colors.white.withValues(alpha: 0.4),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Сервери в мережі',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const Spacer(),
+            SizedBox(
+              height: 28,
+              child: TextButton.icon(
+                onPressed: scanning ? null : onScan,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF00C0D1),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                ),
+                icon: scanning
+                    ? const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: Color(0xFF00C0D1),
+                        ),
+                      )
+                    : const Icon(Icons.wifi_find_outlined, size: 14),
+                label: Text(
+                  scanning ? 'Сканування…' : 'Сканувати',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ],
         ),
-        onPressed: onToggleObscure,
+        const SizedBox(height: 6),
+        if (!scanning && discovered.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E0E11),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Text(
+              'Натисніть «Сканувати» щоб знайти сервери',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 12,
+              ),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E0E11),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Column(
+              children: [
+                for (int i = 0; i < discovered.length; i++) ...[
+                  if (i > 0)
+                    Divider(
+                      height: 1,
+                      color: Colors.white.withValues(alpha: 0.06),
+                    ),
+                  _DiscoveredServerTile(
+                    server: discovered[i],
+                    onTap: () => onSelect(discovered[i]),
+                  ),
+                ],
+                if (scanning)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            color: Color(0xFF00C0D1),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Шукаємо…',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.35),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DiscoveredServerTile extends StatelessWidget {
+  const _DiscoveredServerTile({required this.server, required this.onTap});
+
+  final DiscoveredServer server;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              Icons.computer_outlined,
+              size: 16,
+              color: const Color(0xFF00C0D1).withValues(alpha: 0.8),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    server.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                    ),
+                  ),
+                  Text(
+                    '${server.host}:${server.port}',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 11,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 11,
+              color: Colors.white.withValues(alpha: 0.2),
+            ),
+          ],
+        ),
       ),
     );
   }
