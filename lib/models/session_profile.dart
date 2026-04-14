@@ -1,10 +1,8 @@
 // lib/models/session_profile.dart
 
-/// A named connection profile for a PixelCode server.
+/// A named connection profile — where to connect, not how to run a server.
 ///
-/// On macOS the profile may include an [apiKey] so the local server
-/// can be (re)started with the correct ANTHROPIC_API_KEY.
-/// On iOS every profile is remote-only (no apiKey needed).
+/// Server configuration (API key, auto-start) lives in [LocalServerConfig].
 library;
 
 import 'dart:convert';
@@ -14,32 +12,26 @@ class SessionProfile {
   final String name;
   final String host;
   final int port;
-  final String? apiKey;
 
   const SessionProfile({
     required this.id,
     required this.name,
     required this.host,
     this.port = 9720,
-    this.apiKey,
   });
 
   String get wsUrl => 'ws://$host:$port';
-
-  bool get hasApiKey => apiKey != null && apiKey!.isNotEmpty;
 
   SessionProfile copyWith({
     String? name,
     String? host,
     int? port,
-    String? Function()? apiKey,
   }) =>
       SessionProfile(
         id: id,
         name: name ?? this.name,
         host: host ?? this.host,
         port: port ?? this.port,
-        apiKey: apiKey != null ? apiKey() : this.apiKey,
       );
 
   Map<String, dynamic> toJson() => {
@@ -47,7 +39,6 @@ class SessionProfile {
         'name': name,
         'host': host,
         'port': port,
-        if (apiKey != null) 'apiKey': apiKey,
       };
 
   factory SessionProfile.fromJson(Map<String, dynamic> json) => SessionProfile(
@@ -55,7 +46,6 @@ class SessionProfile {
         name: json['name'] as String,
         host: json['host'] as String,
         port: json['port'] as int? ?? 9720,
-        apiKey: json['apiKey'] as String?,
       );
 
   static String encodeList(List<SessionProfile> profiles) =>

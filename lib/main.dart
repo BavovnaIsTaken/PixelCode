@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/agent_provider.dart';
+import 'providers/local_server_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/hub/hub_screen.dart';
@@ -55,20 +56,24 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     final session = ref.read(sessionProvider.notifier);
     await session.migrateFromLegacy();
 
-    final profile = ref.read(sessionProvider).activeProfile;
-    if (profile == null) return;
-
-    final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
-      ref.read(sharedPrefsProvider),
-    );
-
-    // Start local server if this profile has an API key and we're on desktop
-    if (profile.hasApiKey && !Platform.isIOS && !Platform.isAndroid) {
-      serverProcess.start(projectPath: savedPath, apiKey: profile.apiKey);
+    // Auto-start local server on desktop if configured
+    if (!Platform.isIOS && !Platform.isAndroid) {
+      final localConfig = ref.read(localServerProvider);
+      if (localConfig.autoStart && localConfig.hasApiKey) {
+        final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
+          ref.read(sharedPrefsProvider),
+        );
+        serverProcess.start(projectPath: savedPath, apiKey: localConfig.apiKey!);
+        // Wait for server to boot before connecting
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
     }
 
-    // Connect WebSocket
-    ref.read(wsServiceProvider).connect(url: profile.wsUrl);
+    // Connect WebSocket to the active session (if any)
+    final profile = ref.read(sessionProvider).activeProfile;
+    if (profile != null) {
+      ref.read(wsServiceProvider).connect(url: profile.wsUrl);
+    }
   }
 
   @override

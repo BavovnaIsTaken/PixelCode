@@ -10,9 +10,16 @@ import 'dart:io';
 class ServerProcessService {
   Process? _process;
   final _logController = StreamController<ServerProcessLog>.broadcast();
+  final _runningController = StreamController<bool>.broadcast();
 
   /// Stream of server process logs (stdout/stderr).
   Stream<ServerProcessLog> get logs => _logController.stream;
+
+  /// Emits `true` when the server starts, `false` when it stops.
+  Stream<bool> get runningStatus => _runningController.stream;
+
+  /// Whether the server process is currently running.
+  bool get isRunning => _process != null;
 
   /// Resolves the server directory by walking up the directory tree from the
   /// executable path looking for a `server/package.json`. Falls back to
@@ -85,9 +92,12 @@ class ServerProcessService {
       }
     });
 
+    _runningController.add(true);
+
     _process!.exitCode.then((code) {
       _emitLog(code == 0 ? 'info' : 'error', 'Server exited with code $code');
       _process = null;
+      _runningController.add(false);
     });
   }
 
@@ -121,6 +131,7 @@ class ServerProcessService {
   Future<void> dispose() async {
     await stop();
     await _logController.close();
+    await _runningController.close();
   }
 }
 
