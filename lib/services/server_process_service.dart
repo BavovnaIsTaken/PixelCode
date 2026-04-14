@@ -66,7 +66,11 @@ class ServerProcessService {
         ['-l', '-c', 'npm run dev'],
         workingDirectory: serverDir,
         environment: {
-          ...Platform.environment,
+          ...Map.fromEntries(
+            Platform.environment.entries.where(
+              (e) => e.key != 'CLAUDE_CODE_EXECPATH' && e.key != 'ANTHROPIC_API_KEY',
+            ),
+          ),
           'PORT': '9720',
           'PROJECT_CWD': projectPath ?? Directory.current.path,
         },
