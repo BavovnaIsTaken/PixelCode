@@ -65,11 +65,10 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
       await Future<void>.delayed(const Duration(seconds: 2));
     }
 
-    // Connect WebSocket to the active session (if any)
+    // Connect WebSocket to the active session, or fallback to local server
     final profile = ref.read(sessionProvider).activeProfile;
-    if (profile != null) {
-      ref.read(wsServiceProvider).connect(url: profile.wsUrl);
-    }
+    final wsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
+    ref.read(wsServiceProvider).connect(url: wsUrl);
   }
 
   @override
