@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/agent_provider.dart';
-import 'providers/local_server_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/hub/hub_screen.dart';
@@ -56,17 +55,14 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     final session = ref.read(sessionProvider.notifier);
     await session.migrateFromLegacy();
 
-    // Auto-start local server on desktop if configured
+    // Auto-start local server on desktop
     if (!Platform.isIOS && !Platform.isAndroid) {
-      final localConfig = ref.read(localServerProvider);
-      if (localConfig.autoStart && localConfig.hasApiKey) {
-        final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
-          ref.read(sharedPrefsProvider),
-        );
-        serverProcess.start(projectPath: savedPath, apiKey: localConfig.apiKey!);
-        // Wait for server to boot before connecting
-        await Future<void>.delayed(const Duration(seconds: 2));
-      }
+      final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
+        ref.read(sharedPrefsProvider),
+      );
+      serverProcess.start(projectPath: savedPath);
+      // Wait for server to boot before connecting
+      await Future<void>.delayed(const Duration(seconds: 2));
     }
 
     // Connect WebSocket to the active session (if any)
