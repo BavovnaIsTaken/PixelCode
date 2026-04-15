@@ -1067,41 +1067,44 @@ class _GlitchControlsState extends State<_GlitchControls>
                     color: Colors.white.withValues(alpha: 0.2),
                   ),
                 )
-              : AnimatedBuilder(
-                  animation: _ctrl,
-                  builder: (context, _) {
-                    final t = _ctrl.value;
-                    final glitching =
-                        widget.enabled && _ctrl.isAnimating && t > 0;
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: AnimatedBuilder(
+                    animation: _ctrl,
+                    builder: (context, _) {
+                      final t = _ctrl.value;
+                      final glitching =
+                          widget.enabled && _ctrl.isAnimating && t > 0;
 
-                    if (!glitching) {
-                      return Image.asset(
-                        'assets/logo.png',
+                      if (!glitching) {
+                        return Image.asset(
+                          'assets/logo.png',
+                          width: previewSize,
+                          height: previewSize,
+                          filterQuality: FilterQuality.medium,
+                        );
+                      }
+
+                      final frame = (t * 8).floor();
+                      return SizedBox(
                         width: previewSize,
                         height: previewSize,
-                        filterQuality: FilterQuality.medium,
-                      );
-                    }
-
-                    final frame = (t * 8).floor();
-                    return SizedBox(
-                      width: previewSize,
-                      height: previewSize,
-                      child: CustomPaint(
-                        size: const Size(previewSize, previewSize),
-                        painter: PixelGlitchPainter(
-                          image: _logoImage!,
-                          seed: _seed + frame,
-                          pixelPercent: widget.intensity,
-                          displaySize: previewSize,
-                          imagePixels: _logoImagePixels,
-                          bandHeightMax: widget.bandHeight,
-                          shiftStrength: widget.shift,
-                          chromaStrength: widget.chroma,
+                        child: CustomPaint(
+                          size: const Size(previewSize, previewSize),
+                          painter: PixelGlitchPainter(
+                            image: _logoImage!,
+                            seed: _seed + frame,
+                            pixelPercent: widget.intensity,
+                            displaySize: previewSize,
+                            imagePixels: _logoImagePixels,
+                            bandHeightMax: widget.bandHeight,
+                            shiftStrength: widget.shift,
+                            chromaStrength: widget.chroma,
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
         ),
       ),
