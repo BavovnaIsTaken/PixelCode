@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/ios_deploy_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
@@ -20,7 +21,6 @@ import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
 import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
-import '../../widgets/settings/ios_deploy_dialog.dart';
 import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
 
@@ -49,9 +49,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
   Offset _iconStart = Offset.zero;
   Offset _iconEnd = Offset.zero;
   List<Offset> _iconPath = []; // zigzag waypoints: start → H → V → H → V … → end
+
+  // Swipe-between-tabs tracking
+  double _swipeDelta = 0;
+  int _swipeDirection = 0; // -1 = swiping left (next), 1 = swiping right (prev)
   late final AnimationController _iconMoveCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 4200),
+    duration: const Duration(milliseconds: 1100),
   );
 
   static const double _iconSize = 24.0;
@@ -78,8 +82,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
   /// changes happen ~30% more often than vertical ones.
   /// Step sizes are the same range for both axes. Always ends at [end].
   static List<Offset> _computeIconPath(Offset start, Offset end, Random rng) {
-    const step = 3 * _iconSize;
-    const maxStep = 6 * _iconSize;
+    const step = 6 * _iconSize;
+    const maxStep = 10 * _iconSize;
     final hSteps = _randomSteps(rng, end.dx - start.dx, step, maxStep);
     final vSteps = _randomSteps(rng, end.dy - start.dy, step, maxStep);
 
@@ -217,8 +221,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _glitchCtrl.stop();
     _shutdownCtrl.forward();
     _iconMoveCtrl.forward();
-    // Start native window collapse slightly after content starts shrinking
-    Future.delayed(const Duration(milliseconds: 640), () {
+    // Start native window collapse after icon reaches the opposite corner
+    Future.delayed(const Duration(milliseconds: 1200), () {
       final platform = defaultTargetPlatform;
       if (platform == TargetPlatform.macOS || platform == TargetPlatform.iOS) {
         _windowChannel.invokeMethod('animateShutdown');
@@ -413,24 +417,89 @@ class _HubScreenState extends ConsumerState<HubScreen>
         children: [
           // Compact title bar
           _buildMobileTitleBar(isConnected),
-          // Content — one panel at a time
+          // Content — one panel at a time, swipeable
           Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: KeyedSubtree(
-                key: ValueKey(_mobileTab),
-                child: switch (_mobileTab) {
-                  1 => const AgentCanvas(),
-                  2 => const TaskBoardPanel(),
-                  3 => const ShopPanel(),
-                  _ =>
-                    _showGames
-                        ? EasterEggGames(
-                            onClose: () => setState(() => _showGames = false),
-                          )
-                        : const ChatPanel(),
-                },
-              ),
+            child: Stack(
+              children: [
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  transitionBuilder: (child, animation) {
+                    // Slide in from the swipe direction
+                    final isIncoming =
+                        child.key == ValueKey(_mobileTab);
+                    final offsetTween = Tween<Offset>(
+                      begin: Offset(
+                        isIncoming
+                            ? (_swipeDirection <= 0 ? 1.0 : -1.0)
+                            : (_swipeDirection <= 0 ? -1.0 : 1.0),
+                        0,
+                      ),
+                      end: Offset.zero,
+                    );
+                    return SlideTransition(
+                      position: offsetTween.animate(
+                        CurvedAnimation(
+                          parent: animation,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
+                      child: child,
+                    );
+                  },
+                  child: KeyedSubtree(
+                    key: ValueKey(_mobileTab),
+                    child: switch (_mobileTab) {
+                      1 => const AgentCanvas(),
+                      2 => const TaskBoardPanel(),
+                      3 => const ShopPanel(),
+                      _ =>
+                        _showGames
+                            ? EasterEggGames(
+                                onClose: () =>
+                                    setState(() => _showGames = false),
+                              )
+                            : const ChatPanel(),
+                    },
+                  ),
+                ),
+                // Overlay gesture detector for swipe-between-tabs
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onHorizontalDragStart: (_) {
+                      _swipeDelta = 0;
+                      _swipeDirection = 0;
+                    },
+                    onHorizontalDragUpdate: (d) {
+                      _swipeDelta += d.delta.dx;
+                    },
+                    onHorizontalDragEnd: (d) {
+                      const threshold = 50.0;
+                      const velocityThreshold = 300.0;
+                      final velocity = d.primaryVelocity ?? 0;
+
+                      if (_swipeDelta > threshold || velocity > velocityThreshold) {
+                        // Swipe right → previous tab
+                        if (_mobileTab > 0) {
+                          setState(() {
+                            _swipeDirection = 1;
+                            _mobileTab--;
+                          });
+                        }
+                      } else if (_swipeDelta < -threshold ||
+                          velocity < -velocityThreshold) {
+                        // Swipe left → next tab
+                        if (_mobileTab < 3) {
+                          setState(() {
+                            _swipeDirection = -1;
+                            _mobileTab++;
+                          });
+                        }
+                      }
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
           // Bottom navigation
@@ -520,7 +589,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
                   icon: items[i].$1,
                   label: items[i].$2,
                   isActive: _mobileTab == i,
-                  onTap: () => setState(() => _mobileTab = i),
+                  onTap: () => setState(() {
+                    _swipeDirection = i > _mobileTab ? -1 : 1;
+                    _mobileTab = i;
+                  }),
                 ),
             ],
           ),
@@ -657,21 +729,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                 ),
               ),
             ),
-          Tooltip(
-            message: 'Розгорнути на iOS',
-            child: InkWell(
-              onTap: () => showIOSDeployDialog(context),
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Icon(
-                  Icons.phone_iphone,
-                  size: 16,
-                  color: Colors.white.withValues(alpha: 0.3),
-                ),
-              ),
-            ),
-          ),
+          _IOSDeployButton(),
           const SizedBox(width: 4),
           Tooltip(
             message: 'Налаштування',
@@ -877,6 +935,72 @@ class _GrymniDisplay extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── One-click iOS deploy button ───────────────────────────────────────────
+
+class _IOSDeployButton extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final deploy = ref.watch(iosDeployProvider);
+
+    final Color iconColor;
+    final String tooltip;
+    final Widget child;
+
+    switch (deploy.phase) {
+      case DeployPhase.idle:
+        iconColor = Colors.white.withValues(alpha: 0.3);
+        tooltip = 'Встановити на iOS';
+        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
+      case DeployPhase.checking:
+      case DeployPhase.building:
+        iconColor = const Color(0xFF00C0D1);
+        tooltip = deploy.phase == DeployPhase.checking
+            ? 'Перевірка залежностей...'
+            : 'Побудова IPA...';
+        child = SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: iconColor,
+          ),
+        );
+      case DeployPhase.ready:
+        iconColor = const Color(0xFF4ADE80);
+        tooltip = 'Готово — натисніть щоб відкрити знову';
+        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
+      case DeployPhase.error:
+        iconColor = const Color(0xFFEF4444);
+        tooltip = deploy.lastError ?? 'Помилка';
+        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
+    }
+
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: () {
+          switch (deploy.phase) {
+            case DeployPhase.idle:
+            case DeployPhase.error:
+              ref.read(iosDeployProvider.notifier).deploy();
+            case DeployPhase.ready:
+              ref.read(iosDeployProvider.notifier).openInstallUrl();
+            case DeployPhase.checking:
+            case DeployPhase.building:
+              // already running — do nothing
+              break;
+          }
+        },
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: child,
+        ),
       ),
     );
   }

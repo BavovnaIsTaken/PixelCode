@@ -91,6 +91,7 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
           Expanded(
             child: TabBarView(
               controller: _tabCtrl,
+              physics: const BouncingScrollPhysics(),
               children: const [
                 _HiringTab(),
                 _SkillsTab(),

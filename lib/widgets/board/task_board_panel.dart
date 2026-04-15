@@ -1,7 +1,10 @@
 /// Kanban-style task board with drag-and-drop sticky notes.
+/// Mobile: single column at a time with swipeable PageView + tab rail.
+/// Desktop: side-by-side columns in a Row.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/task_board.dart';
@@ -33,6 +36,13 @@ const _columnColors = <TaskColumn, Color>{
   TaskColumn.done: Color(0xFF2E7D32),
 };
 
+const _columnEmptyHints = <TaskColumn, String>{
+  TaskColumn.backlog: 'Натисніть «+» щоб створити задачу',
+  TaskColumn.inProgress: 'Перемістіть задачу сюди, щоб почати роботу',
+  TaskColumn.testing: 'Задачі на перевірці з\'являться тут',
+  TaskColumn.done: 'Завершені задачі будуть тут',
+};
+
 // ─── Main Board Panel ───────────────────────────────────────────────────────
 
 class TaskBoardPanel extends ConsumerWidget {
@@ -41,31 +51,1203 @@ class TaskBoardPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final board = ref.watch(taskBoardProvider);
+    final isNarrow = MediaQuery.sizeOf(context).width < 768;
 
     return Container(
       color: const Color(0xFF0E0E11),
       child: Column(
         children: [
-          // Board header with "add task" button
           _BoardHeader(taskCount: board.tasks.length),
-          // Columns
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+          if (isNarrow)
+            Expanded(child: _MobileBoard(board: board))
+          else
+            Expanded(child: _DesktopBoard(board: board)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Desktop Board (original Row layout) ────────────────────────────────────
+
+class _DesktopBoard extends ConsumerWidget {
+  final BoardState board;
+  const _DesktopBoard({required this.board});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final column in TaskColumn.values) ...[
+            if (column != TaskColumn.values.first) const SizedBox(width: 10),
+            Expanded(
+              child: _DesktopColumn(
+                column: column,
+                tasks: board.tasksInColumn(column),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Mobile Board (PageView + Tab Rail) ─────────────────────────────────────
+
+class _MobileBoard extends ConsumerStatefulWidget {
+  final BoardState board;
+  const _MobileBoard({required this.board});
+
+  @override
+  ConsumerState<_MobileBoard> createState() => _MobileBoardState();
+}
+
+class _MobileBoardState extends ConsumerState<_MobileBoard> {
+  int _currentIndex = 0;
+  late PageController _pageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _onTabTapped(int index) {
+    setState(() => _currentIndex = index);
+    _pageController.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _onPageChanged(int index) {
+    setState(() => _currentIndex = index);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final board = widget.board;
+
+    // Check if entire board is empty
+    if (board.tasks.isEmpty) {
+      return Column(
+        children: [
+          _ColumnTabRail(
+            currentIndex: _currentIndex,
+            taskCounts: {
+              for (final c in TaskColumn.values) c: board.tasksInColumn(c).length,
+            },
+            onTabTapped: _onTabTapped,
+          ),
+          const Expanded(child: _GlobalEmptyState()),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        _ColumnTabRail(
+          currentIndex: _currentIndex,
+          taskCounts: {
+            for (final c in TaskColumn.values) c: board.tasksInColumn(c).length,
+          },
+          onTabTapped: _onTabTapped,
+        ),
+        Expanded(
+          child: PageView.builder(
+            controller: _pageController,
+            onPageChanged: _onPageChanged,
+            itemCount: TaskColumn.values.length,
+            physics: const BouncingScrollPhysics(),
+            itemBuilder: (context, index) {
+              final column = TaskColumn.values[index];
+              final tasks = board.tasksInColumn(column);
+              return _MobileColumnPage(column: column, tasks: tasks);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Column Tab Rail ────────────────────────────────────────────────────────
+
+class _ColumnTabRail extends StatelessWidget {
+  final int currentIndex;
+  final Map<TaskColumn, int> taskCounts;
+  final ValueChanged<int> onTabTapped;
+
+  const _ColumnTabRail({
+    required this.currentIndex,
+    required this.taskCounts,
+    required this.onTabTapped,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0E0E11),
+        border: Border(
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+      ),
+      child: Row(
+        children: [
+          for (int i = 0; i < TaskColumn.values.length; i++) ...[
+            if (i > 0) const SizedBox(width: 4),
+            Expanded(
+              child: _TabItem(
+                column: TaskColumn.values[i],
+                count: taskCounts[TaskColumn.values[i]] ?? 0,
+                isActive: i == currentIndex,
+                onTap: () => onTabTapped(i),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  final TaskColumn column;
+  final int count;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _TabItem({
+    required this.column,
+    required this.count,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final columnColor = _columnColors[column]!;
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: isActive ? columnColor : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Square pixel dot
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(1),
+                color: isActive
+                    ? columnColor
+                    : columnColor.withValues(alpha: 0.4),
+                boxShadow: isActive
+                    ? [
+                        BoxShadow(
+                          color: columnColor.withValues(alpha: 0.5),
+                          blurRadius: 4,
+                        ),
+                      ]
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 5),
+            // Label
+            Flexible(
+              child: Text(
+                column.label,
+                style: TextStyle(
+                  color: isActive
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.4),
+                  fontSize: 12,
+                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
+            // Count badge (only if > 0)
+            if (count > 0) ...[
+              const SizedBox(width: 4),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: isActive
+                      ? columnColor.withValues(alpha: 0.25)
+                      : Colors.white.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    color: isActive
+                        ? columnColor
+                        : Colors.white.withValues(alpha: 0.3),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Global Empty State ─────────────────────────────────────────────────────
+
+class _GlobalEmptyState extends StatelessWidget {
+  const _GlobalEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Pixel-art kanban icon
+            _PixelBoardIcon(),
+            const SizedBox(height: 20),
+            Text(
+              'Дошка порожня',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.6),
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Створіть першу задачу,\nщоб почати працювати',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 24),
+            _LargeAddTaskButton(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PixelBoardIcon extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 52,
+      height: 52,
+      child: CustomPaint(
+        painter: _PixelBoardPainter(const Color(0xFF00C0D1)),
+      ),
+    );
+  }
+}
+
+class _PixelBoardPainter extends CustomPainter {
+  final Color accent;
+  _PixelBoardPainter(this.accent);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+
+    // Draw a 10x10 pixel grid forming a kanban board icon
+    // Board outline
+    paint.color = accent.withValues(alpha: 0.15);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(2, 6, size.width - 4, size.height - 8),
+        const Radius.circular(3),
+      ),
+      paint,
+    );
+
+    // Board border
+    paint.color = accent.withValues(alpha: 0.3);
+    paint.style = PaintingStyle.stroke;
+    paint.strokeWidth = 1.5;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(2, 6, size.width - 4, size.height - 8),
+        const Radius.circular(3),
+      ),
+      paint,
+    );
+    paint.style = PaintingStyle.fill;
+
+    // Clipboard clip on top
+    paint.color = accent.withValues(alpha: 0.4);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size.width / 2 - 8, 0, 16, 10),
+        const Radius.circular(2),
+      ),
+      paint,
+    );
+
+    // Three column indicators
+    final colWidth = (size.width - 20) / 3;
+    final colors = [
+      const Color(0xFF1565C0).withValues(alpha: 0.6),
+      const Color(0xFFE65100).withValues(alpha: 0.6),
+      const Color(0xFF2E7D32).withValues(alpha: 0.6),
+    ];
+
+    for (int i = 0; i < 3; i++) {
+      final x = 8 + i * (colWidth + 2);
+
+      // Column header dot
+      paint.color = colors[i];
+      canvas.drawCircle(
+        Offset(x + colWidth / 2, 16),
+        2,
+        paint,
+      );
+
+      // "Cards" in column (small rectangles)
+      paint.color = colors[i].withValues(alpha: 0.3);
+      final cardCount = [2, 1, 1][i];
+      for (int j = 0; j < cardCount; j++) {
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(x + 1, 22 + j * 10.0, colWidth - 2, 7),
+            const Radius.circular(1),
+          ),
+          paint,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _LargeAddTaskButton extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => _showAddDialog(context, ref),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF00C0D1).withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.add, size: 16, color: const Color(0xFF00C0D1)),
+            const SizedBox(width: 6),
+            Text(
+              'Створити задачу',
+              style: TextStyle(
+                color: const Color(0xFF00C0D1),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Mobile Column Page ─────────────────────────────────────────────────────
+
+class _MobileColumnPage extends ConsumerWidget {
+  final TaskColumn column;
+  final List<TaskCard> tasks;
+
+  const _MobileColumnPage({required this.column, required this.tasks});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (tasks.isEmpty) {
+      return _ColumnEmptyState(column: column);
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      itemCount: tasks.length,
+      itemBuilder: (context, index) {
+        final task = tasks[index];
+        return _MobileSwipeCard(task: task, column: column);
+      },
+    );
+  }
+}
+
+// ─── Per-Column Empty State ─────────────────────────────────────────────────
+
+class _ColumnEmptyState extends StatelessWidget {
+  final TaskColumn column;
+  const _ColumnEmptyState({required this.column});
+
+  @override
+  Widget build(BuildContext context) {
+    final columnColor = _columnColors[column]!;
+    final hint = _columnEmptyHints[column] ?? '';
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.02),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: columnColor.withValues(alpha: 0.1),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: columnColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _columnIcon(column),
+                  size: 20,
+                  color: columnColor.withValues(alpha: 0.5),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                'Немає задач',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                hint,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.15),
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static IconData _columnIcon(TaskColumn column) => switch (column) {
+        TaskColumn.backlog => Icons.inbox_outlined,
+        TaskColumn.inProgress => Icons.play_circle_outline,
+        TaskColumn.testing => Icons.bug_report_outlined,
+        TaskColumn.done => Icons.check_circle_outline,
+      };
+}
+
+// ─── Mobile Swipe Card (Dismissible wrapper) ────────────────────────────────
+
+class _MobileSwipeCard extends ConsumerWidget {
+  final TaskCard task;
+  final TaskColumn column;
+
+  const _MobileSwipeCard({required this.task, required this.column});
+
+  TaskColumn? _nextColumn(TaskColumn c) => switch (c) {
+        TaskColumn.backlog => TaskColumn.inProgress,
+        TaskColumn.inProgress => TaskColumn.testing,
+        TaskColumn.testing => TaskColumn.done,
+        TaskColumn.done => null,
+      };
+
+  TaskColumn? _prevColumn(TaskColumn c) => switch (c) {
+        TaskColumn.backlog => null,
+        TaskColumn.inProgress => TaskColumn.backlog,
+        TaskColumn.testing => TaskColumn.inProgress,
+        TaskColumn.done => TaskColumn.testing,
+      };
+
+  DismissDirection _allowedDirection() {
+    final hasNext = _nextColumn(column) != null;
+    final hasPrev = _prevColumn(column) != null;
+    if (hasNext && hasPrev) return DismissDirection.horizontal;
+    if (hasNext) return DismissDirection.startToEnd;
+    if (hasPrev) return DismissDirection.endToStart;
+    return DismissDirection.none;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final next = _nextColumn(column);
+    final prev = _prevColumn(column);
+
+    return Dismissible(
+      key: ValueKey(task.id),
+      direction: _allowedDirection(),
+      dismissThresholds: const {DismissDirection.horizontal: 0.3},
+      confirmDismiss: (direction) async {
+        final target = direction == DismissDirection.startToEnd ? next : prev;
+        if (target != null) {
+          HapticFeedback.lightImpact();
+          ref.read(taskBoardProvider.notifier).moveTask(
+                taskId: task.id,
+                column: target,
+              );
+        }
+        return false; // never actually dismiss
+      },
+      background: next != null
+          ? _SwipeBackground(
+              column: next,
+              alignment: Alignment.centerLeft,
+              icon: Icons.arrow_forward_rounded,
+            )
+          : const SizedBox.shrink(),
+      secondaryBackground: prev != null
+          ? _SwipeBackground(
+              column: prev,
+              alignment: Alignment.centerRight,
+              icon: Icons.arrow_back_rounded,
+            )
+          : const SizedBox.shrink(),
+      child: _MobileStickyNote(task: task),
+    );
+  }
+}
+
+class _SwipeBackground extends StatelessWidget {
+  final TaskColumn column;
+  final Alignment alignment;
+  final IconData icon;
+
+  const _SwipeBackground({
+    required this.column,
+    required this.alignment,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _columnColors[column]!;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color.withValues(alpha: 0.8), size: 18),
+          const SizedBox(width: 6),
+          Text(
+            column.label,
+            style: TextStyle(
+              color: color.withValues(alpha: 0.8),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Mobile Sticky Note Card ────────────────────────────────────────────────
+
+class _MobileStickyNote extends ConsumerWidget {
+  final TaskCard task;
+  const _MobileStickyNote({required this.task});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = _stickyColors[task.color]!;
+    final priority = _priorityIndicators[task.priority]!;
+    final agents = ref.watch(agentsProvider);
+
+    return GestureDetector(
+      onTap: () => _showTaskDetailSheet(context, ref, task, agents),
+      child: _buildCard(colors, priority, agents),
+    );
+  }
+
+  Widget _buildCard(
+    (Color bg, Color border, Color text) colors,
+    (Color color, String icon) priority,
+    Map<String, AgentState> agents,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.$1,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: colors.$2.withValues(alpha: 0.4)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.3),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            // Folded corner decoration
+            Positioned(
+              top: 0,
+              right: 0,
+              child: CustomPaint(
+                size: const Size(14, 14),
+                painter: _FoldedCornerPainter(colors.$2.withValues(alpha: 0.3)),
+              ),
+            ),
+            // Content
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  for (final column in TaskColumn.values) ...[
-                    if (column != TaskColumn.values.first) const SizedBox(width: 10),
-                    Expanded(
-                      child: _BoardColumn(
-                        column: column,
-                        tasks: board.tasksInColumn(column),
+                  // Priority + title row
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (task.priority != TaskPriority.normal) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: priority.$1.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            priority.$2,
+                            style: TextStyle(
+                              color: priority.$1,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      Expanded(
+                        child: Text(
+                          task.title,
+                          style: TextStyle(
+                            color: colors.$3,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            height: 1.3,
+                          ),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Description
+                  if (task.description.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      task.description,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.$3.withValues(alpha: 0.65),
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                  // Agents footer
+                  if (task.assignedAgents.isNotEmpty) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Container(
+                        padding: const EdgeInsets.only(top: 8),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(
+                              color: colors.$3.withValues(alpha: 0.12),
+                            ),
+                          ),
+                        ),
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            for (final agentId in task.assignedAgents)
+                              _AgentChip(
+                                agentId: agentId,
+                                agentState: agents[agentId],
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FoldedCornerPainter extends CustomPainter {
+  final Color color;
+  _FoldedCornerPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(size.width, 0)
+      ..lineTo(0, 0)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+// ─── Task Detail Bottom Sheet ───────────────────────────────────────────────
+
+void _showTaskDetailSheet(
+  BuildContext context,
+  WidgetRef ref,
+  TaskCard task,
+  Map<String, AgentState> agents,
+) {
+  showModalBottomSheet(
+    context: context,
+    backgroundColor: const Color(0xFF1A1A1F),
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (ctx) => _TaskDetailContent(
+      task: task,
+      agents: agents,
+      ref: ref,
+    ),
+  );
+}
+
+class _TaskDetailContent extends StatelessWidget {
+  final TaskCard task;
+  final Map<String, AgentState> agents;
+  final WidgetRef ref;
+
+  const _TaskDetailContent({
+    required this.task,
+    required this.agents,
+    required this.ref,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _stickyColors[task.color]!;
+    final priority = _priorityIndicators[task.priority]!;
+    final columnColor = _columnColors[task.column]!;
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Handle bar
+          Center(
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // Color dot + Priority + Title
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                margin: const EdgeInsets.only(top: 5),
+                decoration: BoxDecoration(
+                  color: colors.$1,
+                  borderRadius: BorderRadius.circular(2),
+                  border: Border.all(color: colors.$2, width: 1.5),
+                ),
+              ),
+              const SizedBox(width: 10),
+              if (task.priority != TaskPriority.normal) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    priority.$2,
+                    style: TextStyle(
+                      color: priority.$1,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: Text(
+                  task.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // Description
+          if (task.description.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              task.description,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.6),
+                fontSize: 14,
+                height: 1.5,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          // Column / Status
+          _DetailRow(
+            label: 'Стовпець',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: columnColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: columnColor.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(1),
+                      color: columnColor,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    task.column.label,
+                    style: TextStyle(
+                      color: columnColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Priority
+          _DetailRow(
+            label: 'Пріоритет',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: priority.$1.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '${priority.$2} ${task.priority.label}',
+                style: TextStyle(
+                  color: priority.$1,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          // Assigned agents
+          if (task.assignedAgents.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _DetailRow(
+              label: 'Агенти',
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final agentId in task.assignedAgents)
+                    _AgentChipLarge(
+                      agentId: agentId,
+                      agentState: agents[agentId],
+                    ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          // Move task buttons
+          _DetailRow(
+            label: 'Перемістити',
+            child: Row(
+              children: [
+                for (final col in TaskColumn.values) ...[
+                  if (col != TaskColumn.values.first) const SizedBox(width: 6),
+                  _MoveColumnButton(
+                    column: col,
+                    isCurrent: col == task.column,
+                    onTap: col == task.column
+                        ? null
+                        : () {
+                            ref.read(taskBoardProvider.notifier).moveTask(
+                                  taskId: task.id,
+                                  column: col,
+                                );
+                            Navigator.of(context).pop();
+                          },
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Delete button
+          Center(
+            child: TextButton.icon(
+              onPressed: () {
+                ref.read(taskBoardProvider.notifier).deleteTask(taskId: task.id);
+                Navigator.of(context).pop();
+              },
+              icon: Icon(Icons.delete_outline,
+                  size: 16, color: Colors.red.withValues(alpha: 0.6)),
+              label: Text(
+                'Видалити',
+                style: TextStyle(
+                  color: Colors.red.withValues(alpha: 0.6),
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  final String label;
+  final Widget child;
+
+  const _DetailRow({required this.label, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 90,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.35),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+        Expanded(child: child),
+      ],
+    );
+  }
+}
+
+class _MoveColumnButton extends StatelessWidget {
+  final TaskColumn column;
+  final bool isCurrent;
+  final VoidCallback? onTap;
+
+  const _MoveColumnButton({
+    required this.column,
+    required this.isCurrent,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _columnColors[column]!;
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: isCurrent
+                ? color.withValues(alpha: 0.2)
+                : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isCurrent
+                  ? color.withValues(alpha: 0.5)
+                  : Colors.white.withValues(alpha: 0.08),
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(1),
+                  color: isCurrent ? color : color.withValues(alpha: 0.4),
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                column.label,
+                style: TextStyle(
+                  color: isCurrent
+                      ? color
+                      : Colors.white.withValues(alpha: 0.3),
+                  fontSize: 9,
+                  fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AgentChipLarge extends StatelessWidget {
+  final String agentId;
+  final AgentState? agentState;
+
+  const _AgentChipLarge({required this.agentId, this.agentState});
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = agentState?.isActive ?? false;
+    final statusColor =
+        isActive ? const Color(0xFF00C0D1) : const Color(0xFF78909C);
+    final name = agentState?.info.name ?? agentId;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: statusColor.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: statusColor,
+              boxShadow: isActive
+                  ? [
+                      BoxShadow(
+                        color: statusColor.withValues(alpha: 0.6),
+                        blurRadius: 4,
+                      ),
+                    ]
+                  : null,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            name,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.7),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -156,7 +1338,7 @@ class _AddTaskButton extends StatelessWidget {
       message: 'Додати задачу',
       child: InkWell(
         borderRadius: BorderRadius.circular(6),
-        onTap: () => _showAddDialog(context),
+        onTap: () => _showAddTaskDialog(context, onAdd),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
@@ -185,243 +1367,267 @@ class _AddTaskButton extends StatelessWidget {
       ),
     );
   }
+}
 
-  void _showAddDialog(BuildContext context) {
-    final titleCtrl = TextEditingController();
-    final descCtrl = TextEditingController();
-    var selectedColor = StickyColor.yellow;
-    var selectedPriority = TaskPriority.normal;
+void _showAddTaskDialog(
+  BuildContext context,
+  void Function(String, String, String, String) onAdd,
+) {
+  final titleCtrl = TextEditingController();
+  final descCtrl = TextEditingController();
+  var selectedColor = StickyColor.yellow;
+  var selectedPriority = TaskPriority.normal;
 
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => Dialog(
-          backgroundColor: const Color(0xFF1A1A1F),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          child: Container(
-            width: MediaQuery.sizeOf(ctx).width < 600
-                ? MediaQuery.sizeOf(ctx).width - 48
-                : 400,
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Новий стікер',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+  showDialog(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDialogState) => Dialog(
+        backgroundColor: const Color(0xFF1A1A1F),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Container(
+          width: MediaQuery.sizeOf(ctx).width < 600
+              ? MediaQuery.sizeOf(ctx).width - 48
+              : 400,
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Новий стікер',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
                 ),
-                const SizedBox(height: 16),
-                // Title
-                TextField(
-                  controller: titleCtrl,
-                  autofocus: true,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Назва задачі...',
-                    hintStyle:
-                        TextStyle(color: Colors.white.withValues(alpha: 0.3)),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Color(0xFF00C0D1)),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
+              ),
+              const SizedBox(height: 16),
+              // Title
+              TextField(
+                controller: titleCtrl,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  hintText: 'Назва задачі...',
+                  hintStyle:
+                      TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.05),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1)),
                   ),
-                  onSubmitted: (_) {
-                    if (titleCtrl.text.trim().isNotEmpty) {
-                      onAdd(titleCtrl.text.trim(), descCtrl.text.trim(),
-                          selectedColor.key, selectedPriority.key);
-                      Navigator.of(ctx).pop();
-                    }
-                  },
-                ),
-                const SizedBox(height: 12),
-                // Description
-                TextField(
-                  controller: descCtrl,
-                  maxLines: 3,
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  decoration: InputDecoration(
-                    hintText: 'Опис (необов\'язково)...',
-                    hintStyle:
-                        TextStyle(color: Colors.white.withValues(alpha: 0.3)),
-                    filled: true,
-                    fillColor: Colors.white.withValues(alpha: 0.05),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide:
-                          const BorderSide(color: Color(0xFF00C0D1)),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1)),
                   ),
-                ),
-                const SizedBox(height: 16),
-                // Color picker
-                Text(
-                  'Колір',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    fontSize: 12,
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Color(0xFF00C0D1)),
                   ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final color in StickyColor.values)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: GestureDetector(
-                          onTap: () =>
-                              setDialogState(() => selectedColor = color),
-                          child: Container(
-                            width: 28,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: _stickyColors[color]!.$1,
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: selectedColor == color
-                                    ? Colors.white
-                                    : _stickyColors[color]!.$2,
-                                width: selectedColor == color ? 2 : 1,
-                              ),
+                onSubmitted: (_) {
+                  if (titleCtrl.text.trim().isNotEmpty) {
+                    onAdd(titleCtrl.text.trim(), descCtrl.text.trim(),
+                        selectedColor.key, selectedPriority.key);
+                    Navigator.of(ctx).pop();
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
+              // Description
+              TextField(
+                controller: descCtrl,
+                maxLines: 3,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Опис (необов\'язково)...',
+                  hintStyle:
+                      TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.05),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                        color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide:
+                        const BorderSide(color: Color(0xFF00C0D1)),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 10),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Color picker
+              Text(
+                'Колір',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  for (final color in StickyColor.values)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: GestureDetector(
+                        onTap: () =>
+                            setDialogState(() => selectedColor = color),
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: _stickyColors[color]!.$1,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: selectedColor == color
+                                  ? Colors.white
+                                  : _stickyColors[color]!.$2,
+                              width: selectedColor == color ? 2 : 1,
                             ),
                           ),
                         ),
                       ),
-                  ],
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // Priority picker
+              Text(
+                'Пріоритет',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 12,
                 ),
-                const SizedBox(height: 16),
-                // Priority picker
-                Text(
-                  'Пріоритет',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    for (final p in TaskPriority.values)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6),
-                        child: GestureDetector(
-                          onTap: () =>
-                              setDialogState(() => selectedPriority = p),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  for (final p in TaskPriority.values)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: GestureDetector(
+                        onTap: () =>
+                            setDialogState(() => selectedPriority = p),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: selectedPriority == p
+                                ? _priorityIndicators[p]!.$1
+                                    .withValues(alpha: 0.3)
+                                : Colors.white.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
                               color: selectedPriority == p
                                   ? _priorityIndicators[p]!.$1
-                                      .withValues(alpha: 0.3)
-                                  : Colors.white.withValues(alpha: 0.05),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: selectedPriority == p
-                                    ? _priorityIndicators[p]!.$1
-                                    : Colors.white.withValues(alpha: 0.1),
-                              ),
+                                  : Colors.white.withValues(alpha: 0.1),
                             ),
-                            child: Text(
-                              '${_priorityIndicators[p]!.$2} ${p.label}',
-                              style: TextStyle(
-                                color: selectedPriority == p
-                                    ? Colors.white
-                                    : Colors.white.withValues(alpha: 0.5),
-                                fontSize: 11,
-                              ),
+                          ),
+                          child: Text(
+                            '${_priorityIndicators[p]!.$2} ${p.label}',
+                            style: TextStyle(
+                              color: selectedPriority == p
+                                  ? Colors.white
+                                  : Colors.white.withValues(alpha: 0.5),
+                              fontSize: 11,
                             ),
                           ),
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                // Actions
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      child: Text(
-                        'Скасувати',
-                        style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.5)),
-                      ),
                     ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        if (titleCtrl.text.trim().isNotEmpty) {
-                          onAdd(titleCtrl.text.trim(), descCtrl.text.trim(),
-                              selectedColor.key, selectedPriority.key);
-                          Navigator.of(ctx).pop();
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00C0D1),
-                        foregroundColor: Colors.black,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 8),
-                      ),
-                      child: const Text(
-                        'Створити',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              // Actions
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: Text(
+                      'Скасувати',
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5)),
                     ),
-                  ],
-                ),
-              ],
-            ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      if (titleCtrl.text.trim().isNotEmpty) {
+                        onAdd(titleCtrl.text.trim(), descCtrl.text.trim(),
+                            selectedColor.key, selectedPriority.key);
+                        Navigator.of(ctx).pop();
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF00C0D1),
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                    ),
+                    child: const Text(
+                      'Створити',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
 }
 
-// ─── Board Column ───────────────────────────────────────────────────────────
+// Shared helper for the global empty state CTA
+void _showAddDialog(BuildContext context, WidgetRef ref) {
+  _showAddTaskDialog(context, (title, description, color, priority) {
+    final ok = ref.read(taskBoardProvider.notifier).createTask(
+      title: title,
+      description: description.isEmpty ? null : description,
+      color: color,
+      priority: priority,
+    );
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Сервер не підключено — задачу не створено'),
+          backgroundColor: Color(0xFF5A1A1E),
+          duration: Duration(seconds: 3),
+        ),
+      );
+    }
+  });
+}
 
-class _BoardColumn extends ConsumerWidget {
+// ─── Desktop Board Column (unchanged from original) ─────────────────────────
+
+class _DesktopColumn extends ConsumerWidget {
   final TaskColumn column;
   final List<TaskCard> tasks;
 
-  const _BoardColumn({required this.column, required this.tasks});
+  const _DesktopColumn({required this.column, required this.tasks});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -530,7 +1736,7 @@ class _BoardColumn extends ConsumerWidget {
                         padding: const EdgeInsets.all(8),
                         itemCount: tasks.length,
                         itemBuilder: (context, index) =>
-                            _StickyNoteCard(task: tasks[index]),
+                            _DesktopStickyNote(task: tasks[index]),
                       ),
               ),
             ],
@@ -541,11 +1747,11 @@ class _BoardColumn extends ConsumerWidget {
   }
 }
 
-// ─── Sticky Note Card ───────────────────────────────────────────────────────
+// ─── Desktop Sticky Note Card (with drag-and-drop) ──────────────────────────
 
-class _StickyNoteCard extends ConsumerWidget {
+class _DesktopStickyNote extends ConsumerWidget {
   final TaskCard task;
-  const _StickyNoteCard({required this.task});
+  const _DesktopStickyNote({required this.task});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -589,7 +1795,6 @@ class _StickyNoteCard extends ConsumerWidget {
       color: const Color(0xFF1A1A1F),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       items: [
-        // Assign/unassign agents
         const PopupMenuItem(
           enabled: false,
           height: 28,
@@ -629,7 +1834,6 @@ class _StickyNoteCard extends ConsumerWidget {
             ),
           ),
         const PopupMenuDivider(),
-        // Delete
         PopupMenuItem(
           value: 'delete',
           height: 32,
@@ -691,7 +1895,6 @@ class _StickyNoteCard extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Priority + title row
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -719,7 +1922,6 @@ class _StickyNoteCard extends ConsumerWidget {
                   ),
                 ],
               ),
-              // Description
               if (task.description.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
@@ -733,7 +1935,6 @@ class _StickyNoteCard extends ConsumerWidget {
                   ),
                 ),
               ],
-              // Assigned agents
               if (task.assignedAgents.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Wrap(
