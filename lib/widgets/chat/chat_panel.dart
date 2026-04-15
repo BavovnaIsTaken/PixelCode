@@ -4,9 +4,11 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../models/agent_message.dart';
 import '../../providers/agent_provider.dart';
+import '../../services/clipboard_service.dart';
 
 /// Parses numbered choice options from agent text.
 /// Returns a list of choice labels if 2+ consecutive items starting from 1 are found.
@@ -49,6 +51,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   String _lastAgentId = '';
   final List<Uint8List> _attachedImages = [];
   bool _applyingRemoteUpdate = false;
+  final _imagePicker = ImagePicker();
 
   @override
   void initState() {
@@ -60,6 +63,16 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             !HardwareKeyboard.instance.isShiftPressed) {
           _send();
           return KeyEventResult.handled;
+        }
+        // Intercept Cmd+V (macOS) or Ctrl+V (all platforms) to support image paste.
+        // We take over the shortcut entirely and handle text paste manually so that
+        // clipboard images are never silently dropped.
+        if (event is KeyDownEvent &&
+            event.logicalKey == LogicalKeyboardKey.keyV &&
+            (HardwareKeyboard.instance.isMetaPressed ||
+                HardwareKeyboard.instance.isControlPressed)) {
+          _handlePasteShortcut();
+          return KeyEventResult.skipRemainingHandlers;
         }
         return KeyEventResult.ignored;
       },
@@ -115,6 +128,58 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Future<void> _pickImages() async {
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1F),
+        title: const Text(
+          'Вибрати зображення',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_rounded, color: Color(0xFF00C0D1)),
+              title: const Text(
+                'Камера',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, 'camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: Color(0xFF00C0D1)),
+              title: const Text(
+                'Обрати фото',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, 'gallery'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open, color: Color(0xFF00C0D1)),
+              title: const Text(
+                'Обрати файл',
+                style: TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(context, 'file'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (choice == null) return;
+
+    if (choice == 'camera') {
+      await _pasteImage();
+    } else if (choice == 'gallery') {
+      await _pickImagesFromGallery();
+    } else if (choice == 'file') {
+      await _pickImagesFromFile();
+    }
+  }
+
+  Future<void> _pickImagesFromFile() async {
     const typeGroup = XTypeGroup(
       label: 'Images',
       extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
@@ -126,8 +191,65 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     setState(() => _attachedImages.addAll(bytes));
   }
 
+  Future<void> _pickImagesFromGallery() async {
+    final pickedFiles = await _imagePicker.pickMultiImage();
+    if (pickedFiles.isEmpty) return;
+    final bytes =
+        await Future.wait(pickedFiles.map((f) => f.readAsBytes()));
+    setState(() => _attachedImages.addAll(bytes));
+  }
+
   Future<void> _pasteImage() async {
-    // Pasteboard image paste is desktop-only (pasteboard package removed — iOS crash)
+    try {
+      final image = await _imagePicker.pickImage(source: ImageSource.camera);
+      if (image == null) return;
+      final bytes = await image.readAsBytes();
+      setState(() => _attachedImages.add(bytes));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Помилка при вставленні: $e')),
+      );
+    }
+  }
+
+  /// Called when the user presses Cmd+V / Ctrl+V.
+  /// Tries to paste an image from the clipboard first; if none is found,
+  /// falls back to inserting plain text at the current cursor position.
+  Future<void> _handlePasteShortcut() async {
+    final imageBytes = await ClipboardService.getImageFromClipboard();
+    if (imageBytes != null) {
+      if (!mounted) return;
+      setState(() => _attachedImages.add(imageBytes));
+      return;
+    }
+    // Fall back to plain-text paste
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    final sel = _controller.selection;
+    final current = _controller.text;
+    final start = sel.isValid ? sel.start : current.length;
+    final end = sel.isValid ? sel.end : current.length;
+    final newText = current.replaceRange(start, end, text);
+    _controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
+  }
+
+  /// Paste image from clipboard via the toolbar button.
+  Future<void> _pasteFromClipboard() async {
+    final imageBytes = await ClipboardService.getImageFromClipboard();
+    if (imageBytes != null) {
+      if (!mounted) return;
+      setState(() => _attachedImages.add(imageBytes));
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Буфер не містить зображення')),
+      );
+    }
   }
 
   void _removeImage(int index) {
@@ -390,7 +512,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Attach image from file
+                // Attach image from file / gallery
                 Tooltip(
                   message: 'Додати зображення',
                   child: IconButton(
@@ -404,9 +526,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 ),
                 // Paste image from clipboard
                 Tooltip(
-                  message: 'Вставити зображення з буфера',
+                  message: 'Вставити зображення з буфера (Cmd+V)',
                   child: IconButton(
-                    onPressed: _pasteImage,
+                    onPressed: _pasteFromClipboard,
                     icon: const Icon(Icons.content_paste_rounded),
                     color: Colors.white.withValues(alpha: 0.4),
                     iconSize: 20,
@@ -576,7 +698,7 @@ class _ChatBubble extends ConsumerWidget {
                         label: '$idx. $label',
                         onTap: () => ref
                             .read(chatProvider.notifier)
-                            .sendMessage('$idx'),
+                            .sendMessage('$idx. $label'),
                       );
                     }).toList(),
                   ),

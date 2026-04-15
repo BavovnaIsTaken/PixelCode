@@ -31,6 +31,12 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Це дозволяє додавати фото з галереї до повідомлень</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Це дозволяє робити фото з камери для додавання до повідомлень</string>
+	<key>NSPhotoLibraryAddOnlyUsageDescription</key>
+	<string>Це дозволяє зберігати фото в галерею</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

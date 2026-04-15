@@ -5,7 +5,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/session_profile.dart';
@@ -971,6 +971,7 @@ class _GlitchControlsState extends State<_GlitchControls>
   final _rng = Random();
   int _seed = 0;
   ui.Image? _logoImage;
+  ByteData? _logoImagePixels;
 
   @override
   void initState() {
@@ -982,8 +983,12 @@ class _GlitchControlsState extends State<_GlitchControls>
     final data = await rootBundle.load('assets/logo.png');
     final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
     final frame = await codec.getNextFrame();
+    final pixels = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
     if (mounted) {
-      setState(() => _logoImage = frame.image);
+      setState(() {
+        _logoImage = frame.image;
+        _logoImagePixels = pixels;
+      });
       _startLoop();
     }
   }
@@ -1082,6 +1087,7 @@ class _GlitchControlsState extends State<_GlitchControls>
                           seed: _seed + frame,
                           pixelPercent: widget.intensity,
                           displaySize: previewSize,
+                          imagePixels: _logoImagePixels,
                         ),
                       ),
                     );

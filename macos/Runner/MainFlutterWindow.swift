@@ -34,6 +34,27 @@ class MainFlutterWindow: NSWindow {
       }
     }
 
+    let clipboardChannel = FlutterMethodChannel(
+      name: "com.pixelcode/clipboard",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    clipboardChannel.setMethodCallHandler { (call, result) in
+      if call.method == "getImageFromClipboard" {
+        let pb = NSPasteboard.general
+        if let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+           let image = images.first,
+           let tiffData = image.tiffRepresentation,
+           let bitmap = NSBitmapImageRep(data: tiffData),
+           let pngData = bitmap.representation(using: .png, properties: [:]) {
+          result(FlutterStandardTypedData(bytes: pngData))
+        } else {
+          result(nil)
+        }
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     super.awakeFromNib()
 
     // If we have a saved frame from last shutdown, open with expand animation
