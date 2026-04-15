@@ -14,6 +14,7 @@ class AgentWsService {
   final _messageController = StreamController<ServerMessage>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
   bool _isConnected = false;
+  bool _disposed = false;
   Timer? _reconnectTimer;
 
   Stream<ServerMessage> get messages => _messageController.stream;
@@ -29,6 +30,7 @@ class AgentWsService {
   bool get isConnected => _isConnected;
 
   Future<void> connect({required String url}) async {
+    if (_disposed) return;
     try {
       _ws = await WebSocket.connect(url)
           .timeout(const Duration(seconds: 10));
@@ -234,6 +236,7 @@ class AgentWsService {
   }
 
   void _scheduleReconnect(String url) {
+    if (_disposed) return;
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(
       const Duration(seconds: 3),
@@ -242,6 +245,8 @@ class AgentWsService {
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     _reconnectTimer?.cancel();
     await _ws?.close();
     await _messageController.close();
