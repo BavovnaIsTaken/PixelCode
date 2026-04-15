@@ -20,6 +20,7 @@ import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
 import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
+import '../../widgets/settings/ios_deploy_dialog.dart';
 import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
 
@@ -656,6 +657,22 @@ class _HubScreenState extends ConsumerState<HubScreen>
                 ),
               ),
             ),
+          Tooltip(
+            message: 'Розгорнути на iOS',
+            child: InkWell(
+              onTap: () => showIOSDeployDialog(context),
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Icon(
+                  Icons.phone_iphone,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
           Tooltip(
             message: 'Налаштування',
             child: InkWell(

@@ -16,6 +16,7 @@ import '../../providers/settings_provider.dart';
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
 import 'claude_avatar.dart';
+import 'ios_deploy_dialog.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
 /// or a centered dialog on desktop.
@@ -262,6 +263,36 @@ class _SettingsContent extends ConsumerWidget {
               ref.read(settingsProvider.notifier).setGlitchShift(v),
           onChromaChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchChroma(v),
+        ),
+
+        // ── Section: iOS Deployment ────────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Розгортання на пристрій'),
+        const SizedBox(height: 12),
+        Text(
+          'Побудуйте та встановіть iOS білк на локальне пристрій '
+          'через Wi-Fi мережу. Потребує ios-deploy (brew install ios-deploy).',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: FilledButton.icon(
+            onPressed: () => showIOSDeployDialog(context),
+            icon: const Icon(Icons.phone_iphone, size: 16),
+            label: const Text('Розгорнути на iOS'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF00C0D1),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
         ),
 
         // ── Danger zone ─────────────────────────────────────────────
