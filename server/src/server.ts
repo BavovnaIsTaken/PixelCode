@@ -822,6 +822,9 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const errMsg = err instanceof Error ? err.message : String(err);
     dbg("error", "session", `Query failed: ${errMsg}`);
     sendDebug(ws, "error", "session", `Query FAILED: ${errMsg}`);
+    // Clear the broken session so the next message starts fresh instead of
+    // repeatedly trying to resume a session that the binary can't recover.
+    clientSessions.delete(ws);
     send(ws, {
       type: "error",
       message: errMsg,

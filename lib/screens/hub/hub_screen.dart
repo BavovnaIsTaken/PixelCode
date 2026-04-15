@@ -46,10 +46,68 @@ class _HubScreenState extends ConsumerState<HubScreen>
   bool _iconMoving = false;
   Offset _iconStart = Offset.zero;
   Offset _iconEnd = Offset.zero;
+  List<Offset> _iconPath = []; // zigzag waypoints: start → H → V → H → V … → end
   late final AnimationController _iconMoveCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1400),
+    duration: const Duration(milliseconds: 4200),
   );
+
+  static const double _iconSize = 24.0;
+
+  /// Chops [total] distance into random steps of [minStep]–[maxStep] px.
+  /// The last step takes whatever remains so the sum is always exactly [total].
+  static List<double> _randomSteps(
+      Random rng, double total, double minStep, double maxStep) {
+    if (total.abs() <= minStep) return [total];
+    final sign = total.sign;
+    final steps = <double>[];
+    var remaining = total.abs();
+    while (remaining > maxStep) {
+      final s = minStep + rng.nextDouble() * (maxStep - minStep);
+      steps.add(sign * s);
+      remaining -= s;
+    }
+    steps.add(sign * remaining);
+    return steps;
+  }
+
+  /// Builds a random zigzag path each call (uses [rng] with no fixed seed).
+  /// Interleaves H and V steps at a 1.3 : 1 ratio so horizontal direction
+  /// changes happen ~30% more often than vertical ones.
+  /// Step sizes are the same range for both axes. Always ends at [end].
+  static List<Offset> _computeIconPath(Offset start, Offset end, Random rng) {
+    const step = 3 * _iconSize;
+    const maxStep = 6 * _iconSize;
+    final hSteps = _randomSteps(rng, end.dx - start.dx, step, maxStep);
+    final vSteps = _randomSteps(rng, end.dy - start.dy, step, maxStep);
+
+    final path = <Offset>[start];
+    var cx = start.dx;
+    var cy = start.dy;
+    int hi = 0, vi = 0;
+    // hCredit accumulates 1.3 per V-step consumed; each whole unit = one H step.
+    double hCredit = 0;
+
+    while (hi < hSteps.length || vi < vSteps.length) {
+      hCredit += 1.3;
+      while (hCredit >= 1.0 && hi < hSteps.length) {
+        cx += hSteps[hi++];
+        path.add(Offset(cx, cy));
+        hCredit -= 1.0;
+      }
+      if (vi < vSteps.length) {
+        cy += vSteps[vi++];
+        path.add(Offset(cx, cy));
+      } else {
+        // V exhausted — drain remaining H steps
+        while (hi < hSteps.length) {
+          cx += hSteps[hi++];
+          path.add(Offset(cx, cy));
+        }
+      }
+    }
+    return path;
+  }
 
   final _rng = Random();
 
@@ -145,6 +203,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
       _iconStart = const Offset(16, (48 - iconSize) / 2);
       // Opposite corner: bottom-right
       _iconEnd = Offset(size.width - iconSize - 16, size.height - iconSize - 16);
+      _iconPath = _computeIconPath(_iconStart, _iconEnd, _rng);
     });
     _glitchCtrl.stop();
     _shutdownCtrl.forward();
@@ -225,6 +284,9 @@ class _HubScreenState extends ConsumerState<HubScreen>
                     ),
                   ),
                 ),
+              // Icon flying to opposite corner + glitch trail
+              if (_iconMoving && _logoImage != null)
+                IgnorePointer(child: _buildIconTrail()),
             ],
           );
         },
@@ -242,6 +304,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
             setState(() => _debugOpen = !_debugOpen),
       },
       child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
         child: Column(
           children: [
             // Title bar
@@ -608,6 +672,114 @@ class _HubScreenState extends ConsumerState<HubScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Returns the current icon position by walking the pre-computed zigzag path.
+  /// Each segment gets equal animation-time; easeInOut is applied per segment.
+  Offset _currentIconPos() {
+    if (_iconPath.length < 2) return _iconStart;
+    final segments = _iconPath.length - 1;
+    final raw = _iconMoveCtrl.value.clamp(0.0, 1.0);
+    final segT = 1.0 / segments;
+    final segIdx = (raw / segT).floor().clamp(0, segments - 1);
+    final localT = Curves.easeInOut.transform(
+      ((raw - segIdx * segT) / segT).clamp(0.0, 1.0),
+    );
+    return Offset.lerp(_iconPath[segIdx], _iconPath[segIdx + 1], localT)!;
+  }
+
+  Widget _buildIconTrail() {
+    if (_iconPath.length < 2) return const SizedBox.shrink();
+    const iconSize = 24.0;
+    const trailStep = 14.0;
+
+    final raw = _iconMoveCtrl.value.clamp(0.0, 1.0);
+    final segments = _iconPath.length - 1;
+    final segT = 1.0 / segments;
+    final currentPos = _currentIconPos();
+    final animFrame = (raw * 60).toInt();
+
+    final particles = <Widget>[];
+
+    // Walk every segment that has been (partially) covered
+    for (int seg = 0; seg < segments; seg++) {
+      final segStartRaw = seg * segT;
+      if (raw < segStartRaw) break;
+
+      final localRaw = ((raw - segStartRaw) / segT).clamp(0.0, 1.0);
+      final coveredFraction = raw >= (seg + 1) * segT
+          ? 1.0
+          : Curves.easeInOut.transform(localRaw);
+
+      final from = _iconPath[seg];
+      final to = _iconPath[seg + 1];
+      final coveredTo = Offset.lerp(from, to, coveredFraction)!;
+
+      final delta = to - from;
+      final dist = delta.distance;
+      if (dist <= 0) continue;
+      final step = delta / dist * trailStep;
+
+      var pos = from;
+      var walked = 0.0;
+      final coveredDist = (coveredTo - from).distance;
+      while (walked <= coveredDist) {
+        final seed = (pos.dx * 7 + pos.dy * 13).toInt().abs();
+        particles.add(_trailMark(pos: pos, seed: seed, iconSize: iconSize));
+        pos = pos + step;
+        walked += trailStep;
+      }
+    }
+
+    // Leading icon — lightly glitched, animated seed
+    particles.add(
+      Positioned(
+        left: currentPos.dx,
+        top: currentPos.dy,
+        child: SizedBox(
+          width: iconSize,
+          height: iconSize,
+          child: CustomPaint(
+            size: const Size(iconSize, iconSize),
+            painter: _PixelGlitchPainter(
+              image: _logoImage!,
+              seed: _glitchSeed + animFrame,
+              pixelPercent: 0.18,
+              displaySize: iconSize,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    return Stack(children: particles);
+  }
+
+  Widget _trailMark({
+    required Offset pos,
+    required int seed,
+    required double iconSize,
+  }) {
+    return Positioned(
+      left: pos.dx,
+      top: pos.dy,
+      child: Opacity(
+        opacity: 0.75,
+        child: SizedBox(
+          width: iconSize,
+          height: iconSize,
+          child: CustomPaint(
+            size: Size(iconSize, iconSize),
+            painter: _PixelGlitchPainter(
+              image: _logoImage!,
+              seed: seed,
+              pixelPercent: 0.55,
+              displaySize: iconSize,
+            ),
+          ),
+        ),
       ),
     );
   }

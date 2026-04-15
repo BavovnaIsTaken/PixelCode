@@ -38,6 +38,53 @@ class ServerProcessService {
     return '${Directory.current.path}/server';
   }
 
+  /// Finds the newest Claude Code VS Code extension native binary.
+  ///
+  /// Scans `~/.vscode/extensions/` for `anthropic.claude-code-*` directories,
+  /// sorts by version descending, and returns the path to the first
+  /// `resources/native-binary/claude` binary that exists on disk.
+  /// Returns `null` on non-macOS or if no extension is installed.
+  static String? _findClaudeNativeBinary() {
+    if (!Platform.isMacOS) return null;
+
+    final arch = Platform.version.contains('arm') ? 'darwin-arm64' : 'darwin-x64';
+    final extensionsDir = Directory(
+      '${Platform.environment['HOME']}/.vscode/extensions',
+    );
+    if (!extensionsDir.existsSync()) return null;
+
+    final candidates = extensionsDir
+        .listSync()
+        .whereType<Directory>()
+        .where((d) {
+          final name = d.uri.pathSegments
+              .lastWhere((s) => s.isNotEmpty, orElse: () => '');
+          return name.startsWith('anthropic.claude-code-') &&
+              name.endsWith(arch);
+        })
+        .toList();
+
+    if (candidates.isEmpty) return null;
+
+    // Sort descending by version segment: "anthropic.claude-code-2.1.107-darwin-arm64"
+    // split('-') → ['anthropic.claude', 'code', '2.1.107', 'darwin', 'arm64']
+    candidates.sort((a, b) {
+      String ver(Directory d) {
+        final parts = d.uri.pathSegments
+            .lastWhere((s) => s.isNotEmpty)
+            .split('-');
+        return parts.length > 2 ? parts[2] : '';
+      }
+      return ver(b).compareTo(ver(a));
+    });
+
+    for (final dir in candidates) {
+      final binary = File('${dir.path}/resources/native-binary/claude');
+      if (binary.existsSync()) return binary.path;
+    }
+    return null;
+  }
+
   /// Starts the Node.js server if it is not already running.
   /// If [projectPath] is provided, it will be used as PROJECT_CWD.
   Future<void> start({String? projectPath}) async {
@@ -57,6 +104,13 @@ class ServerProcessService {
 
     _emitLog('info', 'Starting server in $serverDir');
 
+    final claudeBinary = _findClaudeNativeBinary();
+    if (claudeBinary != null) {
+      _emitLog('info', 'Using Claude binary: $claudeBinary');
+    } else {
+      _emitLog('warn', 'No Claude Code extension binary found — relying on PATH');
+    }
+
     // Launch via shell so that PATH from the user's profile is inherited.
     // This ensures node/npm/npx are found even when the app is launched
     // from Finder or Xcode rather than from the terminal.
@@ -66,13 +120,12 @@ class ServerProcessService {
         ['-l', '-c', 'npm run dev'],
         workingDirectory: serverDir,
         environment: {
-          ...Map.fromEntries(
-            Platform.environment.entries.where(
-              (e) => e.key != 'CLAUDE_CODE_EXECPATH' && e.key != 'ANTHROPIC_API_KEY',
-            ),
-          ),
+          ...Platform.environment,
           'PORT': '9720',
           'PROJECT_CWD': projectPath ?? Directory.current.path,
+          // Point the SDK to the newest installed VS Code native binary so it
+          // authenticates via claude.ai Pro (OAuth) rather than a bare API key.
+          'CLAUDE_CODE_EXECPATH': ?claudeBinary,
         },
       ).timeout(const Duration(seconds: 10));
     } on TimeoutException {
