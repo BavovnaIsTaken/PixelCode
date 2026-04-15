@@ -44,6 +44,7 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     super.initState();
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: () async {
+        await ref.read(wsServiceProvider).dispose();
         await serverProcess.dispose();
         return AppExitResponse.exit;
       },
@@ -74,6 +75,8 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   @override
   void dispose() {
     _lifecycleListener.dispose();
+    // serverProcess is already disposed by onExitRequested; the _disposed
+    // guard inside the service makes this safe as a fallback.
     serverProcess.dispose();
     super.dispose();
   }

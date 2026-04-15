@@ -247,12 +247,21 @@ class _SettingsContent extends ConsumerWidget {
           enabled: ref.watch(settingsProvider).glitchEnabled,
           intensity: ref.watch(settingsProvider).glitchIntensity,
           speed: ref.watch(settingsProvider).glitchSpeed,
+          bandHeight: ref.watch(settingsProvider).glitchBandHeight,
+          shift: ref.watch(settingsProvider).glitchShift,
+          chroma: ref.watch(settingsProvider).glitchChroma,
           onEnabledChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchEnabled(v),
           onIntensityChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchIntensity(v),
           onSpeedChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchSpeed(v),
+          onBandHeightChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchBandHeight(v),
+          onShiftChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchShift(v),
+          onChromaChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchChroma(v),
         ),
 
         // ── Danger zone ─────────────────────────────────────────────
@@ -948,17 +957,29 @@ class _GlitchControls extends StatefulWidget {
   final bool enabled;
   final double intensity;
   final double speed;
+  final int bandHeight;
+  final double shift;
+  final double chroma;
   final ValueChanged<bool> onEnabledChanged;
   final ValueChanged<double> onIntensityChanged;
   final ValueChanged<double> onSpeedChanged;
+  final ValueChanged<int> onBandHeightChanged;
+  final ValueChanged<double> onShiftChanged;
+  final ValueChanged<double> onChromaChanged;
 
   const _GlitchControls({
     required this.enabled,
     required this.intensity,
     required this.speed,
+    required this.bandHeight,
+    required this.shift,
+    required this.chroma,
     required this.onEnabledChanged,
     required this.onIntensityChanged,
     required this.onSpeedChanged,
+    required this.onBandHeightChanged,
+    required this.onShiftChanged,
+    required this.onChromaChanged,
   });
 
   @override
@@ -1021,20 +1042,6 @@ class _GlitchControlsState extends State<_GlitchControls>
     super.dispose();
   }
 
-  static String _intensityLabel(double v) {
-    if (v <= 0.03) return 'Мінімальний · Ледь помітні артефакти';
-    if (v <= 0.08) return 'Помірний · Класичний цифровий шум';
-    if (v <= 0.15) return 'Інтенсивний · Виражена піксельна деградація';
-    return 'Максимальний · Повний хаос пікселів';
-  }
-
-  static String _speedLabel(double v) {
-    if (v <= 0.8) return 'Повільний · Плавні переходи';
-    if (v <= 1.5) return 'Стандартний · Збалансована динаміка';
-    if (v <= 2.2) return 'Швидкий · Агресивне мерехтіння';
-    return 'Турбо · Миттєві глітчі';
-  }
-
   Widget _buildPreview() {
     const previewSize = 64.0;
     return Center(
@@ -1088,6 +1095,9 @@ class _GlitchControlsState extends State<_GlitchControls>
                           pixelPercent: widget.intensity,
                           displaySize: previewSize,
                           imagePixels: _logoImagePixels,
+                          bandHeightMax: widget.bandHeight,
+                          shiftStrength: widget.shift,
+                          chromaStrength: widget.chroma,
                         ),
                       ),
                     );
@@ -1098,223 +1108,171 @@ class _GlitchControlsState extends State<_GlitchControls>
     );
   }
 
+  SliderThemeData _sliderTheme(bool enabled) => SliderThemeData(
+        activeTrackColor: enabled
+            ? const Color(0xFF00C0D1)
+            : Colors.white.withValues(alpha: 0.12),
+        inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+        thumbColor: enabled
+            ? const Color(0xFF00C0D1)
+            : Colors.white.withValues(alpha: 0.2),
+        overlayColor: const Color(0xFF00C0D1).withValues(alpha: 0.12),
+        trackHeight: 3,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+      );
+
+  Widget _vSlider({
+    required IconData icon,
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required bool enabled,
+    required ValueChanged<double>? onChanged,
+  }) {
+    final iconColor = Colors.white.withValues(alpha: enabled ? 0.5 : 0.15);
+    final labelColor = Colors.white.withValues(alpha: enabled ? 0.8 : 0.25);
+
+    return Expanded(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(height: 6),
+          SizedBox(
+            height: 110,
+            child: RotatedBox(
+              quarterTurns: 3,
+              child: SliderTheme(
+                data: _sliderTheme(enabled),
+                child: Slider(
+                  value: value,
+                  min: min,
+                  max: max,
+                  divisions: divisions,
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: labelColor,
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final enabled = widget.enabled;
-    final intensity = widget.intensity;
-    final speed = widget.speed;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Live preview
-        _buildPreview(),
-        const SizedBox(height: 16),
-
-        // Enable toggle
+        // Live preview + enable toggle
         Row(
           children: [
-            Expanded(
-              child: Text(
-                'Увімкнено',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.7),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            SizedBox(
-              height: 28,
-              child: Switch.adaptive(
-                value: enabled,
-                onChanged: widget.onEnabledChanged,
-                activeTrackColor: const Color(0xFF00C0D1),
-                activeThumbColor: const Color(0xFF00C0D1),
-                inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
-              ),
-            ),
-          ],
-        ),
-
-        // Intensity slider
-        const SizedBox(height: 18),
-        Text(
-          'Інтенсивність',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: enabled ? 0.7 : 0.25),
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Text(
-              '1%',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
-                fontSize: 10,
-              ),
-            ),
-            Expanded(
-              child: SliderTheme(
-                data: SliderThemeData(
-                  activeTrackColor: enabled
-                      ? const Color(0xFF00C0D1)
-                      : Colors.white.withValues(alpha: 0.12),
-                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
-                  thumbColor: enabled
-                      ? const Color(0xFF00C0D1)
-                      : Colors.white.withValues(alpha: 0.2),
-                  overlayColor:
-                      const Color(0xFF00C0D1).withValues(alpha: 0.12),
-                  trackHeight: 3,
-                  thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 7),
-                ),
-                child: Slider(
-                  value: intensity,
-                  min: 0.01,
-                  max: 0.30,
-                  divisions: 29,
-                  onChanged: enabled ? widget.onIntensityChanged : null,
-                ),
-              ),
-            ),
-            Text(
-              '30%',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
-        Center(
-          child: Text(
-            '${(intensity * 100).round()}%',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: enabled ? 1.0 : 0.3),
-              fontSize: 20,
-              fontWeight: FontWeight.w300,
-              letterSpacing: 1,
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: enabled
-                    ? const Color(0xFF00C0D1)
-                    : Colors.white.withValues(alpha: 0.15),
-              ),
-            ),
+            Expanded(child: _buildPreview()),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _intensityLabel(intensity),
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: enabled ? 0.5 : 0.2),
-                  fontSize: 12,
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: 28,
+                  child: Switch.adaptive(
+                    value: enabled,
+                    onChanged: widget.onEnabledChanged,
+                    activeTrackColor: const Color(0xFF00C0D1),
+                    activeThumbColor: const Color(0xFF00C0D1),
+                    inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 4),
+                Text(
+                  enabled ? 'ON' : 'OFF',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: enabled ? 0.6 : 0.2),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
+        const SizedBox(height: 14),
 
-        // Speed slider
-        const SizedBox(height: 18),
-        Text(
-          'Швидкість',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: enabled ? 0.7 : 0.25),
-            fontSize: 13,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 8),
+        // Vertical sliders row
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              '0.5×',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
-                fontSize: 10,
-              ),
+            // Intensity
+            _vSlider(
+              icon: Icons.grain,
+              label: '${(widget.intensity * 100).round()}%',
+              value: widget.intensity,
+              min: 0.01,
+              max: 0.30,
+              divisions: 29,
+              enabled: enabled,
+              onChanged: enabled ? widget.onIntensityChanged : null,
             ),
-            Expanded(
-              child: SliderTheme(
-                data: SliderThemeData(
-                  activeTrackColor: enabled
-                      ? const Color(0xFF00C0D1)
-                      : Colors.white.withValues(alpha: 0.12),
-                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
-                  thumbColor: enabled
-                      ? const Color(0xFF00C0D1)
-                      : Colors.white.withValues(alpha: 0.2),
-                  overlayColor:
-                      const Color(0xFF00C0D1).withValues(alpha: 0.12),
-                  trackHeight: 3,
-                  thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 7),
-                ),
-                child: Slider(
-                  value: speed,
-                  min: 0.5,
-                  max: 3.0,
-                  divisions: 25,
-                  onChanged: enabled ? widget.onSpeedChanged : null,
-                ),
-              ),
+            // Speed
+            _vSlider(
+              icon: Icons.speed,
+              label: '${widget.speed.toStringAsFixed(1)}x',
+              value: widget.speed,
+              min: 0.5,
+              max: 3.0,
+              divisions: 25,
+              enabled: enabled,
+              onChanged: enabled ? widget.onSpeedChanged : null,
             ),
-            Text(
-              '3.0×',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
-                fontSize: 10,
-              ),
+            // Band height
+            _vSlider(
+              icon: Icons.line_weight,
+              label: '${widget.bandHeight}px',
+              value: widget.bandHeight.toDouble(),
+              min: 1,
+              max: 8,
+              divisions: 7,
+              enabled: enabled,
+              onChanged: enabled
+                  ? (v) => widget.onBandHeightChanged(v.round())
+                  : null,
             ),
-          ],
-        ),
-        Center(
-          child: Text(
-            '${speed.toStringAsFixed(1)}×',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: enabled ? 1.0 : 0.3),
-              fontSize: 20,
-              fontWeight: FontWeight.w300,
-              letterSpacing: 1,
+            // Shift
+            _vSlider(
+              icon: Icons.swap_horiz,
+              label: '${(widget.shift * 100).round()}%',
+              value: widget.shift,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              enabled: enabled,
+              onChanged: enabled ? widget.onShiftChanged : null,
             ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: enabled
-                    ? const Color(0xFF00C0D1)
-                    : Colors.white.withValues(alpha: 0.15),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _speedLabel(speed),
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: enabled ? 0.5 : 0.2),
-                  fontSize: 12,
-                ),
-              ),
+            // Chroma
+            _vSlider(
+              icon: Icons.lens_blur,
+              label: widget.chroma == 0
+                  ? 'off'
+                  : '${(widget.chroma * 100).round()}%',
+              value: widget.chroma,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              enabled: enabled,
+              onChanged: enabled ? widget.onChromaChanged : null,
             ),
           ],
         ),

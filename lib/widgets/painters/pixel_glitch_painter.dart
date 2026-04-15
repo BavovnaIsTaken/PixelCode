@@ -4,12 +4,17 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-/// Draws an image with random pixel blocks coloured red or green
-/// to simulate a digital glitch effect.
+/// Renders a logo image with authentic-looking digital glitch artifacts.
+///
+/// Three types of distortion are applied via seeded randomness:
+///   • SHIFT  — a horizontal scanline band is displaced left/right
+///   • COLOR  — a scanline band is overlaid with a glitch colour (opaque pixels only)
+///   • CHROMA — a scanline band gets R/B channel separation
+///
+/// When [pixelPercent] > 0.12 a full-image chromatic aberration pass is added.
 ///
 /// Pass [imagePixels] (from `image.toByteData(format: rawRgba)`) so that
-/// glitch blocks are only applied to opaque logo pixels, not transparent
-/// corners or background areas.
+/// colour overlays skip transparent corners of the logo.
 class PixelGlitchPainter extends CustomPainter {
   PixelGlitchPainter({
     required this.image,
@@ -17,6 +22,9 @@ class PixelGlitchPainter extends CustomPainter {
     required this.pixelPercent,
     required this.displaySize,
     this.imagePixels,
+    this.bandHeightMax = 3,
+    this.shiftStrength = 0.5,
+    this.chromaStrength = 0.5,
   });
 
   final ui.Image image;
@@ -27,66 +35,159 @@ class PixelGlitchPainter extends CustomPainter {
   /// Raw RGBA bytes of [image] — used to skip glitch on transparent pixels.
   final ByteData? imagePixels;
 
-  static const int _blockSize = 1;
+  /// Max height of each scanline band in display pixels (1–8).
+  final int bandHeightMax;
 
+  /// Horizontal shift amount (0.0–1.0). 1.0 = ±50% of display width.
+  final double shiftStrength;
+
+  /// Chromatic aberration strength (0.0 = off, 1.0 = max).
+  final double chromaStrength;
+
+  // Glitch colours for the COLOR band type.
   static const _glitchColors = [
     Color(0xFFFF2020), // red
     Color(0xFF00FF41), // green
   ];
 
-  /// Returns true if the source image pixel at the center of block [col],[row]
-  /// is sufficiently opaque to be considered a logo pixel.
-  bool _isLogoPixel(int col, int row, int cols, int rows) {
+  // ColorFilter matrices that isolate a single channel.
+  static const _rChannelFilter = ColorFilter.matrix(<double>[
+    1, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+  static const _bChannelFilter = ColorFilter.matrix(<double>[
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
+  // ── helpers ─────────────────────────────────────────────────────────────
+
+  /// Maps a display-space x coordinate to the matching source image x.
+  double _srcX(double dstX) => dstX * image.width / displaySize;
+
+  /// Maps a display-space y coordinate to the matching source image y.
+  double _srcY(double dstY) => dstY * image.height / displaySize;
+
+  /// True if the source pixel at display position ([dx], [dy]) is opaque enough
+  /// to be considered part of the logo (alpha > 32).
+  bool _isOpaque(double dx, double dy) {
     final pixels = imagePixels;
     if (pixels == null) return true;
-    final srcX = ((col + 0.5) * image.width / cols).floor().clamp(0, image.width - 1);
-    final srcY = ((row + 0.5) * image.height / rows).floor().clamp(0, image.height - 1);
-    final byteOffset = (srcY * image.width + srcX) * 4;
-    if (byteOffset + 3 >= pixels.lengthInBytes) return true;
-    final alpha = pixels.getUint8(byteOffset + 3);
-    return alpha > 32;
+    final sx = _srcX(dx).floor().clamp(0, image.width - 1);
+    final sy = _srcY(dy).floor().clamp(0, image.height - 1);
+    final offset = (sy * image.width + sx) * 4;
+    if (offset + 3 >= pixels.lengthInBytes) return true;
+    return pixels.getUint8(offset + 3) > 32;
   }
+
+  // ── paint ───────────────────────────────────────────────────────────────
 
   @override
   void paint(Canvas canvas, Size size) {
-    final imgPaint = Paint()..filterQuality = FilterQuality.none;
-    final colorPaint = Paint();
     final rng = Random(seed);
+    final s = displaySize;
 
-    final cols = (displaySize / _blockSize).ceil();
-    final rows = (displaySize / _blockSize).ceil();
-    final srcBlockW = image.width / cols;
-    final srcBlockH = image.height / rows;
+    canvas.clipRect(Rect.fromLTWH(0, 0, s, s));
 
-    canvas.clipRect(Rect.fromLTWH(0, 0, displaySize, displaySize));
+    // ── Phase 1: base image ──────────────────────────────────────────────
+    final basePaint = Paint()..filterQuality = FilterQuality.none;
+    final fullSrc = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final fullDst = Rect.fromLTWH(0, 0, s, s);
+    canvas.drawImageRect(image, fullSrc, fullDst, basePaint);
 
-    for (int row = 0; row < rows; row++) {
-      for (int col = 0; col < cols; col++) {
-        final shouldGlitch = rng.nextDouble() < pixelPercent;
+    // ── Phase 2: scanline bands ──────────────────────────────────────────
+    // Number of bands scales with pixelPercent so a low intensity value
+    // produces only 1–2 subtle bands while a high value gives 4–5.
+    final bandCount = 1 + (pixelPercent * 20).round().clamp(1, 4);
 
-        final dst = Rect.fromLTWH(
-          col * _blockSize.toDouble(),
-          row * _blockSize.toDouble(),
-          _blockSize.toDouble(),
-          _blockSize.toDouble(),
+    for (int i = 0; i < bandCount; i++) {
+      final bandY = rng.nextDouble() * s;
+      // Band height: 1–bandHeightMax display pixels.
+      final maxH = bandHeightMax.clamp(1, 8);
+      final bandH = (1 + rng.nextInt(maxH)).toDouble();
+      final bandType = rng.nextDouble();
+
+      if (bandType < 0.55) {
+        // ── SHIFT: displace this band horizontally ───────────────────────
+        final maxShift = s * 0.5 * shiftStrength;
+        final dx = (rng.nextDouble() - 0.5) * 2 * maxShift;
+
+        // Source slice for the band (no horizontal offset in source).
+        final srcSlice = Rect.fromLTWH(
+          0,
+          _srcY(bandY),
+          image.width.toDouble(),
+          (_srcY(bandY + bandH) - _srcY(bandY)).clamp(1, image.height.toDouble()),
         );
+        // Destination band, shifted.
+        final dstBand = Rect.fromLTWH(dx, bandY, s, bandH);
 
-        final src = Rect.fromLTWH(
-          col * srcBlockW,
-          row * srcBlockH,
-          srcBlockW,
-          srcBlockH,
-        );
-
-        // Always draw the source image pixel first (preserves transparency).
-        canvas.drawImageRect(image, src, dst, imgPaint);
-
-        // Only overlay the glitch colour on opaque logo pixels.
-        if (shouldGlitch && _isLogoPixel(col, row, cols, rows)) {
-          final color = _glitchColors[rng.nextInt(_glitchColors.length)];
-          canvas.drawRect(dst, colorPaint..color = color);
+        canvas.save();
+        canvas.clipRect(Rect.fromLTWH(0, bandY, s, bandH));
+        canvas.drawImageRect(image, srcSlice, dstBand, basePaint);
+        canvas.restore();
+      } else if (bandType < 0.85) {
+        // ── COLOR: solid glitch colour over opaque pixels in band ────────
+        final color = _glitchColors[rng.nextInt(_glitchColors.length)];
+        final colorPaint = Paint()..color = color;
+        for (double py = bandY; py < bandY + bandH && py < s; py++) {
+          for (double px = 0; px < s; px++) {
+            if (_isOpaque(px, py)) {
+              canvas.drawRect(Rect.fromLTWH(px, py, 1, 1), colorPaint);
+            }
+          }
         }
+      } else if (chromaStrength > 0) {
+        // ── CHROMA: R/B channel separation on this band ─────────────────
+        final chromaShift = 1.0 + chromaStrength * 3.0; // 1–4 px
+        final chromaOpacity = 0.5 + chromaStrength * 0.4; // 0.5–0.9
+        final srcSlice = Rect.fromLTWH(
+          0,
+          _srcY(bandY),
+          image.width.toDouble(),
+          (_srcY(bandY + bandH) - _srcY(bandY)).clamp(1, image.height.toDouble()),
+        );
+        final dstBand = Rect.fromLTWH(0, bandY, s, bandH);
+
+        canvas.save();
+        canvas.clipRect(Rect.fromLTWH(0, bandY, s, bandH));
+
+        final rPaint = Paint()
+          ..filterQuality = FilterQuality.none
+          ..colorFilter = _rChannelFilter
+          ..color = Color.fromRGBO(255, 255, 255, chromaOpacity);
+        canvas.drawImageRect(image, srcSlice, dstBand.translate(chromaShift, 0), rPaint);
+
+        final bPaint = Paint()
+          ..filterQuality = FilterQuality.none
+          ..colorFilter = _bChannelFilter
+          ..color = Color.fromRGBO(255, 255, 255, chromaOpacity);
+        canvas.drawImageRect(image, srcSlice, dstBand.translate(-chromaShift, 0), bPaint);
+
+        canvas.restore();
       }
+    }
+
+    // ── Phase 3: full-image chromatic aberration ─────────────────────────
+    if (chromaStrength > 0 && pixelPercent > 0.12) {
+      final chromaShift = chromaStrength * 1.5; // 0–1.5 px
+      final chromaOpacity = chromaStrength * 0.30; // 0–0.30
+
+      final rPaint = Paint()
+        ..filterQuality = FilterQuality.none
+        ..colorFilter = _rChannelFilter
+        ..color = Color.fromRGBO(255, 255, 255, chromaOpacity);
+      canvas.drawImageRect(image, fullSrc, fullDst.translate(chromaShift, 0), rPaint);
+
+      final bPaint = Paint()
+        ..filterQuality = FilterQuality.none
+        ..colorFilter = _bChannelFilter
+        ..color = Color.fromRGBO(255, 255, 255, chromaOpacity);
+      canvas.drawImageRect(image, fullSrc, fullDst.translate(-chromaShift, 0), bPaint);
     }
   }
 
@@ -94,5 +195,8 @@ class PixelGlitchPainter extends CustomPainter {
   bool shouldRepaint(covariant PixelGlitchPainter old) =>
       seed != old.seed ||
       pixelPercent != old.pixelPercent ||
-      imagePixels != old.imagePixels;
+      imagePixels != old.imagePixels ||
+      bandHeightMax != old.bandHeightMax ||
+      shiftStrength != old.shiftStrength ||
+      chromaStrength != old.chromaStrength;
 }

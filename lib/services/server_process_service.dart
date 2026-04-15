@@ -11,6 +11,9 @@ class ServerProcessService {
   Process? _process;
   final _logController = StreamController<ServerProcessLog>.broadcast();
   final _runningController = StreamController<bool>.broadcast();
+  StreamSubscription<String>? _stdoutSub;
+  StreamSubscription<String>? _stderrSub;
+  bool _disposed = false;
 
   /// Stream of server process logs (stdout/stderr).
   Stream<ServerProcessLog> get logs => _logController.stream;
@@ -136,12 +139,16 @@ class ServerProcessService {
       return;
     }
 
-    _process!.stdout.transform(const SystemEncoding().decoder).listen((data) {
+    _stdoutSub = _process!.stdout
+        .transform(const SystemEncoding().decoder)
+        .listen((data) {
       for (final line in data.split('\n')) {
         if (line.trim().isNotEmpty) _emitLog('info', line.trim());
       }
     });
-    _process!.stderr.transform(const SystemEncoding().decoder).listen((data) {
+    _stderrSub = _process!.stderr
+        .transform(const SystemEncoding().decoder)
+        .listen((data) {
       for (final line in data.split('\n')) {
         if (line.trim().isNotEmpty) _emitLog('warn', line.trim());
       }
@@ -150,6 +157,7 @@ class ServerProcessService {
     _runningController.add(true);
 
     _process!.exitCode.then((code) {
+      if (_disposed) return;
       _emitLog(code == 0 ? 'info' : 'error', 'Server exited with code $code');
       _process = null;
       _runningController.add(false);
@@ -166,6 +174,10 @@ class ServerProcessService {
 
   /// Kills the server process and its children (npm spawns node).
   Future<void> stop() async {
+    await _stdoutSub?.cancel();
+    await _stderrSub?.cancel();
+    _stdoutSub = null;
+    _stderrSub = null;
     final proc = _process;
     if (proc == null) return;
     _process = null;
@@ -184,6 +196,8 @@ class ServerProcessService {
 
   /// Kills the server and closes the log stream. Call only on final disposal.
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     await stop();
     await _logController.close();
     await _runningController.close();
