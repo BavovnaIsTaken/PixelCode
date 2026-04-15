@@ -176,9 +176,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   // Shutdown animation
   late final AnimationController _shutdownCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(
-      milliseconds: 5000,
-    ), // TODO: revert to 1600ms after debug
+    duration: const Duration(milliseconds: 1600),
   );
 
   // Bright flash at the center
@@ -459,11 +457,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
             onLongPressDown: (_) => _onLogoPointerDown(),
             onLongPressUp: _onLogoPointerUp,
             onLongPressCancel: _onLogoPointerUp,
-            child: Image.asset(
-              'assets/logo.png',
-              width: 22,
-              height: 22,
-              filterQuality: FilterQuality.medium,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: Image.asset(
+                'assets/logo.png',
+                width: 22,
+                height: 22,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -551,43 +552,46 @@ class _HubScreenState extends ConsumerState<HubScreen>
               onExit: (_) => _onLogoHoverChanged(false),
               child: Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: AnimatedBuilder(
-                  animation: _glitchCtrl,
-                  builder: (context, _) {
-                    const size = 24.0;
-                    final t = _glitchCtrl.value;
-                    final glitching =
-                        _glitchCtrl.isAnimating && t > 0 && _logoImage != null;
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(5.5),
+                  child: AnimatedBuilder(
+                    animation: _glitchCtrl,
+                    builder: (context, _) {
+                      const size = 24.0;
+                      final t = _glitchCtrl.value;
+                      final glitching =
+                          _glitchCtrl.isAnimating && t > 0 && _logoImage != null;
 
-                    if (!glitching) {
-                      return Image.asset(
-                        'assets/logo.png',
+                      if (!glitching) {
+                        return Image.asset(
+                          'assets/logo.png',
+                          width: size,
+                          height: size,
+                          filterQuality: FilterQuality.medium,
+                        );
+                      }
+
+                      final frame = (t * 8).floor();
+
+                      return SizedBox(
                         width: size,
                         height: size,
-                        filterQuality: FilterQuality.medium,
-                      );
-                    }
-
-                    final frame = (t * 8).floor();
-
-                    return SizedBox(
-                      width: size,
-                      height: size,
-                      child: CustomPaint(
-                        size: const Size(size, size),
-                        painter: PixelGlitchPainter(
-                          image: _logoImage!,
-                          seed: _glitchSeed + frame,
-                          pixelPercent: _settings.glitchIntensity,
-                          displaySize: size,
-                          imagePixels: _logoImagePixels,
-                          bandHeightMax: _settings.glitchBandHeight,
-                          shiftStrength: _settings.glitchShift,
-                          chromaStrength: _settings.glitchChroma,
+                        child: CustomPaint(
+                          size: const Size(size, size),
+                          painter: PixelGlitchPainter(
+                            image: _logoImage!,
+                            seed: _glitchSeed + frame,
+                            pixelPercent: _settings.glitchIntensity,
+                            displaySize: size,
+                            imagePixels: _logoImagePixels,
+                            bandHeightMax: _settings.glitchBandHeight,
+                            shiftStrength: _settings.glitchShift,
+                            chromaStrength: _settings.glitchChroma,
+                          ),
                         ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
