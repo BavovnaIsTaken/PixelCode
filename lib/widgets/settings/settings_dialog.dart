@@ -1,14 +1,21 @@
 /// Modular settings dialog — adaptive for mobile (iPhone 16 Pro) and desktop.
 library;
 
+import 'dart:math';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/claude_auth_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
+import 'claude_avatar.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
 /// or a centered dialog on desktop.
@@ -146,6 +153,9 @@ class _SettingsContent extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Section: Account ──────────────────────────────────────────
+        const _AccountSection(),
+
         // ── Section: Sessions ──────────────────────────────────────────
         _SectionHeader(title: 'Сесії'),
         const SizedBox(height: 12),
@@ -219,6 +229,30 @@ class _SettingsContent extends ConsumerWidget {
           value: ref.watch(settingsProvider).deskHeight,
           onChanged: (v) =>
               ref.read(settingsProvider.notifier).setDeskHeight(v),
+        ),
+
+        // ── Section: Glitch effect ─────────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Глітч-ефект'),
+        const SizedBox(height: 12),
+        Text(
+          'Налаштування візуального глітч-ефекту на логотипі.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _GlitchControls(
+          enabled: ref.watch(settingsProvider).glitchEnabled,
+          intensity: ref.watch(settingsProvider).glitchIntensity,
+          speed: ref.watch(settingsProvider).glitchSpeed,
+          onEnabledChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchEnabled(v),
+          onIntensityChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchIntensity(v),
+          onSpeedChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchSpeed(v),
         ),
 
         // ── Danger zone ─────────────────────────────────────────────
@@ -344,6 +378,312 @@ class _SettingsContent extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Account section ───────────────────────────────────────────────────────
+
+class _AccountSection extends ConsumerStatefulWidget {
+  const _AccountSection();
+
+  @override
+  ConsumerState<_AccountSection> createState() => _AccountSectionState();
+}
+
+class _AccountSectionState extends ConsumerState<_AccountSection> {
+  bool _editingNickname = false;
+  late TextEditingController _nicknameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nicknameController = TextEditingController(
+      text: ref.read(settingsProvider).nickname,
+    );
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final authAsync = ref.watch(claudeAuthProvider);
+    final nickname = ref.watch(settingsProvider).nickname;
+    final isLoggedIn = authAsync.valueOrNull?.loggedIn ?? false;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Обліковий запис'),
+        const SizedBox(height: 16),
+
+        // Avatar + info row
+        Row(
+          children: [
+            ClaudeAvatar(isActive: isLoggedIn, size: 48),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Nickname row
+                  if (_editingNickname)
+                    SizedBox(
+                      height: 28,
+                      child: TextField(
+                        controller: _nicknameController,
+                        autofocus: true,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide: BorderSide(
+                              color: const Color(0xFF00C0D1)
+                                  .withValues(alpha: 0.3),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide:
+                                const BorderSide(color: Color(0xFF00C0D1)),
+                          ),
+                        ),
+                        onSubmitted: (value) {
+                          ref
+                              .read(settingsProvider.notifier)
+                              .setNickname(value.trim());
+                          setState(() => _editingNickname = false);
+                        },
+                      ),
+                    )
+                  else
+                    GestureDetector(
+                      onTap: () {
+                        _nicknameController.text = nickname;
+                        setState(() => _editingNickname = true);
+                      },
+                      child: Row(
+                        children: [
+                          Text(
+                            nickname.isEmpty ? 'Без імені' : nickname,
+                            style: TextStyle(
+                              color: Colors.white.withValues(
+                                alpha: nickname.isEmpty ? 0.35 : 0.9,
+                              ),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              fontStyle: nickname.isEmpty
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(
+                            Icons.edit_outlined,
+                            size: 13,
+                            color: Colors.white.withValues(alpha: 0.25),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                  const SizedBox(height: 4),
+
+                  // Auth status line
+                  _buildAuthStatus(authAsync),
+                ],
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 16),
+
+        // Login / Logout button
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: _buildAuthButton(authAsync),
+        ),
+
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _buildAuthStatus(AsyncValue<ClaudeAuthStatus> authAsync) {
+    return authAsync.when(
+      loading: () => Row(
+        children: [
+          SizedBox(
+            width: 10,
+            height: 10,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: Colors.white.withValues(alpha: 0.3),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Перевірка...',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+      error: (_, _) => Row(
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.red.withValues(alpha: 0.6),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Помилка перевірки',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+      data: (status) {
+        if (!status.loggedIn) {
+          return Row(
+            children: [
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Не авторизовано',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.35),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          );
+        }
+        final plan =
+            status.subscriptionType ?? status.authMethod ?? 'Claude';
+        final org = status.orgName;
+        final label = org != null ? '$plan · $org' : plan;
+        return Row(
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFF4ADE80),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 12,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildAuthButton(AsyncValue<ClaudeAuthStatus> authAsync) {
+    return authAsync.when(
+      loading: () => FilledButton(
+        onPressed: null,
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.white.withValues(alpha: 0.05),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+        child: SizedBox(
+          width: 18,
+          height: 18,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Colors.white.withValues(alpha: 0.3),
+          ),
+        ),
+      ),
+      error: (_, _) => OutlinedButton.icon(
+        onPressed: () => ref.read(claudeAuthProvider.notifier).refresh(),
+        icon: const Icon(Icons.refresh, size: 16),
+        label: const Text('Спробувати знову'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFF00C0D1),
+          side: BorderSide(
+            color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      ),
+      data: (status) {
+        if (status.loggedIn) {
+          return OutlinedButton(
+            onPressed: () =>
+                ref.read(claudeAuthProvider.notifier).logout(),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white.withValues(alpha: 0.5),
+              side: BorderSide(
+                color: Colors.white.withValues(alpha: 0.1),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text('Вийти'),
+          );
+        }
+        return FilledButton.icon(
+          onPressed: () =>
+              ref.read(claudeAuthProvider.notifier).login(),
+          icon: const Icon(Icons.login_rounded, size: 16),
+          label: const Text('Увійти через Claude'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF00C0D1),
+            foregroundColor: Colors.black,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -596,6 +936,381 @@ class _DeskHeightControl extends StatelessWidget {
             fontSize: 10,
             fontStyle: FontStyle.italic,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Glitch effect controls ────────────────────────────────────────────────
+
+class _GlitchControls extends StatefulWidget {
+  final bool enabled;
+  final double intensity;
+  final double speed;
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<double> onIntensityChanged;
+  final ValueChanged<double> onSpeedChanged;
+
+  const _GlitchControls({
+    required this.enabled,
+    required this.intensity,
+    required this.speed,
+    required this.onEnabledChanged,
+    required this.onIntensityChanged,
+    required this.onSpeedChanged,
+  });
+
+  @override
+  State<_GlitchControls> createState() => _GlitchControlsState();
+}
+
+class _GlitchControlsState extends State<_GlitchControls>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(vsync: this);
+  final _rng = Random();
+  int _seed = 0;
+  ui.Image? _logoImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLogo();
+  }
+
+  Future<void> _loadLogo() async {
+    final data = await rootBundle.load('assets/logo.png');
+    final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
+    final frame = await codec.getNextFrame();
+    if (mounted) {
+      setState(() => _logoImage = frame.image);
+      _startLoop();
+    }
+  }
+
+  void _startLoop() {
+    if (!mounted || !widget.enabled || _logoImage == null) return;
+    _seed = _rng.nextInt(10000);
+    final baseDur = 400 + _rng.nextInt(801);
+    final dur = (baseDur / widget.speed).round();
+    _ctrl
+      ..duration = Duration(milliseconds: dur)
+      ..forward(from: 0.0).then((_) => _startLoop());
+  }
+
+  @override
+  void didUpdateWidget(covariant _GlitchControls old) {
+    super.didUpdateWidget(old);
+    if (widget.enabled && !old.enabled) {
+      _startLoop();
+    } else if (!widget.enabled && old.enabled) {
+      _ctrl
+        ..stop()
+        ..reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  static String _intensityLabel(double v) {
+    if (v <= 0.03) return 'Мінімальний · Ледь помітні артефакти';
+    if (v <= 0.08) return 'Помірний · Класичний цифровий шум';
+    if (v <= 0.15) return 'Інтенсивний · Виражена піксельна деградація';
+    return 'Максимальний · Повний хаос пікселів';
+  }
+
+  static String _speedLabel(double v) {
+    if (v <= 0.8) return 'Повільний · Плавні переходи';
+    if (v <= 1.5) return 'Стандартний · Збалансована динаміка';
+    if (v <= 2.2) return 'Швидкий · Агресивне мерехтіння';
+    return 'Турбо · Миттєві глітчі';
+  }
+
+  Widget _buildPreview() {
+    const previewSize = 64.0;
+    return Center(
+      child: Container(
+        width: previewSize + 16,
+        height: previewSize + 16,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.4),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: widget.enabled
+                ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+                : Colors.white.withValues(alpha: 0.06),
+          ),
+        ),
+        child: Center(
+          child: _logoImage == null
+              ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white.withValues(alpha: 0.2),
+                  ),
+                )
+              : AnimatedBuilder(
+                  animation: _ctrl,
+                  builder: (context, _) {
+                    final t = _ctrl.value;
+                    final glitching =
+                        widget.enabled && _ctrl.isAnimating && t > 0;
+
+                    if (!glitching) {
+                      return Image.asset(
+                        'assets/logo.png',
+                        width: previewSize,
+                        height: previewSize,
+                        filterQuality: FilterQuality.medium,
+                      );
+                    }
+
+                    final frame = (t * 8).floor();
+                    return SizedBox(
+                      width: previewSize,
+                      height: previewSize,
+                      child: CustomPaint(
+                        size: const Size(previewSize, previewSize),
+                        painter: PixelGlitchPainter(
+                          image: _logoImage!,
+                          seed: _seed + frame,
+                          pixelPercent: widget.intensity,
+                          displaySize: previewSize,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.enabled;
+    final intensity = widget.intensity;
+    final speed = widget.speed;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Live preview
+        _buildPreview(),
+        const SizedBox(height: 16),
+
+        // Enable toggle
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Увімкнено',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 28,
+              child: Switch.adaptive(
+                value: enabled,
+                onChanged: widget.onEnabledChanged,
+                activeTrackColor: const Color(0xFF00C0D1),
+                activeThumbColor: const Color(0xFF00C0D1),
+                inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ],
+        ),
+
+        // Intensity slider
+        const SizedBox(height: 18),
+        Text(
+          'Інтенсивність',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: enabled ? 0.7 : 0.25),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Text(
+              '1%',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
+                fontSize: 10,
+              ),
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderThemeData(
+                  activeTrackColor: enabled
+                      ? const Color(0xFF00C0D1)
+                      : Colors.white.withValues(alpha: 0.12),
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+                  thumbColor: enabled
+                      ? const Color(0xFF00C0D1)
+                      : Colors.white.withValues(alpha: 0.2),
+                  overlayColor:
+                      const Color(0xFF00C0D1).withValues(alpha: 0.12),
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                ),
+                child: Slider(
+                  value: intensity,
+                  min: 0.01,
+                  max: 0.30,
+                  divisions: 29,
+                  onChanged: enabled ? widget.onIntensityChanged : null,
+                ),
+              ),
+            ),
+            Text(
+              '30%',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+        Center(
+          child: Text(
+            '${(intensity * 100).round()}%',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: enabled ? 1.0 : 0.3),
+              fontSize: 20,
+              fontWeight: FontWeight.w300,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: enabled
+                    ? const Color(0xFF00C0D1)
+                    : Colors.white.withValues(alpha: 0.15),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _intensityLabel(intensity),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: enabled ? 0.5 : 0.2),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        // Speed slider
+        const SizedBox(height: 18),
+        Text(
+          'Швидкість',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: enabled ? 0.7 : 0.25),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Text(
+              '0.5×',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
+                fontSize: 10,
+              ),
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderThemeData(
+                  activeTrackColor: enabled
+                      ? const Color(0xFF00C0D1)
+                      : Colors.white.withValues(alpha: 0.12),
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+                  thumbColor: enabled
+                      ? const Color(0xFF00C0D1)
+                      : Colors.white.withValues(alpha: 0.2),
+                  overlayColor:
+                      const Color(0xFF00C0D1).withValues(alpha: 0.12),
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 7),
+                ),
+                child: Slider(
+                  value: speed,
+                  min: 0.5,
+                  max: 3.0,
+                  divisions: 25,
+                  onChanged: enabled ? widget.onSpeedChanged : null,
+                ),
+              ),
+            ),
+            Text(
+              '3.0×',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: enabled ? 0.25 : 0.1),
+                fontSize: 10,
+              ),
+            ),
+          ],
+        ),
+        Center(
+          child: Text(
+            '${speed.toStringAsFixed(1)}×',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: enabled ? 1.0 : 0.3),
+              fontSize: 20,
+              fontWeight: FontWeight.w300,
+              letterSpacing: 1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: enabled
+                    ? const Color(0xFF00C0D1)
+                    : Colors.white.withValues(alpha: 0.15),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _speedLabel(speed),
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: enabled ? 0.5 : 0.2),
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
         ),
       ],
     );

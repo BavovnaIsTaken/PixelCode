@@ -20,6 +20,7 @@ import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
 import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
+import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
 
 /// Main split-screen: Chat (left) + Agent Canvas (right) + Debug Console (bottom)
@@ -131,8 +132,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
   ui.Image? _logoImage;
   bool _logoHovered = false;
 
-  /// Fraction of pixel blocks affected during glitch (0.0–1.0).
-  static const double _glitchPixelPercent = 0.06;
+  /// Reads glitch settings from the provider.
+  AppSettings get _settings => ref.read(settingsProvider);
 
   Future<void> _loadLogoImage() async {
     final data = await rootBundle.load('assets/logo.png');
@@ -143,7 +144,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   void _onLogoHoverChanged(bool hovered) {
     _logoHovered = hovered;
-    if (hovered && !_isShuttingDown) {
+    if (hovered && !_isShuttingDown && _settings.glitchEnabled) {
       _startGlitchLoop();
     } else {
       _glitchCtrl
@@ -154,8 +155,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   void _startGlitchLoop() {
     if (!_logoHovered || _isShuttingDown || !mounted) return;
+    if (!_settings.glitchEnabled) return;
     _glitchSeed = _rng.nextInt(10000);
-    final dur = 400 + _rng.nextInt(801); // 400–1200ms (2× slower)
+    final baseDur = 400 + _rng.nextInt(801); // 400–1200ms
+    final dur = (baseDur / _settings.glitchSpeed).round();
     _glitchCtrl
       ..duration = Duration(milliseconds: dur)
       ..forward(from: 0.0).then((_) {
@@ -565,10 +568,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
                       height: size,
                       child: CustomPaint(
                         size: const Size(size, size),
-                        painter: _PixelGlitchPainter(
+                        painter: PixelGlitchPainter(
                           image: _logoImage!,
                           seed: _glitchSeed + frame,
-                          pixelPercent: _glitchPixelPercent,
+                          pixelPercent: _settings.glitchIntensity,
                           displaySize: size,
                         ),
                       ),
@@ -743,7 +746,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           height: iconSize,
           child: CustomPaint(
             size: const Size(iconSize, iconSize),
-            painter: _PixelGlitchPainter(
+            painter: PixelGlitchPainter(
               image: _logoImage!,
               seed: _glitchSeed + animFrame,
               pixelPercent: 0.18,
@@ -772,7 +775,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           height: iconSize,
           child: CustomPaint(
             size: Size(iconSize, iconSize),
-            painter: _PixelGlitchPainter(
+            painter: PixelGlitchPainter(
               image: _logoImage!,
               seed: seed,
               pixelPercent: 0.55,
@@ -1067,69 +1070,3 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
   }
 }
 
-/// Draws the logo image with random pixel blocks coloured red or green
-/// to simulate a digital glitch effect.
-class _PixelGlitchPainter extends CustomPainter {
-  _PixelGlitchPainter({
-    required this.image,
-    required this.seed,
-    required this.pixelPercent,
-    required this.displaySize,
-  });
-
-  final ui.Image image;
-  final int seed;
-  final double pixelPercent;
-  final double displaySize;
-
-  static const int _blockSize = 1;
-
-  static const _glitchColors = [
-    Color(0xFFFF2020), // red
-    Color(0xFF00FF41), // green
-  ];
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final imgPaint = Paint()..filterQuality = FilterQuality.none;
-    final colorPaint = Paint();
-    final rng = Random(seed);
-
-    final cols = (displaySize / _blockSize).ceil();
-    final rows = (displaySize / _blockSize).ceil();
-    final srcBlockW = image.width / cols;
-    final srcBlockH = image.height / rows;
-
-    canvas.clipRect(Rect.fromLTWH(0, 0, displaySize, displaySize));
-
-    for (int row = 0; row < rows; row++) {
-      for (int col = 0; col < cols; col++) {
-        final glitched = rng.nextDouble() < pixelPercent;
-
-        final dst = Rect.fromLTWH(
-          col * _blockSize.toDouble(),
-          row * _blockSize.toDouble(),
-          _blockSize.toDouble(),
-          _blockSize.toDouble(),
-        );
-
-        if (glitched) {
-          final color = _glitchColors[rng.nextInt(_glitchColors.length)];
-          canvas.drawRect(dst, colorPaint..color = color);
-        } else {
-          final src = Rect.fromLTWH(
-            col * srcBlockW,
-            row * srcBlockH,
-            srcBlockW,
-            srcBlockH,
-          );
-          canvas.drawImageRect(image, src, dst, imgPaint);
-        }
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _PixelGlitchPainter old) =>
-      seed != old.seed || pixelPercent != old.pixelPercent;
-}
