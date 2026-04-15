@@ -130,6 +130,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   late final AnimationController _glitchCtrl = AnimationController(vsync: this);
   int _glitchSeed = 0;
   ui.Image? _logoImage;
+  ByteData? _logoImagePixels;
   bool _logoHovered = false;
 
   /// Reads glitch settings from the provider.
@@ -139,7 +140,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
     final data = await rootBundle.load('assets/logo.png');
     final codec = await ui.instantiateImageCodec(data.buffer.asUint8List());
     final frame = await codec.getNextFrame();
-    if (mounted) setState(() => _logoImage = frame.image);
+    final pixels = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (mounted) {
+      setState(() {
+        _logoImage = frame.image;
+        _logoImagePixels = pixels;
+      });
+    }
   }
 
   void _onLogoHoverChanged(bool hovered) {
@@ -573,6 +580,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                           seed: _glitchSeed + frame,
                           pixelPercent: _settings.glitchIntensity,
                           displaySize: size,
+                          imagePixels: _logoImagePixels,
                         ),
                       ),
                     );
@@ -751,6 +759,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               seed: _glitchSeed + animFrame,
               pixelPercent: 0.18,
               displaySize: iconSize,
+              imagePixels: _logoImagePixels,
             ),
           ),
         ),
@@ -780,6 +789,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               seed: seed,
               pixelPercent: 0.55,
               displaySize: iconSize,
+              imagePixels: _logoImagePixels,
             ),
           ),
         ),
