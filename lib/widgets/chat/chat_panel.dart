@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
+import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,10 +51,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   late final FocusNode _focusNode;
   bool _autoScroll = true;
 
-  String _lastAgentId = '';
-  final List<Uint8List> _attachedImages = [];
+  final List<Uint8List?> _attachedImages = []; // null = loading
   bool _applyingRemoteUpdate = false;
+  bool _applyingRemoteImages = false;
   final _imagePicker = ImagePicker();
+  Timer? _skeletonTimer;
+  bool _showSkeleton = false;
 
   @override
   void initState() {
@@ -77,14 +82,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         return KeyEventResult.ignored;
       },
     );
+    _focusNode.addListener(_onFocusChange);
     _controller.addListener(_onInputChanged);
     _scrollController.addListener(_onScroll);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
-    });
   }
+
+  void _onFocusChange() => setState(() {});
 
   void _onInputChanged() {
     if (_applyingRemoteUpdate) return;
@@ -93,6 +96,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   @override
   void dispose() {
+    _skeletonTimer?.cancel();
+    _focusNode.removeListener(_onFocusChange);
     _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
     _controller.dispose();
@@ -104,7 +109,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    final atBottom = pos.pixels >= pos.maxScrollExtent - 40;
+    // With reverse: true, pixels == 0 means bottom (newest messages).
+    final atBottom = pos.pixels <= 40;
     if (_autoScroll && !atBottom) {
       setState(() => _autoScroll = false);
     } else if (!_autoScroll && atBottom) {
@@ -114,14 +120,15 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   void _send() {
     final text = _controller.text.trim();
-    if (text.isEmpty && _attachedImages.isEmpty) return;
-    ref
-        .read(chatProvider.notifier)
-        .sendMessage(text, images: List.of(_attachedImages));
+    final loadedImages = _attachedImages.whereType<Uint8List>().toList();
+    if (text.isEmpty && loadedImages.isEmpty) return;
+    ref.read(chatProvider.notifier).sendMessage(text, images: loadedImages);
     _controller.clear();
     setState(() => _attachedImages.clear());
     ref.read(wsServiceProvider).sendInputText('');
+    ref.read(wsServiceProvider).sendInputImages([]);
     ref.read(remoteInputTextProvider.notifier).clear();
+    ref.read(remoteInputImagesProvider.notifier).clear();
     _focusNode.requestFocus();
     setState(() => _autoScroll = true);
     _scrollToBottom();
@@ -187,24 +194,49 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     );
     final files = await openFiles(acceptedTypeGroups: [typeGroup]);
     if (files.isEmpty) return;
-    final bytes = await Future.wait(files.map((f) => f.readAsBytes()));
-    setState(() => _attachedImages.addAll(bytes));
+    // Add loading placeholders immediately
+    final startIndex = _attachedImages.length;
+    setState(() {
+      for (var i = 0; i < files.length; i++) {
+        _attachedImages.add(null);
+      }
+    });
+    // Load each file and replace its placeholder
+    for (var i = 0; i < files.length; i++) {
+      final bytes = await files[i].readAsBytes();
+      if (!mounted) return;
+      setState(() => _attachedImages[startIndex + i] = bytes);
+    }
+    _syncImages();
   }
 
   Future<void> _pickImagesFromGallery() async {
     final pickedFiles = await _imagePicker.pickMultiImage();
     if (pickedFiles.isEmpty) return;
-    final bytes =
-        await Future.wait(pickedFiles.map((f) => f.readAsBytes()));
-    setState(() => _attachedImages.addAll(bytes));
+    final startIndex = _attachedImages.length;
+    setState(() {
+      for (var i = 0; i < pickedFiles.length; i++) {
+        _attachedImages.add(null);
+      }
+    });
+    for (var i = 0; i < pickedFiles.length; i++) {
+      final bytes = await pickedFiles[i].readAsBytes();
+      if (!mounted) return;
+      setState(() => _attachedImages[startIndex + i] = bytes);
+    }
+    _syncImages();
   }
 
   Future<void> _pasteImage() async {
     try {
       final image = await _imagePicker.pickImage(source: ImageSource.camera);
       if (image == null) return;
+      final placeholderIndex = _attachedImages.length;
+      setState(() => _attachedImages.add(null));
       final bytes = await image.readAsBytes();
-      setState(() => _attachedImages.add(bytes));
+      if (!mounted) return;
+      setState(() => _attachedImages[placeholderIndex] = bytes);
+      _syncImages();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -221,6 +253,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     if (imageBytes != null) {
       if (!mounted) return;
       setState(() => _attachedImages.add(imageBytes));
+      _syncImages();
       return;
     }
     // Fall back to plain-text paste
@@ -238,53 +271,297 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     );
   }
 
-  /// Paste image from clipboard via the toolbar button.
-  Future<void> _pasteFromClipboard() async {
-    final imageBytes = await ClipboardService.getImageFromClipboard();
-    if (imageBytes != null) {
-      if (!mounted) return;
-      setState(() => _attachedImages.add(imageBytes));
-    } else {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Буфер не містить зображення')),
-      );
-    }
-  }
+
 
   void _removeImage(int index) {
     setState(() => _attachedImages.removeAt(index));
+    _syncImages();
+  }
+
+  /// Send current loaded images to other clients.
+  void _syncImages() {
+    if (_applyingRemoteImages) return;
+    final base64s = _attachedImages
+        .whereType<Uint8List>()
+        .map((b) => base64Encode(b))
+        .toList();
+    ref.read(wsServiceProvider).sendInputImages(base64s);
   }
 
   void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      // With reverse: true, position 0 is the bottom (newest messages).
+      _scrollController.jumpTo(0);
     });
   }
 
+  void _showAgentPicker() {
+    final agents = ref.read(agentsProvider);
+    final currentAgent = ref.read(selectedAgentProvider);
+    final agentList = agents.entries
+        .where((e) => e.key != currentAgent)
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: const Color(0xFF1A1A1F),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: 0.1),
+          ),
+        ),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400, maxHeight: 500),
+          padding: const EdgeInsets.all(0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.people_outline,
+                      color: const Color(0xFF00C0D1),
+                      size: 24,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Вибрати колегу',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Agent list
+              Flexible(
+                child: agentList.isEmpty
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Text(
+                            'Немає інших колег',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.5),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: agentList.length,
+                        separatorBuilder: (context, index) => Divider(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          height: 1,
+                          indent: 16,
+                          endIndent: 16,
+                        ),
+                        itemBuilder: (context, index) {
+                          final agentEntry = agentList[index];
+                          final agentId = agentEntry.key;
+                          final agentState = agentEntry.value;
+                          final nickname = _agentNickname(agentId);
+
+                          return Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: () {
+                                ref.read(selectedAgentProvider.notifier).state = agentId;
+                                Navigator.pop(context);
+                              },
+                              hoverColor: Colors.white.withValues(alpha: 0.05),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 12,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      width: 40,
+                                      height: 40,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: _getAgentGradient(agentId),
+                                        border: Border.all(
+                                          color: _getAgentColor(agentId),
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        _getAgentIcon(agentId),
+                                        color: Colors.white,
+                                        size: 20,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            nickname,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Text(
+                                            agentState.info.role,
+                                            style: TextStyle(
+                                              color: Colors.white.withValues(alpha: 0.5),
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: agentState.isActive
+                                            ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
+                                            : Colors.white.withValues(alpha: 0.05),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: agentState.isActive
+                                              ? const Color(0xFF00C0D1).withValues(alpha: 0.3)
+                                              : Colors.white.withValues(alpha: 0.1),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        agentState.isActive ? 'Активен' : 'Вільен',
+                                        style: TextStyle(
+                                          color: agentState.isActive
+                                              ? const Color(0xFF00C0D1)
+                                              : Colors.white.withValues(alpha: 0.5),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  LinearGradient _getAgentGradient(String agentId) => switch (agentId) {
+        'manager' => const LinearGradient(
+            colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
+          ),
+        'tech-lead' => const LinearGradient(
+            colors: [Color(0xFFFF6B6B), Color(0xFFEE5A52)],
+          ),
+        'coder' => const LinearGradient(
+            colors: [Color(0xFF4ECDC4), Color(0xFF44A5A5)],
+          ),
+        'reviewer' => const LinearGradient(
+            colors: [Color(0xFFFFA500), Color(0xFFFF8C00)],
+          ),
+        'tester' => const LinearGradient(
+            colors: [Color(0xFFFF6B9D), Color(0xFFC44569)],
+          ),
+        'security' => const LinearGradient(
+            colors: [Color(0xFF8E44AD), Color(0xFF6C3483)],
+          ),
+        'ui-ux-designer' => const LinearGradient(
+            colors: [Color(0xFF3498DB), Color(0xFF2980B9)],
+          ),
+        _ => const LinearGradient(
+            colors: [Color(0xFF95A5A6), Color(0xFF7F8C8D)],
+          ),
+      };
+
+  Color _getAgentColor(String agentId) => switch (agentId) {
+        'manager' => const Color(0xFF00C0D1),
+        'tech-lead' => const Color(0xFFFF6B6B),
+        'coder' => const Color(0xFF4ECDC4),
+        'reviewer' => const Color(0xFFFFA500),
+        'tester' => const Color(0xFFFF6B9D),
+        'security' => const Color(0xFF8E44AD),
+        'ui-ux-designer' => const Color(0xFF3498DB),
+        _ => const Color(0xFF95A5A6),
+      };
+
+  IconData _getAgentIcon(String agentId) => switch (agentId) {
+        'manager' => Icons.sentiment_very_satisfied,
+        'tech-lead' => Icons.architecture,
+        'coder' => Icons.code,
+        'reviewer' => Icons.fact_check,
+        'tester' => Icons.bug_report,
+        'security' => Icons.security,
+        'ui-ux-designer' => Icons.palette,
+        _ => Icons.person,
+      };
+
   @override
   Widget build(BuildContext context) {
-    final currentAgent = ref.watch(selectedAgentProvider);
+    ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
+    final syncState = ref.watch(chatSyncStateProvider);
 
-    if (_lastAgentId != currentAgent) {
-      _lastAgentId = currentAgent;
+    ref.listen(selectedAgentProvider, (prev, next) {
       _autoScroll = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
-    }
+      _scrollToBottom();
+    });
+
+    ref.listen(chatSyncStateProvider, (prev, next) {
+      _skeletonTimer?.cancel();
+      if (next == ChatSyncState.syncing) {
+        _showSkeleton = false;
+        _skeletonTimer = Timer(const Duration(milliseconds: 200), () {
+          if (mounted) setState(() => _showSkeleton = true);
+        });
+      } else {
+        setState(() => _showSkeleton = false);
+        _autoScroll = true;
+        _scrollToBottom();
+      }
+    });
 
     ref.listen(chatProvider, (prev, next) {
-      if (_autoScroll) _scrollToBottom();
+      if (_autoScroll && syncState == ChatSyncState.ready) _scrollToBottom();
+    });
+
+    ref.listen(remoteInputImagesProvider, (prev, next) {
+      _applyingRemoteImages = true;
+      setState(() {
+        _attachedImages
+          ..clear()
+          ..addAll(next.map((b64) => base64Decode(b64)));
+      });
+      _applyingRemoteImages = false;
     });
 
     ref.listen(remoteInputTextProvider, (prev, next) {
@@ -297,7 +574,41 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
       _applyingRemoteUpdate = false;
     });
 
-    return Container(
+    return DropRegion(
+      formats: Formats.standardFormats,
+      hitTestBehavior: HitTestBehavior.opaque,
+      onDropOver: (event) {
+        if (event.session.items.any((item) =>
+            item.canProvide(Formats.png) ||
+            item.canProvide(Formats.jpeg) ||
+            item.canProvide(Formats.gif) ||
+            item.canProvide(Formats.tiff) ||
+            item.canProvide(Formats.webp))) {
+          return DropOperation.copy;
+        }
+        return DropOperation.none;
+      },
+      onPerformDrop: (event) async {
+        for (final item in event.session.items) {
+          final reader = item.dataReader;
+          if (reader == null) continue;
+          for (final format in [Formats.png, Formats.jpeg, Formats.tiff, Formats.gif, Formats.webp]) {
+            if (item.canProvide(format)) {
+              reader.getFile(format, (file) async {
+                final allBytes = <int>[];
+                await for (final chunk in file.getStream()) {
+                  allBytes.addAll(chunk);
+                }
+                if (!mounted) return;
+                setState(() => _attachedImages.add(Uint8List.fromList(allBytes)));
+                _syncImages();
+              });
+              break;
+            }
+          }
+        }
+      },
+      child: Container(
       color: const Color(0xFF0E0E11),
       child: Column(
         children: [
@@ -313,14 +624,21 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             ),
             child: Row(
               children: [
-                const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  _agentNickname(ref.watch(selectedAgentProvider)),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                GestureDetector(
+                  onTap: _showAgentPicker,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        _agentNickname(ref.watch(selectedAgentProvider)),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const Spacer(),
@@ -330,58 +648,67 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
           // Messages
           Expanded(
-            child: messages.isEmpty
-                ? _buildEmptyState()
-                : Stack(
-                    children: [
-                      ListView.builder(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.all(16),
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) =>
-                            _ChatBubble(message: messages[index]),
-                      ),
-                      if (!_autoScroll)
-                        Positioned(
-                          bottom: 12,
-                          right: 12,
-                          child: GestureDetector(
-                            onTap: () {
-                              setState(() => _autoScroll = true);
-                              _scrollToBottom();
-                            },
-                            child: Container(
-                              width: 36,
-                              height: 36,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF1E1F27),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white.withValues(alpha: 0.1),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.4),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
+            child: syncState == ChatSyncState.syncing
+                ? (_showSkeleton
+                    ? const _PixelChatSkeleton()
+                    : const SizedBox.shrink())
+                : messages.isEmpty
+                    ? _buildEmptyState()
+                    : Stack(
+                        children: [
+                          ListView.builder(
+                            reverse: true,
+                            controller: _scrollController,
+                            padding: const EdgeInsets.all(16),
+                            itemCount: messages.length,
+                            itemBuilder: (context, index) =>
+                                _ChatBubble(message: messages[messages.length - 1 - index]),
+                          ),
+                          if (!_autoScroll)
+                            Positioned(
+                              bottom: 12,
+                              right: 12,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () {
+                                  setState(() => _autoScroll = true);
+                                  if (_scrollController.hasClients) {
+                                    _scrollController.jumpTo(0);
+                                  }
+                                },
+                                child: Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1E1F27),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.1),
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(alpha: 0.4),
+                                        blurRadius: 8,
+                                        offset: const Offset(0, 2),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                              child: const Icon(
-                                Icons.keyboard_arrow_down_rounded,
-                                color: Color(0xFF00C0D1),
-                                size: 22,
+                                  child: const Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    color: Color(0xFF00C0D1),
+                                    size: 22,
+                                  ),
+                                ),
                               ),
                             ),
-                          ),
-                        ),
-                    ],
-                  ),
+                        ],
+                      ),
           ),
           // Input
           _buildInput(),
         ],
       ),
+    ),
     );
   }
 
@@ -470,37 +797,62 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                   itemCount: _attachedImages.length,
                   separatorBuilder: (_, _) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
+                    final imageBytes = _attachedImages[index];
+                    final isLoading = imageBytes == null;
                     return Stack(
                       children: [
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
-                          child: Image.memory(
-                            _attachedImages[index],
-                            width: 80,
-                            height: 80,
-                            fit: BoxFit.cover,
-                          ),
+                          child: isLoading
+                              ? Container(
+                                  width: 80,
+                                  height: 80,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.06),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.white.withValues(alpha: 0.1),
+                                    ),
+                                  ),
+                                  child: const Center(
+                                    child: SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFF00C0D1),
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : Image.memory(
+                                  imageBytes,
+                                  width: 80,
+                                  height: 80,
+                                  fit: BoxFit.cover,
+                                ),
                         ),
-                        Positioned(
-                          top: 2,
-                          right: 2,
-                          child: GestureDetector(
-                            onTap: () => _removeImage(index),
-                            child: Container(
-                              width: 18,
-                              height: 18,
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.7),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.close,
-                                size: 12,
-                                color: Colors.white,
+                        if (!isLoading)
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: GestureDetector(
+                              onTap: () => _removeImage(index),
+                              child: Container(
+                                width: 18,
+                                height: 18,
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.7),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.close,
+                                  size: 12,
+                                  color: Colors.white,
+                                ),
                               ),
                             ),
                           ),
-                        ),
                       ],
                     );
                   },
@@ -512,78 +864,66 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                // Attach image from file / gallery
-                Tooltip(
-                  message: 'Додати зображення',
-                  child: IconButton(
-                    onPressed: _pickImages,
-                    icon: const Icon(Icons.attach_file_rounded),
-                    color: Colors.white.withValues(alpha: 0.4),
-                    iconSize: 20,
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                  ),
-                ),
-                // Paste image from clipboard
-                Tooltip(
-                  message: 'Вставити зображення з буфера (Cmd+V)',
-                  child: IconButton(
-                    onPressed: _pasteFromClipboard,
-                    icon: const Icon(Icons.content_paste_rounded),
-                    color: Colors.white.withValues(alpha: 0.4),
-                    iconSize: 20,
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                  ),
-                ),
-                const SizedBox(width: 4),
+                // Unified input container: action buttons + text field share one frame
                 Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    autofocus: MediaQuery.of(context).size.width >= 600,
-                    maxLines: 4,
-                    minLines: 1,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                    decoration: InputDecoration(
-                      hintText:
-                          'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
-                      hintStyle: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.25),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0E0E11),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _focusNode.hasFocus
+                            ? const Color(0xFF00C0D1)
+                            : Colors.white.withValues(alpha: 0.1),
+                        width: 1,
                       ),
-                      filled: true,
-                      fillColor: const Color(0xFF0E0E11),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1),
+                    ),
+                    child: IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Row(
+                              children: [
+                                _InputIconButton(
+                                  icon: Icons.attach_file_rounded,
+                                  tooltip: 'Додати зображення',
+                                  onPressed: _pickImages,
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: TextField(
+                            controller: _controller,
+                            focusNode: _focusNode,
+                            autofocus: MediaQuery.of(context).size.shortestSide >= 600,
+                            maxLines: 4,
+                            minLines: 1,
+                            style: const TextStyle(color: Colors.white, fontSize: 14),
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
+                              hintStyle: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.25),
+                              ),
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 12),
+                            ),
+                          ),
                         ),
+                        ],
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF00C0D1),
-                          width: 1,
-                        ),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(
-                  onPressed: _send,
-                  icon: const Icon(Icons.send_rounded),
-                  color: const Color(0xFF00C0D1),
-                  iconSize: 20,
-                ),
+                // Fixed-size filled send button
+                _SendButton(onPressed: _send),
               ],
             ),
           ),
@@ -592,6 +932,77 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     );
   }
 }
+
+// ─── Input Icon Button ────────────────────────────────────────────────────────
+
+class _InputIconButton extends StatelessWidget {
+  const _InputIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Icon(
+            icon,
+            size: 18,
+            color: Colors.white.withValues(alpha: 0.4),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Send Button ──────────────────────────────────────────────────────────────
+
+class _SendButton extends StatelessWidget {
+  const _SendButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        width: 44,
+        height: 44,
+        decoration: BoxDecoration(
+          color: const Color(0xFF00C0D1),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF00C0D1).withValues(alpha: 0.35),
+              blurRadius: 8,
+              spreadRadius: 0,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: const Icon(
+          Icons.send_rounded,
+          color: Colors.black,
+          size: 20,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Chat Bubble ──────────────────────────────────────────────────────────────
 
 class _ChatBubble extends ConsumerWidget {
   final ChatMessage message;
@@ -949,6 +1360,119 @@ class _BoatSwitchState extends State<_BoatSwitch>
           );
         },
       ),
+    );
+  }
+}
+
+// ─── Pixel Chat Skeleton ────────────────────────────────────────────────────
+
+class _PixelChatSkeleton extends StatefulWidget {
+  const _PixelChatSkeleton();
+
+  @override
+  State<_PixelChatSkeleton> createState() => _PixelChatSkeletonState();
+}
+
+class _PixelChatSkeletonState extends State<_PixelChatSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        // Step-wise pulse: snaps between 2 opacity levels like pixel art
+        final raw = (math.sin(_ctrl.value * 2 * math.pi) + 1) / 2;
+        final pulse = raw > 0.5 ? 0.10 : 0.05;
+
+        return Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              _skeletonRow(isUser: false, widths: [120, 80, 60], pulse: pulse),
+              const SizedBox(height: 12),
+              _skeletonRow(isUser: true, widths: [90], pulse: pulse),
+              const SizedBox(height: 12),
+              _skeletonRow(
+                  isUser: false, widths: [140, 100, 70, 50], pulse: pulse),
+              const SizedBox(height: 12),
+              _skeletonRow(isUser: true, widths: [70, 40], pulse: pulse),
+              const SizedBox(height: 12),
+              _skeletonRow(isUser: false, widths: [110, 90], pulse: pulse),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _skeletonRow({
+    required bool isUser,
+    required List<double> widths,
+    required double pulse,
+  }) {
+    return Row(
+      mainAxisAlignment:
+          isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!isUser) ...[
+          // Avatar placeholder
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white.withValues(alpha: pulse),
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: pulse * 0.6),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: pulse * 0.8),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < widths.length; i++) ...[
+                if (i > 0) const SizedBox(height: 6),
+                Container(
+                  width: widths[i],
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: pulse * 1.2),
+                    borderRadius: BorderRadius.circular(1),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        if (isUser) const SizedBox(width: 36),
+      ],
     );
   }
 }

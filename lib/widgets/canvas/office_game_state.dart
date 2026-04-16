@@ -38,6 +38,34 @@ const double kSeatRestMax = 90.0;
 const double kSittingOffsetPx = 6.0;
 const double kCharZSortOffset = 0.5;
 
+// Cat AI
+const double kCatWalkSpeed = 32.0;
+const double kCatWalkFrameDuration = 0.12;
+const double kCatIdlePauseMin = 2.0;
+const double kCatIdlePauseMax = 8.0;
+const double kCatSleepMin = 15.0;
+const double kCatSleepMax = 40.0;
+const double kCatSleepOnDeskChance = 0.3;
+
+// Coffee machine
+const int kCoffeeMachineCol = 13;
+const int kCoffeeMachineRow = 2;
+const double kCoffeeBrewDuration = 6.0;
+
+// Skateboard
+const double kSkateboardSpeed = 96.0;
+const double kSkateboardChance = 0.2;
+
+// Plant easter egg
+const double kPlantAnimDuration = 3.0;
+const double kPlantBounceSpeed = 8.0;
+
+// Plant positions (corners)
+const kPlantPositions = <(int, int)>[
+  (2, 1), (17, 1),
+  (2, 11), (17, 11),
+];
+
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
 enum TileType { wall, floor }
@@ -45,6 +73,8 @@ enum TileType { wall, floor }
 enum CharDirection { down, left, right, up }
 
 enum CharState { idle, walk, typing }
+
+enum CatAction { idle, walk, sleep }
 
 // ─── Tile position ──────────────────────────────────────────────────────────
 
@@ -157,6 +187,7 @@ class GameCharacter {
   AgentStatus displayStatus;
   double seatTimer;
   DeskStation? seat;
+  bool isOnSkateboard;
 
   GameCharacter({
     required this.agentId,
@@ -169,6 +200,7 @@ class GameCharacter {
     int? tileRow,
     this.isActive = false,
     this.seatTimer = 0,
+    this.isOnSkateboard = false,
   })  : paletteIndex = agentPaletteIndex[agentId] ?? 0,
         dir = dir ?? seat?.facingDir ?? CharDirection.down,
         x = x ??
@@ -192,6 +224,42 @@ class GameCharacter {
         isHired = true,
         hardware = HardwareTier.oldLaptop,
         displayStatus = AgentStatus.idle;
+}
+
+// ─── Office cat ────────────────────────────────────────────────────────────
+
+class OfficeCat {
+  CatAction state;
+  CharDirection dir;
+  double x, y;
+  int tileCol, tileRow;
+  List<TilePos> path;
+  double moveProgress;
+  int frame;
+  double frameTimer;
+  double stateTimer;
+  int wanderCount;
+  String? sleepDeskAgent;
+
+  OfficeCat({int startCol = 12, int startRow = 5})
+      : state = CatAction.idle,
+        dir = CharDirection.down,
+        x = startCol * kTileSize + kTileSize / 2,
+        y = startRow * kTileSize + kTileSize / 2,
+        tileCol = startCol,
+        tileRow = startRow,
+        path = [],
+        moveProgress = 0,
+        frame = 0,
+        frameTimer = 0,
+        stateTimer = _randomRange(kCatIdlePauseMin, kCatIdlePauseMax),
+        wanderCount = 0;
+}
+
+// ─── Plant easter egg state ────────────────────────────────────────────────
+
+class PlantEasterEgg {
+  final Map<int, double> activeTimers = {};
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
@@ -281,12 +349,17 @@ class OfficeGameState {
   late final Set<String> blockedTiles;
   late final List<TilePos> walkableTiles;
   final Map<String, GameCharacter> characters = {};
+  late final OfficeCat cat;
+  final PlantEasterEgg plantEasterEgg = PlantEasterEgg();
+  bool coffeeMachineBrewing = false;
+  double _coffeeBrewTimer = 0;
 
   OfficeGameState() {
     _buildTileMap();
     _buildBlockedTiles();
     _buildWalkableTiles();
     _initCharacters();
+    cat = OfficeCat();
   }
 
   void _buildTileMap() {
@@ -309,6 +382,7 @@ class OfficeGameState {
       blockedTiles.add('${station.deskCol},${station.deskRow}');
       blockedTiles.add('${station.seatCol},${station.seatRow}');
     }
+    blockedTiles.add('$kCoffeeMachineCol,$kCoffeeMachineRow');
   }
 
   void _buildWalkableTiles() {
@@ -343,6 +417,43 @@ class OfficeGameState {
     }
   }
 
+  /// Serialize current character positions for cross-device sync.
+  Map<String, Map<String, dynamic>> serializePositions() {
+    return {
+      for (final ch in characters.values)
+        if (ch.isHired)
+          ch.agentId: {
+            'col': ch.tileCol,
+            'row': ch.tileRow,
+            'state': ch.state.name,
+            'dir': ch.dir.name,
+          },
+    };
+  }
+
+  /// Apply remote character positions received from another device.
+  /// Only moves idle/wandering characters — active (typing) characters
+  /// are driven by agent_status and left untouched.
+  void applyRemotePositions(
+    Map<String, ({int col, int row, String state, String dir})> remote,
+  ) {
+    for (final entry in remote.entries) {
+      final ch = characters[entry.key];
+      if (ch == null || !ch.isHired || ch.isActive) continue;
+      final r = entry.value;
+      if (ch.tileCol == r.col && ch.tileRow == r.row) continue;
+      // Pathfind to the remote tile so the character walks there naturally
+      final path = _findPathForCharacter(ch, r.col, r.row);
+      if (path.isNotEmpty) {
+        ch.path = path;
+        ch.moveProgress = 0;
+        ch.state = CharState.walk;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+      }
+    }
+  }
+
   /// Sync agent states from the provider into game characters.
   void syncAgents(Map<String, AgentState> agentStates) {
     for (final station in kStations) {
@@ -370,6 +481,7 @@ class OfficeGameState {
   }
 
   void _activateCharacter(GameCharacter ch) {
+    ch.isOnSkateboard = false;
     if (ch.seat == null) {
       ch.state = CharState.typing;
       ch.frame = 0;
@@ -425,6 +537,9 @@ class OfficeGameState {
       if (!ch.isHired) continue;
       _updateCharacter(ch, dt);
     }
+    _updateCat(dt);
+    _updatePlants(dt);
+    _updateCoffeeMachine(dt);
   }
 
   void _updateCharacter(GameCharacter ch, double dt) {
@@ -485,6 +600,7 @@ class OfficeGameState {
               ch.frame = 0;
               ch.frameTimer = 0;
               ch.wanderCount++;
+              ch.isOnSkateboard = _rng.nextDouble() < kSkateboardChance;
             }
           }
           ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
@@ -507,7 +623,8 @@ class OfficeGameState {
         ch.dir = _directionBetween(
           ch.tileCol, ch.tileRow, nextTile.col, nextTile.row,
         );
-        ch.moveProgress += (kWalkSpeedPxPerSec / kTileSize) * dt;
+        final walkSpeed = ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec;
+        ch.moveProgress += (walkSpeed / kTileSize) * dt;
 
         final fromX = ch.tileCol * kTileSize + kTileSize / 2;
         final fromY = ch.tileRow * kTileSize + kTileSize / 2;
@@ -546,6 +663,7 @@ class OfficeGameState {
   }
 
   void _onPathComplete(GameCharacter ch) {
+    ch.isOnSkateboard = false;
     if (ch.isActive) {
       if (ch.seat != null &&
           ch.tileCol == ch.seat!.seatCol &&
@@ -575,5 +693,172 @@ class OfficeGameState {
     }
     ch.frame = 0;
     ch.frameTimer = 0;
+  }
+
+  // ─── Cat AI ──────────────────────────────────────────────────────────────
+
+  void _updateCat(double dt) {
+    final c = cat;
+    c.frameTimer += dt;
+
+    switch (c.state) {
+      case CatAction.idle:
+        c.stateTimer -= dt;
+        if (c.stateTimer <= 0) {
+          // Decide: sleep on a desk or wander?
+          if (c.wanderCount > 2 || _rng.nextDouble() < kCatSleepOnDeskChance) {
+            _catGoToDesk();
+          } else {
+            _catWander();
+          }
+        }
+
+      case CatAction.walk:
+        if (c.frameTimer >= kCatWalkFrameDuration) {
+          c.frameTimer -= kCatWalkFrameDuration;
+          c.frame = (c.frame + 1) % 4;
+        }
+        if (c.path.isEmpty) {
+          _catSnapToTile();
+          _catOnPathComplete();
+          break;
+        }
+        final nextTile = c.path.first;
+        c.dir = _directionBetween(c.tileCol, c.tileRow, nextTile.col, nextTile.row);
+        c.moveProgress += (kCatWalkSpeed / kTileSize) * dt;
+        final fromX = c.tileCol * kTileSize + kTileSize / 2;
+        final fromY = c.tileRow * kTileSize + kTileSize / 2;
+        final toX = nextTile.col * kTileSize + kTileSize / 2;
+        final toY = nextTile.row * kTileSize + kTileSize / 2;
+        final t = c.moveProgress.clamp(0.0, 1.0);
+        c.x = fromX + (toX - fromX) * t;
+        c.y = fromY + (toY - fromY) * t;
+        if (c.moveProgress >= 1.0) {
+          c.tileCol = nextTile.col;
+          c.tileRow = nextTile.row;
+          c.x = toX;
+          c.y = toY;
+          c.path.removeAt(0);
+          c.moveProgress = 0;
+        }
+
+      case CatAction.sleep:
+        c.stateTimer -= dt;
+        if (c.stateTimer <= 0) {
+          c.sleepDeskAgent = null;
+          c.state = CatAction.idle;
+          c.stateTimer = _randomRange(kCatIdlePauseMin, kCatIdlePauseMax);
+          c.wanderCount = 0;
+          // Snap back to the walkable tile (above the desk)
+          _catSnapToTile();
+        }
+    }
+  }
+
+  void _catSnapToTile() {
+    cat.x = cat.tileCol * kTileSize + kTileSize / 2;
+    cat.y = cat.tileRow * kTileSize + kTileSize / 2;
+  }
+
+  void _catWander() {
+    if (walkableTiles.isEmpty) return;
+    final target = walkableTiles[_rng.nextInt(walkableTiles.length)];
+    final path = _findPath(cat.tileCol, cat.tileRow, target.col, target.row, tileMap, blockedTiles);
+    if (path.isNotEmpty) {
+      cat.path = path;
+      cat.moveProgress = 0;
+      cat.state = CatAction.walk;
+      cat.frame = 0;
+      cat.frameTimer = 0;
+      cat.sleepDeskAgent = null;
+      cat.wanderCount++;
+    } else {
+      cat.stateTimer = _randomRange(kCatIdlePauseMin, kCatIdlePauseMax);
+    }
+  }
+
+  void _catGoToDesk() {
+    // Pick a random hired agent's desk
+    final hiredStations = kStations.where((s) {
+      final ch = characters[s.agentId];
+      return ch != null && ch.isHired;
+    }).toList();
+    if (hiredStations.isEmpty) {
+      _catWander();
+      return;
+    }
+    final station = hiredStations[_rng.nextInt(hiredStations.length)];
+    // Walk to tile above the desk (deskRow - 1)
+    final targetRow = station.deskRow - 1;
+    final targetCol = station.deskCol;
+    final path = _findPath(cat.tileCol, cat.tileRow, targetCol, targetRow, tileMap, blockedTiles);
+    if (path.isNotEmpty) {
+      cat.path = path;
+      cat.moveProgress = 0;
+      cat.state = CatAction.walk;
+      cat.frame = 0;
+      cat.frameTimer = 0;
+      cat.sleepDeskAgent = station.agentId;
+    } else {
+      _catWander();
+    }
+  }
+
+  void _catOnPathComplete() {
+    if (cat.sleepDeskAgent != null) {
+      // Jump onto desk to sleep
+      final station = kStations.firstWhere((s) => s.agentId == cat.sleepDeskAgent);
+      cat.state = CatAction.sleep;
+      // Visual position on the desk surface
+      cat.x = station.deskCol * kTileSize + kTileSize / 2;
+      cat.y = station.deskRow * kTileSize + kTileSize / 2;
+      cat.dir = CharDirection.down;
+      cat.frame = 0;
+      cat.frameTimer = 0;
+      cat.stateTimer = _randomRange(kCatSleepMin, kCatSleepMax);
+    } else {
+      cat.state = CatAction.idle;
+      cat.stateTimer = _randomRange(kCatIdlePauseMin, kCatIdlePauseMax);
+    }
+  }
+
+  // ─── Plant easter egg ────────────────────────────────────────────────────
+
+  void _updatePlants(double dt) {
+    final expired = <int>[];
+    for (final entry in plantEasterEgg.activeTimers.entries) {
+      plantEasterEgg.activeTimers[entry.key] = entry.value - dt;
+      if (entry.value - dt <= 0) expired.add(entry.key);
+    }
+    for (final k in expired) {
+      plantEasterEgg.activeTimers.remove(k);
+    }
+  }
+
+  void activatePlant(int index) {
+    plantEasterEgg.activeTimers[index] = kPlantAnimDuration;
+  }
+
+  // ─── Coffee machine ─────────────────────────────────────────────────────
+
+  void _updateCoffeeMachine(double dt) {
+    if (coffeeMachineBrewing) {
+      _coffeeBrewTimer -= dt;
+      if (_coffeeBrewTimer <= 0) {
+        coffeeMachineBrewing = false;
+      }
+      return;
+    }
+    // Trigger brewing when a character walks adjacent to the machine
+    for (final ch in characters.values) {
+      if (!ch.isHired || ch.state != CharState.walk) continue;
+      final dc = (ch.tileCol - kCoffeeMachineCol).abs();
+      final dr = (ch.tileRow - kCoffeeMachineRow).abs();
+      if (dc + dr == 1) {
+        coffeeMachineBrewing = true;
+        _coffeeBrewTimer = kCoffeeBrewDuration;
+        break;
+      }
+    }
   }
 }

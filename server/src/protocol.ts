@@ -8,7 +8,7 @@
 // ─── Client → Server ────────────────────────────────────────────────────────
 
 export type ClientMessage =
-  | { type: "send_message"; content: string; agentId: string }
+  | { type: "send_message"; content: string; agentId: string; images?: string[] }
   | { type: "new_chat" }
   | { type: "resume_session"; sessionId: string }
   | { type: "clear_sessions" }
@@ -31,6 +31,7 @@ export type ClientMessage =
       hiredAgents: string[];
       agentHardware: Record<string, number>; // HardwareTier enum index
       agentSkills: Record<string, Record<string, number>>; // skillType → level (1-10)
+      fullState?: string; // JSON-encoded full GameState for cross-device sync
     }
   // Agent traits
   | { type: "get_traits" }
@@ -45,8 +46,15 @@ export type ClientMessage =
   | { type: "remove_lesson"; lessonId: string }
   // Live input sync
   | { type: "input_text"; text: string }
+  | { type: "input_images"; images: string[] }
+  // Character position sync
+  | { type: "sync_positions"; positions: Record<string, { col: number; row: number; state: string; dir: string }> }
   // Permissions bypass toggle
-  | { type: "set_bypass_permissions"; enabled: boolean };
+  | { type: "set_bypass_permissions"; enabled: boolean }
+  // iOS OTA deploy
+  | { type: "ios_deploy_check" }
+  | { type: "ios_deploy_start" }
+  | { type: "ios_deploy_cancel" };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -114,6 +122,7 @@ export type ServerMessage =
         text: string;
         agentId: string;
         timestamp: string;
+        images?: string[];
       }>;
     }
   | {
@@ -189,6 +198,43 @@ export type ServerMessage =
     }
   // Live input sync
   | { type: "input_text"; text: string }
+  | { type: "input_images"; images: string[] }
+  // iOS OTA deploy
+  | {
+      type: "ios_deploy_status";
+      subtype: "deps_result";
+      hasFlutter: boolean;
+    }
+  | {
+      type: "ios_deploy_status";
+      subtype: "log";
+      message: string;
+    }
+  | {
+      type: "ios_deploy_status";
+      subtype: "error";
+      message: string;
+    }
+  | {
+      type: "ios_deploy_status";
+      subtype: "install_ready";
+      installUrl: string;
+    }
+  | {
+      type: "ios_deploy_status";
+      subtype: "complete";
+      success: boolean;
+    }
+  // Game state sync (cross-device)
+  | {
+      type: "game_state_sync";
+      fullState: string; // JSON-encoded full GameState
+    }
+  // Character position sync (cross-device)
+  | {
+      type: "positions_sync";
+      positions: Record<string, { col: number; row: number; state: string; dir: string }>;
+    }
   // Agent traits
   | {
       type: "agent_traits";

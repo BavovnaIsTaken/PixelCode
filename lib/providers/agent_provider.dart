@@ -74,6 +74,16 @@ final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
 
 final bypassPermissionsProvider = StateProvider<bool>((ref) => false);
 
+// ─── Chat sync state ────────────────────────────────────────────────────────
+
+enum ChatSyncState { syncing, ready }
+
+final chatSyncStateProvider = StateProvider<ChatSyncState>((ref) {
+  final prefs = ref.read(sharedPrefsProvider);
+  final sessionId = ChatPersistenceService.loadSessionId(prefs);
+  return sessionId != null ? ChatSyncState.syncing : ChatSyncState.ready;
+});
+
 // ─── Chat messages ───────────────────────────────────────────────────────────
 
 class ChatNotifier extends Notifier<List<ChatMessage>> {
@@ -160,6 +170,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         _allMessages = grouped;
         state = _allMessages[_selectedAgent] ?? [];
         _scheduleSave();
+        ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
 
       case AssistantTextMessage(:final text, :final agentId):
         final messages = [..._agentMessages(agentId)];
@@ -244,6 +255,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     state = [];
     final prefs = ref.read(sharedPrefsProvider);
     ChatPersistenceService.saveAllMessages(prefs, _allMessages);
+    ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     ref.read(activityLogProvider.notifier).clear();
     ref.read(debugLogProvider.notifier).clear();
     ref.read(wsServiceProvider).newChat();
@@ -274,6 +286,32 @@ class _RemoteInputTextNotifier extends Notifier<String> {
 final remoteInputTextProvider =
     NotifierProvider<_RemoteInputTextNotifier, String>(
   _RemoteInputTextNotifier.new,
+);
+
+// ─── Remote input images (live attachment sync) ─────────────────────────────
+
+class _RemoteInputImagesNotifier extends Notifier<List<String>> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  List<String> build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen((msg) {
+      if (msg is InputImagesMessage) {
+        state = msg.images;
+      }
+    });
+    ref.onDispose(() => _sub?.cancel());
+    return [];
+  }
+
+  void clear() => state = [];
+}
+
+final remoteInputImagesProvider =
+    NotifierProvider<_RemoteInputImagesNotifier, List<String>>(
+  _RemoteInputImagesNotifier.new,
 );
 
 final chatProvider = NotifierProvider<ChatNotifier, List<ChatMessage>>(

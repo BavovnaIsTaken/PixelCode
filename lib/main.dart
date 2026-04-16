@@ -38,6 +38,7 @@ class PixelCodeApp extends ConsumerStatefulWidget {
 
 class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
+  bool _ready = false;
 
   @override
   void initState() {
@@ -53,30 +54,38 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   }
 
   Future<void> _initSession() async {
-    final session = ref.read(sessionProvider.notifier);
-    await session.migrateFromLegacy();
+    try {
+      final session = ref.read(sessionProvider.notifier);
+      await session.migrateFromLegacy();
 
-    // Auto-start local server on desktop
-    if (!Platform.isIOS && !Platform.isAndroid) {
-      final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
-        ref.read(sharedPrefsProvider),
-      );
-      serverProcess.start(projectPath: savedPath);
-      // Wait for server to boot before connecting
-      await Future<void>.delayed(const Duration(seconds: 2));
+      // Auto-start local server on desktop
+      if (!Platform.isIOS && !Platform.isAndroid) {
+        final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
+          ref.read(sharedPrefsProvider),
+        );
+        await serverProcess.start(projectPath: savedPath);
+        // Wait for server to boot before connecting
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+
+      // Connect WebSocket to the active session, or fallback to local server
+      final profile = ref.read(sessionProvider).activeProfile;
+      final wsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
+      await ref.read(wsServiceProvider).connect(url: wsUrl);
+    } catch (e) {
+      debugPrint('[PixelCode] Init session failed: $e');
     }
 
-    // Connect WebSocket to the active session, or fallback to local server
-    final profile = ref.read(sessionProvider).activeProfile;
-    final wsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
-    ref.read(wsServiceProvider).connect(url: wsUrl);
+    if (mounted) setState(() => _ready = true);
   }
 
   @override
   void dispose() {
     _lifecycleListener.dispose();
-    // serverProcess is already disposed by onExitRequested; the _disposed
-    // guard inside the service makes this safe as a fallback.
+    // Fallback cleanup — onExitRequested may not have fired (e.g. if the
+    // native side terminated the app directly). The _disposed guards inside
+    // both services make double-dispose safe.
+    ref.read(wsServiceProvider).dispose();
     serverProcess.dispose();
     super.dispose();
   }
@@ -97,7 +106,15 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
         child: child,
       ),
-      home: const HubScreen(),
+      home: _ready
+          ? const HubScreen()
+          : const Scaffold(
+              body: Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF00C0D1),
+                ),
+              ),
+            ),
     );
   }
 }

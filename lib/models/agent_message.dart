@@ -84,7 +84,11 @@ sealed class ServerMessage {
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
       'input_text' => InputTextMessage.fromJson(json),
+      'input_images' => InputImagesMessage.fromJson(json),
+      'ios_deploy_status' => IOSDeployStatusMessage.fromJson(json),
       'chat_history' => ChatHistoryMessage.fromJson(json),
+      'game_state_sync' => GameStateSyncMessage.fromJson(json),
+      'positions_sync' => PositionsSyncMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -369,11 +373,87 @@ class AgentTraitsMessage implements ServerMessage {
       );
 }
 
+class GameStateSyncMessage implements ServerMessage {
+  final String fullState;
+  GameStateSyncMessage({required this.fullState});
+  factory GameStateSyncMessage.fromJson(Map<String, dynamic> json) =>
+      GameStateSyncMessage(fullState: json['fullState'] as String? ?? '{}');
+}
+
+class RemoteCharPosition {
+  final int col;
+  final int row;
+  final String state;
+  final String dir;
+  const RemoteCharPosition({
+    required this.col,
+    required this.row,
+    required this.state,
+    required this.dir,
+  });
+  factory RemoteCharPosition.fromJson(Map<String, dynamic> json) =>
+      RemoteCharPosition(
+        col: json['col'] as int? ?? 0,
+        row: json['row'] as int? ?? 0,
+        state: json['state'] as String? ?? 'idle',
+        dir: json['dir'] as String? ?? 'down',
+      );
+}
+
+class PositionsSyncMessage implements ServerMessage {
+  final Map<String, RemoteCharPosition> positions;
+  PositionsSyncMessage({required this.positions});
+  factory PositionsSyncMessage.fromJson(Map<String, dynamic> json) {
+    final raw = json['positions'] as Map<String, dynamic>? ?? {};
+    return PositionsSyncMessage(
+      positions: raw.map(
+        (k, v) => MapEntry(k, RemoteCharPosition.fromJson(v as Map<String, dynamic>)),
+      ),
+    );
+  }
+}
+
 class InputTextMessage implements ServerMessage {
   final String text;
   InputTextMessage({required this.text});
   factory InputTextMessage.fromJson(Map<String, dynamic> json) =>
       InputTextMessage(text: json['text'] as String? ?? '');
+}
+
+class InputImagesMessage implements ServerMessage {
+  final List<String> images;
+  InputImagesMessage({required this.images});
+  factory InputImagesMessage.fromJson(Map<String, dynamic> json) =>
+      InputImagesMessage(
+        images: (json['images'] as List?)?.cast<String>() ?? const [],
+      );
+}
+
+class IOSDeployStatusMessage implements ServerMessage {
+  /// deps_result, log, error, install_ready, complete
+  final String subtype;
+  final bool? hasFlutter;
+  final String? message;
+  final String? installUrl;
+  final bool? success;
+
+  IOSDeployStatusMessage({
+    required this.subtype,
+    this.hasFlutter,
+    this.message,
+    this.installUrl,
+    this.success,
+  });
+
+  factory IOSDeployStatusMessage.fromJson(Map<String, dynamic> json) {
+    return IOSDeployStatusMessage(
+      subtype: json['subtype'] as String,
+      hasFlutter: json['hasFlutter'] as bool?,
+      message: json['message'] as String?,
+      installUrl: json['installUrl'] as String?,
+      success: json['success'] as bool?,
+    );
+  }
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

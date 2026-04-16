@@ -6,10 +6,14 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
-import { rmSync, readdirSync } from "fs";
-import { join } from "path";
-import { homedir, hostname } from "os";
+import { rmSync, readdirSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
+import { join, extname } from "path";
+import { homedir, hostname, networkInterfaces } from "os";
+import { execFile, spawn, ChildProcess } from "child_process";
+import { createServer as createHttpsServer } from "https";
+import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "http";
 import { Bonjour } from "bonjour-service";
+import selfsigned from "selfsigned";
 import {
   query,
   type SDKMessage,
@@ -18,6 +22,7 @@ import {
   type SDKResultMessage,
   type SDKSystemMessage,
   type SDKToolProgressMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { teamAgents, agentInfoList, buildOfficePrompt, buildDynamicAgents, hardwareToModel, type GameStateData } from "./agents.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey } from "./protocol.js";
@@ -371,6 +376,9 @@ const clientBypassPermissions = new WeakMap<WebSocket, boolean>();
 /** Per-client game economy state (hired agents, hardware, skills). */
 const clientGameState = new WeakMap<WebSocket, GameStateData>();
 
+/** Latest full game state for cross-device sync (last-write-wins). */
+let latestFullGameState: string | null = null;
+
 // ─── Team metrics tracking ──────────────────────────────────────────────────
 
 interface AgentMetrics {
@@ -699,7 +707,19 @@ If nothing notable happened, reply with: []`;
 
 // ─── Run query for a client ─────────────────────────────────────────────────
 
-async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string): Promise<void> {
+/**
+ * Detect image MIME type from base64 data by inspecting magic bytes.
+ * Falls back to image/jpeg if detection fails.
+ */
+function detectImageMimeType(base64: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
+  const header = base64.slice(0, 16);
+  if (header.startsWith("iVBOR")) return "image/png";
+  if (header.startsWith("R0lGOD")) return "image/gif";
+  if (header.startsWith("UklGR")) return "image/webp";
+  return "image/jpeg";
+}
+
+async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string, images?: string[]): Promise<void> {
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -772,8 +792,46 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     // Prefix the message so the AI knows who it's from and who it's to
     const prefixedPrompt = `[User → ${targetAgentId}]: ${userMessage}`;
 
+    // Build the prompt — use content blocks with images when attached,
+    // otherwise fall back to a plain string for simplicity.
+    let promptParam: string | AsyncIterable<SDKUserMessage>;
+    if (images && images.length > 0) {
+      const contentBlocks: Array<
+        | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+        | { type: "text"; text: string }
+      > = [];
+      for (const imgBase64 of images) {
+        contentBlocks.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: detectImageMimeType(imgBase64),
+            data: imgBase64,
+          },
+        });
+      }
+      contentBlocks.push({ type: "text", text: prefixedPrompt });
+
+      const sessionId = existingSessionId && existingSessionId !== "pending" ? existingSessionId : "";
+      async function* imageMessageStream(): AsyncGenerator<SDKUserMessage> {
+        yield {
+          type: "user" as const,
+          message: {
+            role: "user" as const,
+            content: contentBlocks,
+          },
+          parent_tool_use_id: null,
+          session_id: sessionId,
+        };
+      }
+      promptParam = imageMessageStream();
+      dbg("info", "session", `Sending ${images.length} image(s) as vision content blocks`);
+    } else {
+      promptParam = prefixedPrompt;
+    }
+
     const q = query({
-      prompt: prefixedPrompt,
+      prompt: promptParam,
       options: queryOptions,
     });
 
@@ -982,6 +1040,461 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
   }
 }
 
+// ─── iOS OTA deploy ────────────────────────────────────────────────────────
+
+const OTA_PORT = parseInt(process.env.OTA_PORT ?? "9721", 10);
+const OTA_HTTP_PORT = parseInt(process.env.OTA_HTTP_PORT ?? "9722", 10);
+const OTA_HOSTNAME = process.env.OTA_HOSTNAME; // e.g. "my-mac.tail12345.ts.net"
+const TLS_CERT_PATH = process.env.TLS_CERT_PATH;
+const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
+
+/** Track active build process per client so we can cancel it. */
+const activeDeployProcess = new WeakMap<WebSocket, ChildProcess>();
+
+/** Directory where OTA artifacts (IPA, manifest) are stored. */
+const otaDir = join(homedir(), ".pixelcode", "ota");
+mkdirSync(otaDir, { recursive: true });
+
+function sendDeployLog(ws: WebSocket, message: string): void {
+  send(ws, { type: "ios_deploy_status", subtype: "log", message } as any);
+}
+
+function sendDeployError(ws: WebSocket, message: string): void {
+  send(ws, { type: "ios_deploy_status", subtype: "error", message } as any);
+}
+
+
+/** Get a reachable hostname/IP for the OTA server. */
+function getOtaHost(): string {
+  if (OTA_HOSTNAME) return OTA_HOSTNAME;
+  // Auto-detect local IP
+  const nets = networkInterfaces();
+  for (const ifaces of Object.values(nets)) {
+    for (const iface of ifaces ?? []) {
+      if (iface.family === "IPv4" && !iface.internal) return iface.address;
+    }
+  }
+  return "localhost";
+}
+
+/** Get or generate TLS certificates for the OTA HTTPS server. */
+async function getOtaTlsOptions(): Promise<{ cert: string; key: string }> {
+  // 1. User-provided certs
+  if (TLS_CERT_PATH && TLS_KEY_PATH) {
+    dbg("info", "ota", `Using user-provided TLS certs: ${TLS_CERT_PATH}`);
+    return {
+      cert: readFileSync(TLS_CERT_PATH, "utf-8"),
+      key: readFileSync(TLS_KEY_PATH, "utf-8"),
+    };
+  }
+
+  // 2. Fallback: self-signed cert
+  const certFile = join(otaDir, "server.crt");
+  const keyFile = join(otaDir, "server.key");
+
+  if (existsSync(certFile) && existsSync(keyFile)) {
+    return {
+      cert: readFileSync(certFile, "utf-8"),
+      key: readFileSync(keyFile, "utf-8"),
+    };
+  }
+
+  dbg("info", "ota", "Generating self-signed TLS certificate…");
+  const host = getOtaHost();
+  const altNames: Array<{ type: 2; value: string } | { type: 7; ip: string }> = [
+    { type: 2 as const, value: host },
+  ];
+  if (host.match(/^\d/)) {
+    altNames.push({ type: 7 as const, ip: host });
+  }
+
+  const notAfterDate = new Date();
+  notAfterDate.setFullYear(notAfterDate.getFullYear() + 1);
+
+  const pems = await selfsigned.generate(
+    [{ name: "commonName", value: host }],
+    {
+      notAfterDate,
+      keySize: 2048,
+      extensions: [
+        { name: "subjectAltName", altNames },
+      ],
+    },
+  );
+
+  writeFileSync(certFile, pems.cert);
+  writeFileSync(keyFile, pems.private);
+  dbg("info", "ota", `Self-signed cert saved to ${otaDir}`);
+
+  return { cert: pems.cert, key: pems.private };
+}
+
+/** Public Cloudflare Tunnel URL (set once at startup, null if unavailable). */
+let cloudflaredUrl: string | null = null;
+
+/** Shared request handler for both HTTPS and HTTP OTA servers. */
+function makeOtaHandler() {
+  return (req: IncomingMessage, res: ServerResponse) => {
+    const url = req.url ?? "/";
+    dbg("debug", "ota", `${req.method} ${url}`);
+
+    const safeName = url.split("/").pop()?.replace(/[^a-zA-Z0-9._-]/g, "");
+    if (!safeName) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+
+    const filePath = join(otaDir, safeName);
+    if (!existsSync(filePath)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+
+    const ext = extname(safeName);
+    const contentType: Record<string, string> = {
+      ".ipa": "application/octet-stream",
+      ".plist": "text/xml",
+    };
+
+    res.writeHead(200, {
+      "Content-Type": contentType[ext] ?? "application/octet-stream",
+    });
+    res.end(readFileSync(filePath));
+  };
+}
+
+/** Start plain HTTP server for cloudflared to tunnel through. */
+function startOtaHttpServer(): void {
+  const server = createHttpServer(makeOtaHandler());
+  server.listen(OTA_HTTP_PORT, "127.0.0.1", () => {
+    dbg("info", "ota", `OTA HTTP server on http://localhost:${OTA_HTTP_PORT} (cloudflared target)`);
+  });
+}
+
+/** Start cloudflared quick tunnel. Returns the public HTTPS URL, or null. */
+function startCloudflaredTunnel(): Promise<string | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    const done = (url: string | null) => {
+      if (!resolved) { resolved = true; resolve(url); }
+    };
+
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${OTA_HTTP_PORT}`], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      dbg("warn", "ota", "cloudflared not found");
+      return resolve(null);
+    }
+
+    const onData = (chunk: Buffer) => {
+      const text = chunk.toString();
+      const match = text.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
+      if (match) {
+        dbg("info", "ota", `Cloudflare tunnel ready: ${match[0]}`);
+        done(match[0]);
+      }
+    };
+
+    proc.stdout?.on("data", onData);
+    proc.stderr?.on("data", onData);
+    proc.on("error", () => { dbg("warn", "ota", "cloudflared error"); done(null); });
+    proc.on("close", () => done(null));
+
+    setTimeout(() => {
+      dbg("warn", "ota", "cloudflared tunnel timeout (15s)");
+      done(null);
+    }, 15_000);
+  });
+}
+
+/** Start the HTTPS server that serves IPA + manifest for OTA install. */
+async function startOtaServer(): Promise<void> {
+  const tls = await getOtaTlsOptions();
+  const server = createHttpsServer(tls, makeOtaHandler());
+  server.listen(OTA_PORT, () => {
+    dbg("info", "ota", `OTA HTTPS server on https://${getOtaHost()}:${OTA_PORT}`);
+  });
+}
+
+// Start OTA servers + try cloudflared tunnel
+(async () => {
+  await startOtaServer();       // HTTPS fallback
+  startOtaHttpServer();         // HTTP target for cloudflared
+  cloudflaredUrl = await startCloudflaredTunnel();
+  if (cloudflaredUrl) {
+    dbg("info", "ota", `OTA mode: Cloudflare tunnel → ${cloudflaredUrl}`);
+  } else {
+    dbg("info", "ota", "OTA mode: HTTPS fallback (cloudflared unavailable)");
+  }
+})();
+
+/** Generate the OTA manifest.plist for iOS installation. */
+function generateManifest(ipaUrl: string, bundleId: string, title: string): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key>
+  <array>
+    <dict>
+      <key>assets</key>
+      <array>
+        <dict>
+          <key>kind</key>
+          <string>software-package</string>
+          <key>url</key>
+          <string>${ipaUrl}</string>
+        </dict>
+      </array>
+      <key>metadata</key>
+      <dict>
+        <key>bundle-identifier</key>
+        <string>${bundleId}</string>
+        <key>bundle-version</key>
+        <string>1.0.0</string>
+        <key>kind</key>
+        <string>software</string>
+        <key>title</key>
+        <string>${title}</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>`;
+}
+
+/** Read bundle identifier from the Flutter project's iOS config. */
+function readBundleId(): string {
+  // Try reading from project.pbxproj or Info.plist
+  const pbxPath = join(PROJECT_CWD, "ios/Runner.xcodeproj/project.pbxproj");
+  if (existsSync(pbxPath)) {
+    const content = readFileSync(pbxPath, "utf-8");
+    const match = content.match(/PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/);
+    if (match) return match[1].trim();
+  }
+  return "com.example.app";
+}
+
+async function iosDeployCheck(ws: WebSocket): Promise<void> {
+  let hasFlutter = false;
+
+  try {
+    await new Promise<void>((resolve) => {
+      execFile("flutter", ["--version"], { timeout: 10000 }, (err) => {
+        hasFlutter = !err;
+        resolve();
+      });
+    });
+  } catch { /* not installed */ }
+
+  send(ws, { type: "ios_deploy_status", subtype: "deps_result", hasFlutter } as any);
+}
+
+/** Detect paired iOS devices via xcrun devicectl. Returns device name or null. */
+async function detectIOSDevice(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile("xcrun", ["devicectl", "list", "devices"], { timeout: 10000 }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      // Parse output: look for lines with "available (paired)" and iOS/iPhone/iPad
+      for (const line of stdout.split("\n")) {
+        if (line.includes("available") && line.includes("paired") &&
+            (line.includes("iPhone") || line.includes("iPad"))) {
+          // Extract device name (first column)
+          const name = line.split(/\s{2,}/)[0]?.trim();
+          if (name) { resolve(name); return; }
+        }
+      }
+      resolve(null);
+    });
+  });
+}
+
+/** Try to install .app silently via xcrun devicectl. Returns true on success. */
+async function trySilentInstall(ws: WebSocket, appPath: string, deviceName: string): Promise<boolean> {
+  sendDeployLog(ws, `Пряме встановлення на "${deviceName}"...`);
+  sendDeployLog(ws, `Команда: xcrun devicectl device install app -d "${deviceName}"`);
+
+  return new Promise((resolve) => {
+    const proc = spawn("xcrun", [
+      "devicectl", "device", "install", "app",
+      "-d", deviceName,
+      appPath,
+    ]);
+    activeDeployProcess.set(ws, proc);
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendDeployLog(ws, line.trim());
+      }
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendDeployLog(ws, line.trim());
+      }
+    });
+
+    proc.on("close", (code) => resolve(code === 0));
+    proc.on("error", () => resolve(false));
+  });
+}
+
+async function iosDeployStart(ws: WebSocket): Promise<void> {
+  dbg("info", "deploy", "Starting iOS build…");
+
+  // Step 1: Build .app bundle
+  sendDeployLog(ws, "Побудова iOS додатку...");
+  sendDeployLog(ws, "Команда: flutter build ios --release");
+
+  const buildProcess = spawn("flutter", ["build", "ios", "--release"], {
+    cwd: PROJECT_CWD,
+  });
+  activeDeployProcess.set(ws, buildProcess);
+
+  buildProcess.stdout.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      if (line.trim()) sendDeployLog(ws, line.trim());
+    }
+  });
+  buildProcess.stderr.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      if (line.trim()) sendDeployError(ws, line.trim());
+    }
+  });
+
+  const buildExitCode = await new Promise<number | null>((resolve) => {
+    buildProcess.on("close", resolve);
+    buildProcess.on("error", (err) => {
+      sendDeployError(ws, `Помилка при побудові: ${err.message}`);
+      resolve(1);
+    });
+  });
+
+  if (buildExitCode !== 0) {
+    sendDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
+    send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+    activeDeployProcess.delete(ws);
+    return;
+  }
+
+  // Find the built .app bundle
+  const appCandidates = [
+    join(PROJECT_CWD, "build/ios/iphoneos/Runner.app"),
+    join(PROJECT_CWD, "build/ios/Release-iphoneos/Runner.app"),
+  ];
+  const appPath = appCandidates.find((p) => existsSync(p));
+
+  if (!appPath) {
+    sendDeployError(ws, ".app бандл не знайдено");
+    send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+    activeDeployProcess.delete(ws);
+    return;
+  }
+
+  sendDeployLog(ws, `Білк завершено: ${appPath}`);
+  sendDeployLog(ws, "");
+
+  // Step 2: Try silent install via devicectl (works when device paired on same WiFi)
+  sendDeployLog(ws, "Шукаю підключені iOS пристрої...");
+  const deviceName = await detectIOSDevice();
+
+  if (deviceName) {
+    sendDeployLog(ws, `Знайдено пристрій: ${deviceName}`);
+    const silentOk = await trySilentInstall(ws, appPath, deviceName);
+
+    if (silentOk) {
+      sendDeployLog(ws, "");
+      sendDeployLog(ws, "===============================================");
+      sendDeployLog(ws, "Додаток встановлено на пристрій!");
+      sendDeployLog(ws, "===============================================");
+      send(ws, { type: "ios_deploy_status", subtype: "complete", success: true } as any);
+      activeDeployProcess.delete(ws);
+      return;
+    }
+
+    sendDeployLog(ws, "Пряме встановлення не вдалося. Перемикаюсь на OTA...");
+    sendDeployLog(ws, "");
+  } else {
+    sendDeployLog(ws, "Пристрій не знайдено локально. Використовую OTA...");
+    sendDeployLog(ws, "");
+  }
+
+  // Step 3: Fallback — OTA via HTTPS
+  sendDeployLog(ws, "Пакую в IPA для OTA встановлення...");
+
+  const ipaPath = join(otaDir, "app.ipa");
+  const payloadDir = join(otaDir, "Payload");
+  const payloadApp = join(payloadDir, "Runner.app");
+
+  try { rmSync(payloadDir, { recursive: true, force: true }); } catch { /* ok */ }
+  try { rmSync(ipaPath, { force: true }); } catch { /* ok */ }
+
+  mkdirSync(payloadDir, { recursive: true });
+
+  const cpProcess = spawn("cp", ["-R", appPath, payloadApp]);
+  await new Promise<void>((resolve) => cpProcess.on("close", resolve));
+
+  const zipProcess = spawn("zip", ["-r", ipaPath, "Payload"], { cwd: otaDir });
+  const zipExitCode = await new Promise<number | null>((resolve) => {
+    zipProcess.on("close", resolve);
+    zipProcess.on("error", () => resolve(1));
+  });
+
+  try { rmSync(payloadDir, { recursive: true, force: true }); } catch { /* ok */ }
+
+  if (zipExitCode !== 0 || !existsSync(ipaPath)) {
+    sendDeployError(ws, "Помилка при створенні IPA");
+    send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+    activeDeployProcess.delete(ws);
+    return;
+  }
+
+  const ipaFileName = "app.ipa";
+  const baseUrl = cloudflaredUrl ?? `https://${getOtaHost()}:${OTA_PORT}`;
+  const ipaUrl = `${baseUrl}/${ipaFileName}`;
+  const bundleId = readBundleId();
+
+  const manifest = generateManifest(ipaUrl, bundleId, "PixelCode");
+  writeFileSync(join(otaDir, "manifest.plist"), manifest);
+
+  const manifestUrl = `${baseUrl}/manifest.plist`;
+  const installUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`;
+
+  if (cloudflaredUrl) {
+    sendDeployLog(ws, `OTA через Cloudflare tunnel (довірений HTTPS)`);
+  } else {
+    const certPath = join(otaDir, "server.crt");
+    sendDeployLog(ws, `OTA через локальний HTTPS (${getOtaHost()}:${OTA_PORT})`);
+    sendDeployLog(ws, `⚠️  Самопідписаний сертифікат — потрібно встановити на iPhone`);
+    sendDeployLog(ws, `Файл: ${certPath}`);
+    sendDeployLog(ws, `Команда: open ${otaDir}`);
+  }
+
+  sendDeployLog(ws, "");
+  sendDeployLog(ws, "===============================================");
+  sendDeployLog(ws, "IPA готовий до OTA встановлення");
+  sendDeployLog(ws, "===============================================");
+  sendDeployLog(ws, "");
+
+  send(ws, { type: "ios_deploy_status", subtype: "install_ready", installUrl } as any);
+  activeDeployProcess.delete(ws);
+}
+
+function iosDeployCancel(ws: WebSocket): void {
+  const proc = activeDeployProcess.get(ws);
+  if (proc) {
+    proc.kill("SIGTERM");
+    activeDeployProcess.delete(ws);
+    sendDeployLog(ws, "Операцію скасовано.");
+    send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+  }
+}
+
 // ─── WebSocket server ───────────────────────────────────────────────────────
 
 const wss = new WebSocketServer({ port: PORT });
@@ -1046,6 +1559,11 @@ wss.on("connection", (ws) => {
   sendTraits(ws);
   // Send existing chat history so new clients are in sync
   sendChatHistory(ws);
+  // Send stored game state for cross-device sync
+  if (latestFullGameState) {
+    send(ws, { type: "game_state_sync", fullState: latestFullGameState } as any);
+    dbg("info", "game", "Sent stored game state to new client");
+  }
 
   ws.on("message", async (data) => {
     try {
@@ -1055,13 +1573,14 @@ wss.on("connection", (ws) => {
       switch (msg.type) {
         case "send_message": {
           const targetAgent = msg.agentId || "manager";
-          sendDebug(ws, "info", "ws", `User → ${targetAgent}: "${msg.content.slice(0, 60)}…"`);
+          const images = msg.images;
+          sendDebug(ws, "info", "ws", `User → ${targetAgent}: "${msg.content.slice(0, 60)}…"${images?.length ? ` [+${images.length} image(s)]` : ""}`);
           // Store user message and broadcast snapshot to all other clients.
           // (Sender already added the message optimistically in the UI.)
-          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString() });
+          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), ...(images?.length ? { images } : {}) });
           chatHistory.save(historyFilePath(PROJECT_CWD));
           broadcastExcept(ws, chatHistory.snapshot());
-          await runQuery(ws, msg.content, targetAgent);
+          await runQuery(ws, msg.content, targetAgent, images);
           break;
         }
 
@@ -1201,6 +1720,13 @@ wss.on("connection", (ws) => {
           clientGameState.set(ws, gs);
           dbg("info", "game", `Game state updated: ${gs.hiredAgents.length} hired, hardware=${JSON.stringify(gs.agentHardware)}`);
           sendDebug(ws, "info", "game", `Team: ${gs.hiredAgents.join(", ")} | HW: ${Object.entries(gs.agentHardware).map(([k,v]) => `${k}=${v}`).join(", ")}`);
+
+          // Cross-device sync: broadcast full game state to other clients
+          if (msg.fullState) {
+            latestFullGameState = msg.fullState;
+            broadcastExcept(ws, { type: "game_state_sync", fullState: msg.fullState } as any);
+            dbg("info", "game", `Game state synced to ${wss.clients.size - 1} other client(s)`);
+          }
           break;
         }
 
@@ -1267,9 +1793,43 @@ wss.on("connection", (ws) => {
           break;
         }
 
+        // ─── iOS OTA deploy ──────────────────────────────────────────────
+        case "ios_deploy_check":
+          iosDeployCheck(ws).catch((err) => {
+            sendDeployError(ws, `Check failed: ${err}`);
+          });
+          break;
+
+        case "ios_deploy_start":
+          iosDeployStart(ws).catch((err) => {
+            sendDeployError(ws, `Deploy failed: ${err}`);
+            send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+          });
+          break;
+
+        case "ios_deploy_cancel":
+          iosDeployCancel(ws);
+          break;
+
+        // ─── Character position sync ──────────────────────────────────────
+        case "sync_positions": {
+          broadcastExcept(ws, { type: "positions_sync", positions: msg.positions } as any);
+          break;
+        }
+
         // ─── Live input sync ──────────────────────────────────────────────
         case "input_text": {
           const broadcast: ServerMessage = { type: "input_text", text: msg.text };
+          for (const client of wss.clients) {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+              client.send(JSON.stringify(broadcast));
+            }
+          }
+          break;
+        }
+
+        case "input_images": {
+          const broadcast: ServerMessage = { type: "input_images", images: msg.images };
           for (const client of wss.clients) {
             if (client !== ws && client.readyState === WebSocket.OPEN) {
               client.send(JSON.stringify(broadcast));

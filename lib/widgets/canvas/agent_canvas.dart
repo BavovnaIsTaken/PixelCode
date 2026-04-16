@@ -4,6 +4,7 @@
 /// when active, and wander when idle — like a game.
 library;
 
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -37,6 +38,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   int _tick = 0; // for monitor flicker & bubble animation
   double _tickAccum = 0;
 
+  StreamSubscription<ServerMessage>? _msgSub;
+  Timer? _posSyncTimer;
+
   @override
   void initState() {
     super.initState();
@@ -45,6 +49,38 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _sprites.load().then((_) {
       if (mounted) setState(() {});
     });
+    _startPositionSync();
+  }
+
+  void _startPositionSync() {
+    // Send our positions every 3 seconds so other devices can follow
+    _posSyncTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted) return;
+      final ws = ref.read(wsServiceProvider);
+      if (ws.isConnected) {
+        ws.syncPositions(_gameState.serializePositions());
+      }
+    });
+
+    // Listen for position updates from other devices
+    _msgSub = ref.read(wsServiceProvider).messages.listen(_onServerMessage);
+  }
+
+  void _onServerMessage(ServerMessage msg) {
+    if (msg is PositionsSyncMessage) {
+      _gameState.applyRemotePositions({
+        for (final e in msg.positions.entries)
+          e.key: (col: e.value.col, row: e.value.row, state: e.value.state, dir: e.value.dir),
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _msgSub?.cancel();
+    _posSyncTimer?.cancel();
+    _ticker.dispose();
+    super.dispose();
   }
 
   void _onTick(Duration elapsed) {
@@ -65,11 +101,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     setState(() {});
   }
 
-  @override
-  void dispose() {
-    _ticker.dispose();
-    super.dispose();
-  }
 
   bool _logExpanded = false;
   String? _hoveredAgentId;
@@ -276,6 +307,31 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       final ch = _gameState.characters[hit];
       if (ch != null && ch.isHired) {
         ref.read(selectedAgentProvider.notifier).state = hit;
+        return;
+      }
+    }
+    // Check plant clicks (easter egg)
+    _hitTestPlant(pos, constraints);
+  }
+
+  void _hitTestPlant(Offset screenPos, BoxConstraints constraints) {
+    final scaleX = constraints.maxWidth / kCanvasWidth;
+    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final scale = math.min(scaleX, scaleY);
+    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
+    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+
+    final worldX = (screenPos.dx - offsetX) / scale;
+    final worldY = (screenPos.dy - offsetY) / scale;
+
+    for (int i = 0; i < kPlantPositions.length; i++) {
+      final pos = kPlantPositions[i];
+      final px = pos.$1 * kTileSize;
+      final py = pos.$2 * kTileSize - kTileSize; // plant is 2 tiles tall
+      if (worldX >= px && worldX <= px + kTileSize &&
+          worldY >= py && worldY <= py + kTileSize * 2) {
+        _gameState.activatePlant(i);
+        return;
       }
     }
   }
@@ -404,6 +460,68 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
         ),
       );
     }
+
+    // Cat label
+    final cat = _gameState.cat;
+    final catLabelX = cat.x;
+    final catLabelY = cat.y + (cat.state == CatAction.sleep ? 0 : 5);
+    final catScreenX = offsetX + catLabelX * scale;
+    final catScreenY = offsetY + catLabelY * scale;
+    final catStatus = switch (cat.state) {
+      CatAction.sleep => '💤 спить',
+      CatAction.walk => '🐾 гуляє',
+      CatAction.idle => '😺 сидить',
+    };
+
+    widgets.add(
+      Positioned(
+        left: catScreenX - 30,
+        top: catScreenY,
+        child: IgnorePointer(
+          child: Container(
+            width: 60,
+            padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+            decoration: BoxDecoration(
+              color: const Color(0xCC1A1A2E),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: const Color(0xFFFF8C42).withValues(alpha: 0.2),
+                width: 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  'Мурчик',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xFFFF8C42),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                    shadows: [
+                      Shadow(
+                        color: Color(0xCC000000),
+                        blurRadius: 2,
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  catStatus,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 7,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
 
     return widgets;
   }
@@ -1034,16 +1152,6 @@ class _ActivityLogPanelState extends State<_ActivityLogPanel> {
                       ),
                     ),
                   const Spacer(),
-                  if (count > 0)
-                    GestureDetector(
-                      onTap: widget.onClear,
-                      child: Icon(
-                        Icons.delete_outline_rounded,
-                        size: 14,
-                        color: Colors.white.withValues(alpha: 0.2),
-                      ),
-                    ),
-                  const SizedBox(width: 8),
                   Icon(
                     widget.expanded
                         ? Icons.keyboard_arrow_down_rounded
@@ -1058,80 +1166,108 @@ class _ActivityLogPanelState extends State<_ActivityLogPanel> {
           if (widget.expanded)
             SizedBox(
               height: 180,
-              child: count == 0
-                  ? Center(
-                      child: Text(
-                        'Поки що немає активності',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          fontSize: 11,
+              child: Stack(
+                children: [
+                  count == 0
+                      ? Center(
+                          child: Text(
+                            'Поки що немає активності',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              fontSize: 11,
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                          itemCount: count,
+                          itemBuilder: (context, i) {
+                            final e = widget.events[i];
+                            final color = agentAccentColor(e.agentId);
+                            final icon = _eventIcons[e.event] ??
+                                Icons.circle_outlined;
+                            final time =
+                                '${e.timestamp.hour.toString().padLeft(2, '0')}:'
+                                '${e.timestamp.minute.toString().padLeft(2, '0')}:'
+                                '${e.timestamp.second.toString().padLeft(2, '0')}';
+
+                            return Padding(
+                              padding: const EdgeInsets.only(top: 3),
+                              child: Row(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    width: 52,
+                                    child: Text(
+                                      time,
+                                      style: TextStyle(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.2),
+                                        fontSize: 9,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ),
+                                  Icon(icon, size: 11, color: color),
+                                  const SizedBox(width: 4),
+                                  SizedBox(
+                                    width: 62,
+                                    child: Text(
+                                      e.agentId,
+                                      style: TextStyle(
+                                        color: color,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      e.detail,
+                                      style: TextStyle(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.45),
+                                        fontSize: 9,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                  if (count > 0)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: GestureDetector(
+                        onTap: widget.onClear,
+                        child: Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E1E24),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.08),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.delete_outline_rounded,
+                            size: 14,
+                            color: Colors.white.withValues(alpha: 0.3),
+                          ),
                         ),
                       ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                      itemCount: count,
-                      itemBuilder: (context, i) {
-                        final e = widget.events[i];
-                        final color = agentAccentColor(e.agentId);
-                        final icon = _eventIcons[e.event] ??
-                            Icons.circle_outlined;
-                        final time =
-                            '${e.timestamp.hour.toString().padLeft(2, '0')}:'
-                            '${e.timestamp.minute.toString().padLeft(2, '0')}:'
-                            '${e.timestamp.second.toString().padLeft(2, '0')}';
-
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 3),
-                          child: Row(
-                            crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 52,
-                                child: Text(
-                                  time,
-                                  style: TextStyle(
-                                    color: Colors.white
-                                        .withValues(alpha: 0.2),
-                                    fontSize: 9,
-                                    fontFamily: 'monospace',
-                                  ),
-                                ),
-                              ),
-                              Icon(icon, size: 11, color: color),
-                              const SizedBox(width: 4),
-                              SizedBox(
-                                width: 62,
-                                child: Text(
-                                  e.agentId,
-                                  style: TextStyle(
-                                    color: color,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  e.detail,
-                                  style: TextStyle(
-                                    color: Colors.white
-                                        .withValues(alpha: 0.45),
-                                    fontSize: 9,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
                     ),
+                ],
+              ),
             ),
         ],
       ),

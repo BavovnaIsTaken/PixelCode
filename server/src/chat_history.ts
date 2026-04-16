@@ -17,6 +17,7 @@ export interface StoredChatMessage {
   text: string;
   agentId: string;
   timestamp: string; // ISO 8601
+  images?: string[]; // base64-encoded image data
 }
 
 export class ChatHistory {

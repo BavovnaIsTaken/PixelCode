@@ -172,7 +172,7 @@ class ServerProcessService {
     ));
   }
 
-  /// Kills the server process and its children (npm spawns node).
+  /// Kills the server process and its entire process tree (zsh → npm → node).
   Future<void> stop() async {
     await _stdoutSub?.cancel();
     await _stderrSub?.cancel();
@@ -181,8 +181,58 @@ class ServerProcessService {
     final proc = _process;
     if (proc == null) return;
     _process = null;
-    // Kill the process group so child processes (node) are also terminated.
-    Process.killPid(proc.pid, ProcessSignal.sigterm);
+
+    // Process.killPid only sends a signal to a single PID. When the server
+    // is launched via `/bin/zsh -l -c 'npm run dev'`, the tree looks like
+    // zsh → npm → node. Killing only zsh leaves npm/node alive as orphans
+    // and the app hangs because the Dart VM waits for them.
+    //
+    // Strategy: kill the descendants bottom-up, then the root.
+    await _killProcessTree(proc.pid);
+  }
+
+  /// Collects all descendant PIDs of [pid] (leaves first).
+  static Future<List<int>> _collectProcessTree(int pid) async {
+    final pids = <int>[];
+    try {
+      final result = await Process.run('pgrep', ['-P', '$pid']);
+      if (result.exitCode == 0) {
+        final childPids = (result.stdout as String)
+            .split('\n')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .map(int.tryParse)
+            .whereType<int>();
+        for (final child in childPids) {
+          pids.addAll(await _collectProcessTree(child));
+        }
+      }
+    } catch (_) {}
+    pids.add(pid);
+    return pids;
+  }
+
+  /// Kills the entire process tree: SIGTERM first, then SIGKILL after a timeout
+  /// if any process is still alive.
+  static Future<void> _killProcessTree(int pid) async {
+    final pids = await _collectProcessTree(pid);
+
+    // Send SIGTERM to all.
+    for (final p in pids) {
+      try {
+        Process.killPid(p, ProcessSignal.sigterm);
+      } catch (_) {}
+    }
+
+    // Wait up to 2 seconds for processes to exit, then SIGKILL survivors.
+    await Future<void>.delayed(const Duration(seconds: 2));
+    for (final p in pids) {
+      try {
+        Process.killPid(p, ProcessSignal.sigkill);
+      } catch (_) {
+        // Already exited — expected.
+      }
+    }
   }
 
   /// Restarts the server process, optionally with a new project path.

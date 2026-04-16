@@ -443,6 +443,225 @@ Color resolveFurniture(String key, {bool monitorActive = false}) =>
       _ => Colors.transparent,
     };
 
+// ─── Cat sprites ────────────────────────────────────────────────────────────
+
+/// Cat color palette.
+class CatPalette {
+  static const fur = Color(0xFFFF8C42);
+  static const furDark = Color(0xFFB86420);
+  static const eyes = Color(0xFF44FF88);
+  static const nose = Color(0xFFFF8888);
+  static const paws = Color(0xFFFFD4B8);
+  static const closedEye = Color(0xFF664422);
+
+  static Color resolve(String key) => switch (key) {
+        'f' => fur,
+        'F' => furDark,
+        'e' => eyes,
+        'n' => nose,
+        'p' => paws,
+        'z' => closedEye,
+        _ => Colors.transparent,
+      };
+}
+
+// Down walk
+const _catDownWalk0 = [
+  '..f..f..',
+  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
+  '..ffff..',
+  '.ffffff.',
+  '.f...f..',
+  '.p...p..',
+];
+const _catDownWalk1 = [
+  '..f..f..',
+  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
+  '..ffff..',
+  '.ffffff.',
+  '..f..f..',
+  '..p..p..',
+];
+const _catDownWalk2 = [
+  '..f..f..',
+  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
+  '..ffff..',
+  '.ffffff.',
+  '..f...f.',
+  '..p...p.',
+];
+
+// Up walk
+const _catUpWalk0 = [
+  '..f..f..',
+  '.ffffff.',
+  '.ffffff.',
+  '..ffff..',
+  '..ffff..',
+  '.ffffff.',
+  '.f...f..',
+  '.p...p..',
+];
+const _catUpWalk1 = [
+  '..f..f..',
+  '.ffffff.',
+  '.ffffff.',
+  '..ffff..',
+  '..ffff..',
+  '.ffffff.',
+  '..f..f..',
+  '..p..p..',
+];
+const _catUpWalk2 = [
+  '..f..f..',
+  '.ffffff.',
+  '.ffffff.',
+  '..ffff..',
+  '..ffff..',
+  '.ffffff.',
+  '..f...f.',
+  '..p...p.',
+];
+
+// Right walk
+const _catRightWalk0 = [
+  '...ff...',
+  '..ffff..',
+  '..fef...',
+  '..fnf...',
+  '..ffff..',
+  '..ffff..',
+  '.f...f..',
+  '.p...p..',
+];
+const _catRightWalk1 = [
+  '...ff...',
+  '..ffff..',
+  '..fef...',
+  '..fnf...',
+  '..ffff..',
+  '..ffff..',
+  '..f..f..',
+  '..p..p..',
+];
+const _catRightWalk2 = [
+  '...ff...',
+  '..ffff..',
+  '..fef...',
+  '..fnf...',
+  '..ffff..',
+  '..ffff..',
+  '..f...f.',
+  '..p...p.',
+];
+
+// Sleep (curled up loaf)
+const catSleepSprite = [
+  '........',
+  '..ffff..',
+  '.ffffff.',
+  '.fzzfnf.',
+  '.ffffff.',
+  '..ffff..',
+  '........',
+  '........',
+];
+
+// Sit (idle upright)
+const catSitSprite = [
+  '..f..f..',
+  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
+  '..ffff..',
+  '.ffffff.',
+  '.ffffff.',
+  '..ffff..',
+];
+
+const _catWalkSprites = <CharDirection, List<List<String>>>{
+  CharDirection.down: [_catDownWalk0, _catDownWalk1, _catDownWalk2, _catDownWalk1],
+  CharDirection.up: [_catUpWalk0, _catUpWalk1, _catUpWalk2, _catUpWalk1],
+  CharDirection.right: [_catRightWalk0, _catRightWalk1, _catRightWalk2, _catRightWalk1],
+};
+
+/// Get the correct sprite for the cat's current state.
+(List<String>, bool) getCatSprite(OfficeCat cat) {
+  switch (cat.state) {
+    case CatAction.sleep:
+      return (catSleepSprite, false);
+    case CatAction.idle:
+      return (catSitSprite, false);
+    case CatAction.walk:
+      final isLeft = cat.dir == CharDirection.left;
+      final lookupDir = isLeft ? CharDirection.right : cat.dir;
+      return (_catWalkSprites[lookupDir]![cat.frame % 4], isLeft);
+  }
+}
+
+// ─── Coffee machine sprites ────────────────────────────────────────────────
+
+class CoffeeMachinePalette {
+  static Color resolve(String key, {bool brewing = false}) => switch (key) {
+        'm' => const Color(0xFF3A3A40),
+        'k' => const Color(0xFF2A2A30),
+        'G' => brewing ? const Color(0xFF44FF44) : const Color(0xFF884444),
+        'g' => brewing ? const Color(0xFF228822) : const Color(0xFF553333),
+        'd' => const Color(0xFF6B4226),
+        _ => Colors.transparent,
+      };
+}
+
+const coffeeMachineIdle = [
+  '..mmmm..',
+  '.mmmmmm.',
+  '.m.gg.m.',
+  '.mmmmmm.',
+  '.m....m.',
+  '.m.dd.m.',
+  '.m....m.',
+  '.mmmmmm.',
+  '.mkkkkm.',
+  '..kkkk..',
+];
+
+const coffeeMachineBrew0 = [
+  '..mmmm..',
+  '.mmmmmm.',
+  '.m.GG.m.',
+  '.mmmmmm.',
+  '.m....m.',
+  '.m.Gd.m.',
+  '.m....m.',
+  '.mmmmmm.',
+  '.mkkkkm.',
+  '..kkkk..',
+];
+
+const coffeeMachineBrew1 = [
+  '..mmmm..',
+  '.mmmmmm.',
+  '.m.GG.m.',
+  '.mmmmmm.',
+  '.m....m.',
+  '.m.dG.m.',
+  '.m....m.',
+  '.mmmmmm.',
+  '.mkkkkm.',
+  '..kkkk..',
+];
+
+// ─── Skateboard colors ─────────────────────────────────────────────────────
+
+const skateboardDeck = Color(0xFF8B5E3C);
+const skateboardWheels = Color(0xFF555555);
+
 // ─── Rendering helpers ──────────────────────────────────────────────────────
 
 /// Draws a sprite at the given pixel position.

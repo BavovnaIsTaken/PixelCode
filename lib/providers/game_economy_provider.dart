@@ -61,6 +61,16 @@ class GameEconomyNotifier extends Notifier<GameState> {
     });
   }
 
+  /// Save locally without syncing back to the server (used when receiving
+  /// a remote game state update to avoid infinite broadcast loops).
+  void _scheduleSaveOnly() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(seconds: 2), () {
+      final prefs = ref.read(sharedPrefsProvider);
+      GamePersistenceService.save(prefs, state);
+    });
+  }
+
   /// Send current game state to the server so it knows which agents
   /// are hired, their hardware (→ model), and skill levels (→ prompt).
   void _syncToServer() {
@@ -82,12 +92,26 @@ class GameEconomyNotifier extends Notifier<GameState> {
       hiredAgents: hiredAgents,
       agentHardware: agentHardware,
       agentSkills: agentSkills,
+      fullState: gs.encode(),
     );
   }
 
   void _onMessage(ServerMessage msg) {
     if (msg is ResultMessage) {
       _onTaskCompleted(msg);
+    } else if (msg is GameStateSyncMessage) {
+      _onGameStateSync(msg);
+    }
+  }
+
+  /// Apply game state received from another device via the server.
+  void _onGameStateSync(GameStateSyncMessage msg) {
+    try {
+      final remote = GameState.decode(msg.fullState);
+      state = remote;
+      _scheduleSaveOnly(); // Save locally without re-syncing to server
+    } catch (_) {
+      // Ignore malformed sync messages
     }
   }
 
