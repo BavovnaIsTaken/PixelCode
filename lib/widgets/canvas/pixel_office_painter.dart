@@ -148,6 +148,9 @@ class PixelOfficePainter extends CustomPainter {
       _addStationFurniture(drawables, station, isActive, ch);
     }
 
+    // Coffee machine
+    _addCoffeeMachine(drawables);
+
     // Decorative plants in corners (not in garage)
     if (officeLevel != OfficeLevel.garage) {
       _addPlants(drawables);
@@ -158,6 +161,9 @@ class PixelOfficePainter extends CustomPainter {
       if (!ch.isHired) continue;
       _addCharacter(drawables, ch);
     }
+
+    // Office cat
+    _addCat(drawables);
 
     drawables.sort((a, b) => a.zY.compareTo(b.zY));
     for (final d in drawables) {
@@ -266,15 +272,43 @@ class PixelOfficePainter extends CustomPainter {
   void _addPlants(List<_Drawable> drawables) {
     final plantImg = sprites?.furniture('PLANT');
     if (!_hasImages || plantImg == null) return;
+    final plantTimers = gameState.plantEasterEgg.activeTimers;
 
-    for (final pos in const [
-      (2, 1), (17, 1),   // top corners
-      (2, 11), (17, 11), // bottom corners
-    ]) {
+    for (int i = 0; i < kPlantPositions.length; i++) {
+      final pos = kPlantPositions[i];
       final px = pos.$1 * kTileSize.toDouble();
-      final py = pos.$2 * kTileSize - kTileSize;
+      final basePy = pos.$2 * kTileSize - kTileSize;
       final zY = (pos.$2 + 1) * kTileSize.toDouble();
+
+      final timer = plantTimers[i];
+      final bouncing = timer != null && timer > 0;
+
       drawables.add(_Drawable(zY, (c) {
+        double py = basePy;
+        double scaleX = 1.0;
+        double scaleY = 1.0;
+
+        if (bouncing) {
+          final phase = (kPlantAnimDuration - timer) * kPlantBounceSpeed;
+          // Smooth fade-out envelope so animation settles before timer expires
+          final envelope = (timer / kPlantAnimDuration).clamp(0.0, 1.0);
+          // Bounce: squash/stretch + hop
+          final bounce = math.sin(phase) * 2.0 * envelope;
+          final squash = math.sin(phase * 2) * 0.08 * envelope;
+          py = basePy - bounce.abs();
+          scaleX = 1.0 + squash;
+          scaleY = 1.0 - squash;
+        }
+
+        if (bouncing) {
+          final cx = px + kTileSize / 2;
+          final cy = basePy + kSpriteH.toDouble();
+          c.save();
+          c.translate(cx, cy);
+          c.scale(scaleX, scaleY);
+          c.translate(-cx, -cy);
+        }
+
         c.drawImageRect(
           plantImg,
           Rect.fromLTWH(
@@ -282,6 +316,23 @@ class PixelOfficePainter extends CustomPainter {
           Rect.fromLTWH(px, py, kTileSize, kSpriteH.toDouble()),
           _pixelPaint,
         );
+
+        if (bouncing) c.restore();
+
+        // Sparkle particles when bouncing
+        if (bouncing) {
+          final sparkPaint = Paint()..style = PaintingStyle.fill;
+          final t = (kPlantAnimDuration - timer) / kPlantAnimDuration;
+          for (int s = 0; s < 4; s++) {
+            final angle = t * 6.28 + s * 1.57;
+            final radius = 6.0 + t * 8.0;
+            final sx = px + kTileSize / 2 + math.cos(angle) * radius;
+            final sy = basePy + kTileSize / 2 + math.sin(angle) * radius;
+            final alpha = (1.0 - t).clamp(0.0, 1.0);
+            sparkPaint.color = const Color(0xFF44FF88).withValues(alpha: alpha * 0.7);
+            c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1.5, height: 1.5), sparkPaint);
+          }
+        }
       }));
     }
   }
@@ -403,6 +454,136 @@ class PixelOfficePainter extends CustomPainter {
           drawSpriteMirrored(c, sprite, drawX, drawY, 1.0, resolveColor);
         } else {
           drawSprite(c, sprite, drawX, drawY, 1.0, resolveColor);
+        }
+      }));
+    }
+
+    // ── Skateboard ──
+    if (ch.isOnSkateboard && ch.state == CharState.walk) {
+      drawables.add(_Drawable(charZY - 0.004, (c) {
+        final boardX = ch.x;
+        final boardY = ch.y + sittingOffset + 1;
+        // Deck
+        c.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(center: Offset(boardX, boardY), width: 12, height: 3),
+            const Radius.circular(1.5),
+          ),
+          Paint()..color = skateboardDeck,
+        );
+        // Wheels
+        final wp = Paint()..color = skateboardWheels;
+        c.drawRect(Rect.fromCenter(center: Offset(boardX - 4, boardY + 1.5), width: 2, height: 1.5), wp);
+        c.drawRect(Rect.fromCenter(center: Offset(boardX + 4, boardY + 1.5), width: 2, height: 1.5), wp);
+        // Speed trail
+        final trailPaint = Paint()
+          ..color = agentAccentColor(ch.agentId).withValues(alpha: 0.2)
+          ..strokeWidth = 0.5
+          ..style = PaintingStyle.stroke;
+        final trailDir = ch.dir == CharDirection.right || ch.dir == CharDirection.down ? -1.0 : 1.0;
+        for (int i = 0; i < 3; i++) {
+          final offset = (i + 1) * 3.0 * trailDir;
+          c.drawLine(
+            Offset(boardX + offset, boardY - 1),
+            Offset(boardX + offset + trailDir * 2, boardY - 1),
+            trailPaint,
+          );
+        }
+      }));
+    }
+  }
+
+  // ─── Coffee machine ────────────────────────────────────────────────────
+
+  void _addCoffeeMachine(List<_Drawable> drawables) {
+    final brewing = gameState.coffeeMachineBrewing;
+    final sprite = brewing
+        ? (tick % 2 == 0 ? coffeeMachineBrew0 : coffeeMachineBrew1)
+        : coffeeMachineIdle;
+    final px = kCoffeeMachineCol * kTileSize + (kTileSize - sprite[0].length) / 2;
+    final py = kCoffeeMachineRow * kTileSize + (kTileSize - sprite.length) / 2;
+    final zY = (kCoffeeMachineRow + 1) * kTileSize.toDouble();
+
+    drawables.add(_Drawable(zY, (c) {
+      drawSprite(c, sprite, px, py, 1.0,
+          (k) => CoffeeMachinePalette.resolve(k, brewing: brewing));
+
+      // Steam particles when brewing
+      if (brewing) {
+        final steamPaint = Paint()..style = PaintingStyle.fill;
+        final t = tick.toDouble();
+        for (int i = 0; i < 3; i++) {
+          final sx = px + 3.0 + i * 2.0 + math.sin(t + i * 1.5) * 1.5;
+          final sy = py - 2.0 - (t * 0.5 + i).remainder(4.0);
+          final alpha = (0.4 - (t * 0.5 + i).remainder(4.0) / 10.0).clamp(0.0, 0.4);
+          steamPaint.color = Colors.white.withValues(alpha: alpha);
+          c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1, height: 1), steamPaint);
+        }
+      }
+    }));
+  }
+
+  // ─── Office cat ─────────────────────────────────────────────────────────
+
+  void _addCat(List<_Drawable> drawables) {
+    final cat = gameState.cat;
+    final (sprite, mirrored) = getCatSprite(cat);
+    final sw = sprite[0].length.toDouble();
+    final sh = sprite.length.toDouble();
+
+    // When sleeping on desk, draw on desk surface
+    final isSleeping = cat.state == CatAction.sleep;
+    final drawX = cat.x - sw / 2;
+    final drawY = isSleeping ? cat.y - sh + 4 : cat.y - sh + 2;
+    final catZY = isSleeping
+        ? cat.y + kTileSize / 2 + 0.6 // just above desk surface
+        : cat.y + kTileSize / 2 + 0.3;
+
+    // Tiny shadow
+    drawables.add(_Drawable(catZY - 0.001, (c) {
+      c.drawOval(
+        Rect.fromCenter(
+          center: Offset(cat.x, cat.y + (isSleeping ? 2 : 3)),
+          width: 8,
+          height: 3,
+        ),
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.15)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+    }));
+
+    // Cat sprite
+    drawables.add(_Drawable(catZY, (c) {
+      if (mirrored) {
+        drawSpriteMirrored(c, sprite, drawX, drawY, 1.0, CatPalette.resolve);
+      } else {
+        drawSprite(c, sprite, drawX, drawY, 1.0, CatPalette.resolve);
+      }
+    }));
+
+    // Zzz bubble when sleeping
+    if (isSleeping) {
+      drawables.add(_Drawable(catZY + 0.001, (c) {
+        final zx = cat.x + 5;
+        final zy = drawY - 2;
+        final phase = tick % 3;
+        final zPaint = Paint()..style = PaintingStyle.fill;
+        final sizes = [1.0, 1.5, 2.0];
+        for (int i = 0; i <= phase; i++) {
+          zPaint.color = CatPalette.fur.withValues(alpha: 0.5 - i * 0.1);
+          final tp = TextPainter(
+            text: TextSpan(
+              text: 'z',
+              style: TextStyle(
+                color: zPaint.color,
+                fontSize: sizes[i],
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          tp.paint(c, Offset(zx + i * 2.5, zy - i * 2.5));
         }
       }));
     }

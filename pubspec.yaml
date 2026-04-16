@@ -37,6 +37,8 @@ dependencies:
   file_selector: ^0.9.4
   image_picker: ^1.2.0
   multicast_dns: ^0.3.2+3
+  url_launcher: ^6.3.2
+  super_drag_and_drop: ^0.9.1
 
 dev_dependencies:
   flutter_test:

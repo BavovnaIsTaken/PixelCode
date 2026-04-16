@@ -167,12 +167,14 @@ class AgentWsService {
     required List<String> hiredAgents,
     required Map<String, int> agentHardware,
     required Map<String, Map<String, int>> agentSkills,
+    String? fullState,
   }) {
     _send({
       'type': 'set_game_state',
       'hiredAgents': hiredAgents,
       'agentHardware': agentHardware,
       'agentSkills': agentSkills,
+      'fullState': ?fullState,
     });
   }
 
@@ -203,10 +205,34 @@ class AgentWsService {
     _send({'type': 'remove_lesson', 'lessonId': lessonId});
   }
 
+  // ─── Character position sync ─────────────────────────────────────────────
+
+  void syncPositions(Map<String, Map<String, dynamic>> positions) {
+    _send({'type': 'sync_positions', 'positions': positions});
+  }
+
   // ─── Live input sync ─────────────────────────────────────────────────────
 
   void sendInputText(String text) {
     _send({'type': 'input_text', 'text': text});
+  }
+
+  void sendInputImages(List<String> images) {
+    _send({'type': 'input_images', 'images': images});
+  }
+
+  // ─── iOS deploy ──────────────────────────────────────────────────────────
+
+  void iosDeployCheck() {
+    _send({'type': 'ios_deploy_check'});
+  }
+
+  void iosDeployStart() {
+    _send({'type': 'ios_deploy_start'});
+  }
+
+  void iosDeployCancel() {
+    _send({'type': 'ios_deploy_cancel'});
   }
 
   // ─── Permissions bypass ───────────────────────────────────────────────────

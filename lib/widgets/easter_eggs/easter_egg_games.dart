@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'arkanoid_game.dart';
-import 'xquest_game.dart';
+import 'xquest2_game.dart';
 
 /// Tab wrapper for easter egg games — Arkanoid and XQuest.
 class EasterEggGames extends StatefulWidget {
@@ -35,7 +35,7 @@ class _EasterEggGamesState extends State<EasterEggGames> {
             child: Row(
               children: [
                 _tabBtn('ARKANOID', 0),
-                _tabBtn('XQUEST', 1),
+                _tabBtn('XQUEST 2', 1),
               ],
             ),
           ),
@@ -43,7 +43,7 @@ class _EasterEggGamesState extends State<EasterEggGames> {
           Expanded(
             child: _tab == 0
                 ? ArkanoidGame(onClose: widget.onClose)
-                : XQuestGame(onClose: widget.onClose),
+                : XQuest2Game(onClose: widget.onClose),
           ),
         ],
       ),

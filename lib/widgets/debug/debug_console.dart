@@ -18,12 +18,15 @@ class DebugConsole extends ConsumerStatefulWidget {
 
 class _DebugConsoleState extends ConsumerState<DebugConsole> {
   final _scrollController = ScrollController();
+  final _searchController = TextEditingController();
   bool _autoScroll = true;
   String _filter = 'all'; // all, session, sdk, ws, error
+  String _searchQuery = '';
 
   @override
   void dispose() {
     _scrollController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -37,9 +40,28 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
   }
 
   List<DebugLogMessage> _filtered(List<DebugLogMessage> logs) {
-    if (_filter == 'all') return logs;
-    if (_filter == 'error') return logs.where((l) => l.level == 'error' || l.level == 'warn').toList();
-    return logs.where((l) => l.category == _filter).toList();
+    var result = logs;
+
+    // Apply category filter
+    if (_filter == 'all') {
+      result = logs;
+    } else if (_filter == 'error') {
+      result = logs.where((l) => l.level == 'error' || l.level == 'warn').toList();
+    } else {
+      result = logs.where((l) => l.category == _filter).toList();
+    }
+
+    // Apply search filter
+    if (_searchQuery.isNotEmpty) {
+      final query = _searchQuery.toLowerCase();
+      result = result.where((l) =>
+        l.message.toLowerCase().contains(query) ||
+        l.category.toLowerCase().contains(query) ||
+        l.level.toLowerCase().contains(query)
+      ).toList();
+    }
+
+    return result;
   }
 
   @override
@@ -80,8 +102,55 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
                 // Filter chips
                 ..._buildFilters(),
                 const SizedBox(width: 6),
+                // Search field
+                SizedBox(
+                  width: 150,
+                  height: 24,
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.8),
+                      fontSize: 10,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: 'Пошук...',
+                      hintStyle: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        fontSize: 10,
+                      ),
+                      prefixIcon: Icon(
+                        Icons.search,
+                        size: 12,
+                        color: Colors.white.withValues(alpha: 0.3),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                      filled: true,
+                      fillColor: Colors.white.withValues(alpha: 0.04),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(3),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(3),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.08),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(3),
+                        borderSide: BorderSide(
+                          color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Text(
-                  _filter == 'all'
+                  _filter == 'all' && _searchQuery.isEmpty
                       ? '${logs.length}'
                       : '${filtered.length} / ${logs.length}',
                   style: TextStyle(
