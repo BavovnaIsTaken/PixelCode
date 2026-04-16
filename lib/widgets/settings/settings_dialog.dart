@@ -12,11 +12,11 @@ import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
 import '../../providers/session_provider.dart';
+import '../../providers/ios_deploy_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
 import 'claude_avatar.dart';
-import 'ios_deploy_dialog.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
 /// or a centered dialog on desktop.
@@ -267,63 +267,105 @@ class _SettingsContent extends ConsumerWidget {
 
         // ── Section: iOS Deployment ────────────────────────────────
         const SizedBox(height: 32),
-        _SectionHeader(title: 'Розгортання на пристрій'),
+        _SectionHeader(title: 'Конфігурація запуску iOS'),
         const SizedBox(height: 12),
         Text(
-          'Побудуйте та встановіть iOS білк на локальне пристрій '
-          'через Wi-Fi мережу. Потребує ios-deploy (brew install ios-deploy).',
+          'Побудова та OTA-встановлення iOS додатку через Wi-Fi. '
+          'Натисніть іконку телефону у панелі інструментів для '
+          'швидкого запуску.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.35),
             fontSize: 12,
           ),
         ),
-        const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          height: 44,
-          child: FilledButton.icon(
-            onPressed: () => showIOSDeployDialog(context),
-            icon: const Icon(Icons.phone_iphone, size: 16),
-            label: const Text('Розгорнути на iOS'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF00C0D1),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ),
+        const SizedBox(height: 14),
+        const _DeployStatusSection(),
 
         // ── Danger zone ─────────────────────────────────────────────
         const SizedBox(height: 32),
         _SectionHeader(title: 'Небезпечна зона'),
         const SizedBox(height: 12),
         Text(
-          'Видаляє всі кешовані SDK-сесії з диска. '
-          'Поточний контекст розмови буде втрачено.',
+          'Операції, які можуть привести до втрати даних. '
+          'Виконуйте з обережністю.',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.35),
             fontSize: 12,
           ),
         ),
-        const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          height: 44,
-          child: FilledButton.icon(
-            onPressed: () => _confirmClearSessions(context, ref),
-            icon: const Icon(Icons.cleaning_services_rounded, size: 16),
-            label: const Text('Очистити всі SDK-сесії'),
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF00C0D1),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+        const SizedBox(height: 14),
+        // Clear sessions
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Очистити кеш SDK-сесій',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.7),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
               ),
             ),
-          ),
+            const SizedBox(height: 4),
+            Text(
+              'Видаляє всі кешовані сесії з диска. '
+              'Поточний контекст розмови буде втрачено.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.3),
+                fontSize: 11,
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: FilledButton.icon(
+                onPressed: () => _confirmClearSessions(context, ref),
+                icon: const Icon(Icons.cleaning_services_rounded, size: 16),
+                label: const Text('Очистити'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00C0D1),
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
+        const SizedBox(height: 14),
+        // Stop all agents button (only visible when connected)
+        if (isConnected) ...[
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Зупинити всіх агентів',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.7),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Екстрено зупиняє виконання всіх поточних агентів '
+                'та їх підзадач.',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  fontSize: 11,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: const _StopAllButton(),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -1315,6 +1357,188 @@ class _GlitchControlsState extends State<_GlitchControls>
   }
 }
 
+// ─── iOS deploy status & logs ──────────────────────────────────────────────
+
+class _DeployStatusSection extends ConsumerStatefulWidget {
+  const _DeployStatusSection();
+
+  @override
+  ConsumerState<_DeployStatusSection> createState() =>
+      _DeployStatusSectionState();
+}
+
+class _DeployStatusSectionState extends ConsumerState<_DeployStatusSection> {
+  bool _logsExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final deploy = ref.watch(iosDeployProvider);
+
+    // Status indicator
+    final (Color statusColor, String statusText) = switch (deploy.phase) {
+      DeployPhase.idle => (
+          Colors.white.withValues(alpha: 0.2),
+          'Очікує запуску'
+        ),
+      DeployPhase.checking => (
+          const Color(0xFF00C0D1),
+          'Перевірка залежностей...'
+        ),
+      DeployPhase.building => (const Color(0xFF00C0D1), 'Побудова IPA...'),
+      DeployPhase.ready => (const Color(0xFF4ADE80), 'Готово до встановлення'),
+      DeployPhase.error => (
+          const Color(0xFFEF4444),
+          deploy.lastError ?? 'Помилка'
+        ),
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Status row
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: statusColor.withValues(alpha: 0.06),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: statusColor.withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            children: [
+              if (deploy.isBusy)
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: statusColor,
+                  ),
+                )
+              else
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: statusColor,
+                  ),
+                ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  statusText,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              if (deploy.isBusy)
+                InkWell(
+                  onTap: () =>
+                      ref.read(iosDeployProvider.notifier).cancel(),
+                  borderRadius: BorderRadius.circular(4),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Text(
+                      'Скасувати',
+                      style: TextStyle(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.8),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              if (deploy.phase == DeployPhase.ready)
+                InkWell(
+                  onTap: () =>
+                      ref.read(iosDeployProvider.notifier).openInstallUrl(),
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Text(
+                      'Відкрити',
+                      style: TextStyle(
+                        color: Color(0xFF4ADE80),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+
+        // Expandable logs
+        if (deploy.logs.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: () => setState(() => _logsExpanded = !_logsExpanded),
+            child: Row(
+              children: [
+                Icon(
+                  _logsExpanded
+                      ? Icons.expand_less
+                      : Icons.expand_more,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Лог (${deploy.logs.length})',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_logsExpanded) ...[
+            const SizedBox(height: 6),
+            Container(
+              height: 200,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0A0E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.08),
+                ),
+              ),
+              child: SingleChildScrollView(
+                reverse: true,
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final log in deploy.logs)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        child: SelectableText(
+                          log,
+                          style: TextStyle(
+                            color: log.contains('[ПОМИЛКА]')
+                                ? const Color(0xFFFF6B6B)
+                                : Colors.white.withValues(alpha: 0.6),
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
 // ─── Reusable section header ────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
@@ -1330,6 +1554,96 @@ class _SectionHeader extends StatelessWidget {
         fontSize: 11,
         fontWeight: FontWeight.w600,
         letterSpacing: 1.2,
+      ),
+    );
+  }
+}
+
+// ─── Stop all agents button ────────────────────────────────────────────────
+
+class _StopAllButton extends ConsumerStatefulWidget {
+  const _StopAllButton();
+
+  @override
+  ConsumerState<_StopAllButton> createState() => _StopAllButtonState();
+}
+
+class _StopAllButtonState extends ConsumerState<_StopAllButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final agents = ref.watch(agentsProvider);
+    final hasActiveAgents = agents.values.any((a) => a.isActive);
+    final enabled = hasActiveAgents;
+
+    final Color baseColor;
+    final Color borderColor;
+    final Color fgColor;
+
+    if (!enabled) {
+      baseColor = Colors.white.withValues(alpha: 0.04);
+      borderColor = Colors.white.withValues(alpha: 0.08);
+      fgColor = Colors.white.withValues(alpha: 0.2);
+    } else if (_pressed) {
+      baseColor = const Color(0xFF5A1A1E);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.7);
+      fgColor = const Color(0xFFFF5252);
+    } else if (_hovered) {
+      baseColor = const Color(0xFF4A1619);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.55);
+      fgColor = const Color(0xFFFF4D4D);
+    } else {
+      baseColor = const Color(0xFF3D1518);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.4);
+      fgColor = const Color(0xFFFF3B3B);
+    }
+
+    return Tooltip(
+      message: enabled ? 'Зупинити всіх агентів' : 'Немає активних агентів',
+      child: MouseRegion(
+        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() {
+          _hovered = false;
+          _pressed = false;
+        }),
+        child: GestureDetector(
+          onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
+          onTapUp: enabled
+              ? (_) {
+                  setState(() => _pressed = false);
+                  ref.read(wsServiceProvider).interrupt();
+                }
+              : null,
+          onTapCancel: () => setState(() => _pressed = false),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: baseColor,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: borderColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.stop_circle_outlined, size: 16, color: fgColor),
+                const SizedBox(width: 6),
+                Text(
+                  'Зупинити всіх агентів',
+                  style: TextStyle(
+                    color: fgColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

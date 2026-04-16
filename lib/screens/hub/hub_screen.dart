@@ -221,14 +221,32 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _glitchCtrl.stop();
     _shutdownCtrl.forward();
     _iconMoveCtrl.forward();
-    // Start native window collapse after icon reaches the opposite corner
-    Future.delayed(const Duration(milliseconds: 1200), () {
+    // Run Dart-side cleanup in parallel with the icon animation, then trigger
+    // the native window collapse once both are done.
+    final cleanupFuture = _performCleanup();
+    final animationDelay = Future<void>.delayed(const Duration(milliseconds: 1200));
+    Future.wait([cleanupFuture, animationDelay]).then((_) {
+      if (!mounted) return;
       final platform = defaultTargetPlatform;
       if (platform == TargetPlatform.macOS || platform == TargetPlatform.iOS) {
         _windowChannel.invokeMethod('animateShutdown');
       }
       _liftCtrl.forward();
     });
+  }
+
+  /// Disposes WebSocket and server process so native exit doesn't leave orphans.
+  /// Capped at 4 seconds to avoid hanging indefinitely (the server process kill
+  /// tree uses a 2-second SIGTERM grace period internally).
+  Future<void> _performCleanup() async {
+    try {
+      await Future.wait([
+        ref.read(wsServiceProvider).dispose(),
+        ref.read(serverProcessProvider).dispose(),
+      ]).timeout(const Duration(seconds: 4));
+    } catch (_) {
+      // Best-effort — we're shutting down regardless.
+    }
   }
 
   @override
@@ -251,10 +269,51 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   bool get _isMobile => MediaQuery.sizeOf(context).width < 600;
 
+  bool get _isServerConnected =>
+      ref.read(connectionStatusProvider).valueOrNull ?? false;
+
+  /// Number of mobile tabs available (2 without server, 4 with).
+  int get _mobileTabCount => _isServerConnected ? 4 : 2;
+
+  /// Builds the content widget for the current mobile tab.
+  /// Without server: 0=Chat, 1=Office.
+  /// With server: 0=Chat, 1=Office, 2=Board, 3=Shop.
+  Widget _buildMobileTabContent() {
+    if (_isServerConnected) {
+      return switch (_mobileTab) {
+        1 => const AgentCanvas(),
+        2 => const TaskBoardPanel(),
+        3 => const ShopPanel(),
+        _ => _showGames
+            ? EasterEggGames(
+                onClose: () => setState(() => _showGames = false),
+              )
+            : const ChatPanel(),
+      };
+    }
+    return switch (_mobileTab) {
+      1 => const AgentCanvas(),
+      _ => _showGames
+          ? EasterEggGames(
+              onClose: () => setState(() => _showGames = false),
+            )
+          : const ChatPanel(),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final isConnected =
         ref.watch(connectionStatusProvider).valueOrNull ?? false;
+
+    // Clamp mobile tab when server-dependent tabs disappear.
+    if (_mobileTab >= _mobileTabCount) {
+      _mobileTab = _mobileTabCount - 1;
+    }
+    // Clamp desktop view index (0=Office always available).
+    if (!isConnected && _viewIndex > 0) {
+      _viewIndex = 0;
+    }
 
     // Eagerly initialize providers so they collect data even when their
     // panels are closed.
@@ -448,18 +507,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                   },
                   child: KeyedSubtree(
                     key: ValueKey(_mobileTab),
-                    child: switch (_mobileTab) {
-                      1 => const AgentCanvas(),
-                      2 => const TaskBoardPanel(),
-                      3 => const ShopPanel(),
-                      _ =>
-                        _showGames
-                            ? EasterEggGames(
-                                onClose: () =>
-                                    setState(() => _showGames = false),
-                              )
-                            : const ChatPanel(),
-                    },
+                    child: _buildMobileTabContent(),
                   ),
                 ),
                 // Overlay gesture detector for swipe-between-tabs
@@ -489,7 +537,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                       } else if (_swipeDelta < -threshold ||
                           velocity < -velocityThreshold) {
                         // Swipe left → next tab
-                        if (_mobileTab < 3) {
+                        if (_mobileTab < _mobileTabCount - 1) {
                           setState(() {
                             _swipeDirection = -1;
                             _mobileTab++;
@@ -540,12 +588,11 @@ class _HubScreenState extends ConsumerState<HubScreen>
           const SizedBox(width: 8),
           const SessionPicker(compact: true),
           const Spacer(),
-          // Currency
-          _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
-          const SizedBox(width: 8),
-          // Stop button
-          if (isConnected) const _StopAllButton(iconOnly: true),
-          const SizedBox(width: 4),
+          // Currency (server-dependent)
+          if (isConnected)
+            _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
+          if (isConnected)
+            const SizedBox(width: 8),
           // Settings
           IconButton(
             onPressed: () => showSettingsDialog(context),
@@ -563,11 +610,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   Widget _buildMobileBottomNav() {
-    const items = <(IconData, String)>[
+    final isConnected =
+        ref.watch(connectionStatusProvider).valueOrNull ?? false;
+    final items = <(IconData, String)>[
       (Icons.chat_outlined, 'Чат'),
       (Icons.grid_view_rounded, 'Офіс'),
-      (Icons.dashboard_outlined, 'Дошка'),
-      (Icons.storefront_outlined, 'Крамниця'),
+      if (isConnected) (Icons.dashboard_outlined, 'Дошка'),
+      if (isConnected) (Icons.storefront_outlined, 'Крамниця'),
     ];
 
     return Container(
@@ -689,24 +738,21 @@ class _HubScreenState extends ConsumerState<HubScreen>
           const SizedBox(width: 12),
           const ProjectSelector(),
           const Spacer(),
-          // Currency display
-          _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
-          const SizedBox(width: 12),
+          // Currency display (server-dependent)
+          if (isConnected)
+            _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
+          if (isConnected)
+            const SizedBox(width: 12),
           // View toggle: Canvas / Board / Shop
           _ViewToggle(
             viewIndex: _viewIndex,
             onChanged: (i) => setState(() => _viewIndex = i),
+            showServerTabs: isConnected,
           ),
-          const SizedBox(width: 12),
-          Container(
-            width: 1,
-            height: 16,
-            color: Colors.white.withValues(alpha: 0.1),
-          ),
-          const SizedBox(width: 12),
-          // Emergency stop button
-          if (isConnected) const _StopAllButton(),
-          const SizedBox(width: 12),
+          if (isConnected)
+            const SizedBox(width: 8)
+          else
+            const SizedBox(width: 8),
           // Games quick-launch (visible when pinned from inside the game)
           if (ref.watch(settingsProvider).showArkanoidButton)
             Padding(
@@ -729,7 +775,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                 ),
               ),
             ),
-          _IOSDeployButton(),
+          if (isConnected) _IOSDeployButton(),
           const SizedBox(width: 4),
           Tooltip(
             message: 'Налаштування',
@@ -896,7 +942,7 @@ class _GrymniDisplay extends StatelessWidget {
         ? '${(grymni / 1000).toStringAsFixed(grymni % 1000 == 0 ? 0 : 1)}K'
         : grymni.toString();
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.fromLTRB(12, 3, 8, 3),
       decoration: BoxDecoration(
         color: const Color(0xFFFFD700).withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(6),
@@ -1009,10 +1055,15 @@ class _IOSDeployButton extends ConsumerWidget {
 class _ViewToggle extends StatelessWidget {
   final int viewIndex;
   final ValueChanged<int> onChanged;
+  final bool showServerTabs;
 
-  const _ViewToggle({required this.viewIndex, required this.onChanged});
+  const _ViewToggle({
+    required this.viewIndex,
+    required this.onChanged,
+    this.showServerTabs = true,
+  });
 
-  static const _items = <(IconData, String)>[
+  static const _allItems = <(IconData, String)>[
     (Icons.grid_view_rounded, 'Офіс'),
     (Icons.dashboard_outlined, 'Дошка'),
     (Icons.storefront_outlined, 'Крамниця'),
@@ -1020,6 +1071,9 @@ class _ViewToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final items = showServerTabs
+        ? _allItems
+        : [_allItems[0]]; // Only Office without server
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.04),
@@ -1029,14 +1083,14 @@ class _ViewToggle extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (int i = 0; i < _items.length; i++)
+          for (int i = 0; i < items.length; i++)
             _toggleItem(
-              icon: _items[i].$1,
-              label: _items[i].$2,
+              icon: items[i].$1,
+              label: items[i].$2,
               isActive: viewIndex == i,
               onTap: viewIndex == i ? null : () => onChanged(i),
               isFirst: i == 0,
-              isLast: i == _items.length - 1,
+              isLast: i == items.length - 1,
             ),
         ],
       ),
@@ -1132,102 +1186,6 @@ class _MobileNavItem extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-
-
-class _StopAllButton extends ConsumerStatefulWidget {
-  const _StopAllButton({this.iconOnly = false});
-
-  final bool iconOnly;
-
-  @override
-  ConsumerState<_StopAllButton> createState() => _StopAllButtonState();
-}
-
-class _StopAllButtonState extends ConsumerState<_StopAllButton> {
-  bool _hovered = false;
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final agents = ref.watch(agentsProvider);
-    final hasActiveAgents = agents.values.any((a) => a.isActive);
-    final enabled = hasActiveAgents;
-
-    final Color baseColor;
-    final Color borderColor;
-    final Color fgColor;
-
-    if (!enabled) {
-      baseColor = Colors.white.withValues(alpha: 0.04);
-      borderColor = Colors.white.withValues(alpha: 0.08);
-      fgColor = Colors.white.withValues(alpha: 0.2);
-    } else if (_pressed) {
-      baseColor = const Color(0xFF5A1A1E);
-      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.7);
-      fgColor = const Color(0xFFFF5252);
-    } else if (_hovered) {
-      baseColor = const Color(0xFF4A1619);
-      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.55);
-      fgColor = const Color(0xFFFF4D4D);
-    } else {
-      baseColor = const Color(0xFF3D1518);
-      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.4);
-      fgColor = const Color(0xFFFF3B3B);
-    }
-
-    return Tooltip(
-      message: enabled ? 'Зупинити всіх агентів' : 'Немає активних агентів',
-      child: MouseRegion(
-        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() {
-          _hovered = false;
-          _pressed = false;
-        }),
-        child: GestureDetector(
-          onTapDown: enabled ? (_) => setState(() => _pressed = true) : null,
-          onTapUp: enabled
-              ? (_) {
-                  setState(() => _pressed = false);
-                  ref.read(wsServiceProvider).interrupt();
-                }
-              : null,
-          onTapCancel: () => setState(() => _pressed = false),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            padding: EdgeInsets.symmetric(
-              horizontal: widget.iconOnly ? 6 : 10,
-              vertical: 4,
-            ),
-            decoration: BoxDecoration(
-              color: baseColor,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: borderColor),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.stop_circle_outlined, size: 14, color: fgColor),
-                if (!widget.iconOnly) ...[
-                  const SizedBox(width: 4),
-                  Text(
-                    'Стоп',
-                    style: TextStyle(
-                      color: fgColor,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
         ),
       ),
     );
