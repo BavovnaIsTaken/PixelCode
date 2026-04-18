@@ -174,6 +174,14 @@ class _SessionFormContentState extends State<_SessionFormContent> {
 
   bool get _isEdit => widget.existing != null;
 
+  /// True when the entered host is a secure tunnel domain (port is ignored).
+  bool get _isSecureHost {
+    final h = _hostCtrl.text.trim();
+    return h.endsWith('.ts.net') ||
+        h.endsWith('.trycloudflare.com') ||
+        h.startsWith('wss://');
+  }
+
   @override
   void initState() {
     super.initState();
@@ -181,6 +189,9 @@ class _SessionFormContentState extends State<_SessionFormContent> {
     _nameCtrl = TextEditingController(text: e?.name ?? '');
     _hostCtrl = TextEditingController(text: e?.host ?? '');
     _portCtrl = TextEditingController(text: (e?.port ?? 9720).toString());
+    _hostCtrl.addListener(() => setState(() {}));
+    // Auto-scan on open (only for new sessions, not edits)
+    if (!_isEdit) _startScan();
   }
 
   @override
@@ -212,9 +223,15 @@ class _SessionFormContentState extends State<_SessionFormContent> {
   }
 
   void _selectDiscovered(DiscoveredServer server) {
-    _hostCtrl.text = server.host;
-    _portCtrl.text = server.port.toString();
-    if (_nameCtrl.text.isEmpty) _nameCtrl.text = server.name;
+    // One-tap connect: directly create profile and return
+    final profile = SessionProfile(
+      id: widget.existing?.id ??
+          DateTime.now().millisecondsSinceEpoch.toString(),
+      name: server.name,
+      host: server.host,
+      port: server.port,
+    );
+    widget.onSubmit(profile);
   }
 
   void _submit() {
@@ -246,7 +263,37 @@ class _SessionFormContentState extends State<_SessionFormContent> {
           onScan: _startScan,
           onSelect: _selectDiscovered,
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
+
+        // ── "or enter manually" divider ─────────────────────────────────
+        if (!_isEdit)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Divider(
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    'або введіть вручну',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.25),
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: Divider(
+                    color: Colors.white.withValues(alpha: 0.08),
+                  ),
+                ),
+              ],
+            ),
+          ),
 
         // ── Name ────────────────────────────────────────────────────────
         _FieldLabel('Назва'),
@@ -259,7 +306,7 @@ class _SessionFormContentState extends State<_SessionFormContent> {
         const SizedBox(height: 16),
 
         // ── Host ────────────────────────────────────────────────────────
-        _FieldLabel('Хост (Tailscale IP)'),
+        _FieldLabel('Хост (IP або домен)'),
         const SizedBox(height: 6),
         _FormField(
           controller: _hostCtrl,
@@ -270,16 +317,41 @@ class _SessionFormContentState extends State<_SessionFormContent> {
         const SizedBox(height: 16),
 
         // ── Port ────────────────────────────────────────────────────────
-        _FieldLabel('Порт'),
-        const SizedBox(height: 6),
-        _FormField(
-          controller: _portCtrl,
-          hintText: '9720',
-          keyboardType: TextInputType.number,
-          monospace: true,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-        ),
-        const SizedBox(height: 16),
+        if (_isSecureHost) ...[
+          _FieldLabel('Порт'),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E0E11),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.06),
+              ),
+            ),
+            child: Text(
+              'не використовується (Tailscale Funnel)',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 13,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ] else ...[
+          _FieldLabel('Порт'),
+          const SizedBox(height: 6),
+          _FormField(
+            controller: _portCtrl,
+            hintText: '9720',
+            keyboardType: TextInputType.number,
+            monospace: true,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          ),
+          const SizedBox(height: 16),
+        ],
 
         // ── Buttons ──────────────────────────────────────────────────────
         Row(
@@ -469,7 +541,40 @@ class _ScanSection extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 6),
-        if (!scanning && discovered.isEmpty)
+        if (scanning && discovered.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0E0E11),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+            child: Column(
+              children: [
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: Color(0xFF00C0D1),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Шукаємо сервери в мережі…',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else if (!scanning && discovered.isEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 12),
@@ -481,7 +586,7 @@ class _ScanSection extends StatelessWidget {
               ),
             ),
             child: Text(
-              'Натисніть «Сканувати» щоб знайти сервери',
+              'Серверів не знайдено',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.25),
@@ -587,10 +692,13 @@ class _DiscoveredServerTile extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(
-              Icons.arrow_forward_ios_rounded,
-              size: 11,
-              color: Colors.white.withValues(alpha: 0.2),
+            Text(
+              'Підключити',
+              style: TextStyle(
+                color: const Color(0xFF00C0D1).withValues(alpha: 0.7),
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),

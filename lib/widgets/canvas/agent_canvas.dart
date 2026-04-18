@@ -15,6 +15,7 @@ import '../../models/agent_message.dart';
 import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/shop_navigation_provider.dart';
 import 'character_sprites.dart';
 import 'office_game_state.dart';
 import 'pixel_office_painter.dart';
@@ -34,6 +35,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   late final Ticker _ticker;
   late final OfficeGameState _gameState;
   final SpriteManager _sprites = SpriteManager();
+  final TransformationController _transformController =
+      TransformationController();
   Duration _lastElapsed = Duration.zero;
   int _tick = 0; // for monitor flicker & bubble animation
   double _tickAccum = 0;
@@ -80,6 +83,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _msgSub?.cancel();
     _posSyncTimer?.cancel();
     _ticker.dispose();
+    _transformController.dispose();
     super.dispose();
   }
 
@@ -134,7 +138,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           Expanded(
             child: agents.isEmpty
                 ? _buildWaiting()
-                : _buildOffice(agents, gameEconomy.officeLevel),
+                : _buildOffice(agents, gameEconomy),
           ),
           if (metrics.isNotEmpty) _TeamMetricsBar(metrics: metrics),
           if (commEvents.isNotEmpty) _CommGraphPanel(events: commEvents),
@@ -223,37 +227,86 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     );
   }
 
-  Widget _buildOffice(Map<String, AgentState> agents, OfficeLevel officeLevel) {
+  Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
+    final officeLevel = gameEconomy.officeLevel;
     return LayoutBuilder(
       builder: (context, constraints) {
-        return MouseRegion(
-          onHover: (event) => _onCanvasHover(event.localPosition, constraints),
-          onExit: (_) {
-            setState(() => _hoveredAgentId = null);
-          },
-          child: GestureDetector(
-            onTapDown: (d) => _onCanvasTap(d.localPosition, constraints),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: CustomPaint(
-                    painter: PixelOfficePainter(
-                      gameState: _gameState,
-                      sprites: _sprites,
-                      selectedAgentId: ref.watch(selectedAgentProvider),
-                      hoveredAgentId: _hoveredAgentId,
-                      tick: _tick,
-                      officeLevel: officeLevel,
+        return Stack(
+          children: [
+            InteractiveViewer(
+              transformationController: _transformController,
+              minScale: 1.0,
+              maxScale: 3.0,
+              child: MouseRegion(
+                onHover: (event) =>
+                    _onCanvasHover(event.localPosition, constraints),
+                onExit: (_) {
+                  setState(() => _hoveredAgentId = null);
+                },
+                child: GestureDetector(
+                  onTapDown: (d) =>
+                      _onCanvasTap(d.localPosition, constraints),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: PixelOfficePainter(
+                            gameState: _gameState,
+                            sprites: _sprites,
+                            selectedAgentId:
+                                ref.watch(selectedAgentProvider),
+                            hoveredAgentId: _hoveredAgentId,
+                            tick: _tick,
+                            officeLevel: officeLevel,
+                            placedFurniture:
+                                gameEconomy.placedFurniture,
+                            editMode:
+                                ref.watch(furnitureEditModeProvider),
+                            selectedFurnitureId:
+                                ref.watch(selectedFurnitureIdProvider),
+                          ),
+                        ),
+                      ),
+                      ..._buildNameOverlays(agents, constraints),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (_isZoomed)
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: GestureDetector(
+                  onTap: _resetZoom,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xCC1A1A2E),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.1),
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.zoom_out_map_rounded,
+                      size: 16,
+                      color: Colors.white.withValues(alpha: 0.5),
                     ),
                   ),
                 ),
-                ..._buildNameOverlays(agents, constraints),
-              ],
-            ),
-          ),
+              ),
+          ],
         );
       },
     );
+  }
+
+  bool get _isZoomed =>
+      _transformController.value.getMaxScaleOnAxis() > 1.01;
+
+  void _resetZoom() {
+    _transformController.value = Matrix4.identity();
   }
 
   /// Convert screen position to world position and hit-test characters.
@@ -301,6 +354,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   void _onCanvasTap(Offset pos, BoxConstraints constraints) {
+    // Furniture edit mode: place or remove furniture on grid
+    final isEditMode = ref.read(furnitureEditModeProvider);
+    if (isEditMode) {
+      _handleFurnitureTap(pos, constraints);
+      return;
+    }
+
     final hit = _hitTestCharacter(pos, constraints);
     if (hit != null) {
       // Only allow selecting hired agents
@@ -312,6 +372,56 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     }
     // Check plant clicks (easter egg)
     _hitTestPlant(pos, constraints);
+  }
+
+  void _handleFurnitureTap(Offset screenPos, BoxConstraints constraints) {
+    final scaleX = constraints.maxWidth / kCanvasWidth;
+    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final scale = math.min(scaleX, scaleY);
+    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
+    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+
+    final worldX = (screenPos.dx - offsetX) / scale;
+    final worldY = (screenPos.dy - offsetY) / scale;
+
+    final col = (worldX / kTileSize).floor();
+    final row = (worldY / kTileSize).floor();
+
+    // Must be on floor (not wall)
+    if (col < 1 || col >= kGridCols - 1 || row < 1 || row >= kGridRows - 1) {
+      return;
+    }
+
+    // Check if tapping on existing placed furniture → remove it
+    final game = ref.read(gameEconomyProvider);
+    for (int i = 0; i < game.placedFurniture.length; i++) {
+      final p = game.placedFurniture[i];
+      final item = furnitureById(p.itemId);
+      if (item == null) continue;
+      if (col >= p.col &&
+          col < p.col + item.widthTiles &&
+          row >= p.row &&
+          row < p.row + item.heightTiles) {
+        ref.read(gameEconomyProvider.notifier).removePlacedFurniture(i);
+        return;
+      }
+    }
+
+    // Place selected furniture
+    final selectedId = ref.read(selectedFurnitureIdProvider);
+    if (selectedId == null) return;
+    final item = furnitureById(selectedId);
+    if (item == null) return;
+
+    // Check tile is not blocked
+    final blocked = _gameState.blockedTiles;
+    for (int dc = 0; dc < item.widthTiles; dc++) {
+      for (int dr = 0; dr < item.heightTiles; dr++) {
+        if (blocked.contains('${col + dc},${row + dr}')) return;
+      }
+    }
+
+    ref.read(gameEconomyProvider.notifier).placeFurniture(selectedId, col, row);
   }
 
   void _hitTestPlant(Offset screenPos, BoxConstraints constraints) {

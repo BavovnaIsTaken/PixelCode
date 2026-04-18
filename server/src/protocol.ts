@@ -8,7 +8,14 @@
 // ─── Client → Server ────────────────────────────────────────────────────────
 
 export type ClientMessage =
-  | { type: "send_message"; content: string; agentId: string; images?: string[] }
+  | {
+      type: "send_message";
+      content: string;
+      agentId: string;
+      images?: string[];
+      taskDifficulty?: number; // 1-5, optional; if set, server checks agent skill level
+      forceSend?: boolean; // bypass skill-gate check
+    }
   | { type: "new_chat" }
   | { type: "resume_session"; sessionId: string }
   | { type: "clear_sessions" }
@@ -54,7 +61,13 @@ export type ClientMessage =
   // iOS OTA deploy
   | { type: "ios_deploy_check" }
   | { type: "ios_deploy_start" }
-  | { type: "ios_deploy_cancel" };
+  | { type: "ios_deploy_cancel" }
+  // Tailscale setup
+  | { type: "tailscale_connect" }
+  // Client identification (sent on connect)
+  | { type: "client_info"; hostname: string; platform: string; clientId: string }
+  // Dungeon training
+  | { type: "start_dungeon"; agentId: string; skillType: number; difficulty: 1 | 2 | 3 };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -92,6 +105,7 @@ export interface TaskCardData {
   assignedAgents: string[];
   createdAt: string; // ISO 8601
   updatedAt: string;
+  difficulty?: number; // 1-5 (1=trivial, 2=easy, 3=medium, 4=hard, 5=expert), default 2
 }
 
 // ─── Server → Client ────────────────────────────────────────────────────────
@@ -249,4 +263,74 @@ export type ServerMessage =
         firstSeen: string;
         lastSeen: string;
       }>;
-    };
+    }
+  // Server connection info (sent on connect + when tunnel becomes available)
+  | {
+      type: "server_info";
+      hostname: string;
+      localIps: string[];
+      port: number;
+      tunnelUrl: string | null; // wss://<machine>.<tailnet>.ts.net (Tailscale Funnel)
+    }
+  // Tailscale setup log line
+  | { type: "tailscale_log"; message: string }
+  // Connected devices list
+  | {
+      type: "clients_updated";
+      clients: ConnectedClientInfo[];
+    }
+  // Task dispatch (non-blocking agent coordination)
+  | {
+      type: "task_dispatched";
+      dispatchId: string;
+      agentId: string;
+      task: string;
+      priority: string;
+    }
+  | {
+      type: "subagent_result";
+      dispatchId: string;
+      agentId: string;
+      result: string;
+      costUsd: number;
+      durationMs: number;
+    }
+  | {
+      type: "queue_status";
+      pending: number;
+      running: Array<{ dispatchId: string; agentId: string; task: string; elapsedMs: number }>;
+    }
+  // Task difficulty gate
+  | {
+      type: "task_too_hard";
+      agentId: string;
+      required: number; // minimum avg skill level needed
+      current: number; // agent's current avg skill level
+    }
+  // Dungeon training
+  | {
+      type: "dungeon_started";
+      agentId: string;
+      skillType: number;
+      difficulty: number;
+      challenge: string; // challenge description shown in UI
+    }
+  | {
+      type: "dungeon_complete";
+      agentId: string;
+      skillType: number;
+      xpEarned: number;
+      score: number; // 1-10
+      feedback: string;
+      passed: boolean;
+    }
+  | { type: "dungeon_error"; agentId: string; error: string };
+
+/** Info about a connected client device. */
+export interface ConnectedClientInfo {
+  clientId: string;
+  hostname: string;
+  platform: string; // "macos" | "ios" | "android" | "web" | "unknown"
+  connectedAt: string; // ISO 8601
+  isLocal: boolean; // true if connected to localhost
+}

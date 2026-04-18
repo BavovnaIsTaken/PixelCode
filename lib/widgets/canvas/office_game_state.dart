@@ -47,14 +47,26 @@ const double kCatSleepMin = 15.0;
 const double kCatSleepMax = 40.0;
 const double kCatSleepOnDeskChance = 0.3;
 
-// Coffee machine
+// Coffee machine (2 tiles wide, against the wall)
 const int kCoffeeMachineCol = 13;
-const int kCoffeeMachineRow = 2;
+const int kCoffeeMachineRow = 1;
+const int kCoffeeMachineCol2 = 14; // second tile
+// Snack table next to coffee machine
+const int kSnackTableCol = 15;
+const int kSnackTableRow = 1;
 const double kCoffeeBrewDuration = 6.0;
 
 // Skateboard
 const double kSkateboardSpeed = 96.0;
 const double kSkateboardChance = 0.2;
+const double kSkateMountDuration = 0.8;
+const double kSkateDismountDuration = 0.6;
+const double kSkateRideFrameDuration = 0.25;
+
+// Coffee
+const double kCoffeeWalkChance = 0.15;
+const double kCoffeeDrinkDuration = 20.0;
+const double kCoffeeSkateChance = 0.05;
 
 // Plant easter egg
 const double kPlantAnimDuration = 3.0;
@@ -72,7 +84,7 @@ enum TileType { wall, floor }
 
 enum CharDirection { down, left, right, up }
 
-enum CharState { idle, walk, typing }
+enum CharState { idle, walk, typing, skateMount, skateDismount }
 
 enum CatAction { idle, walk, sleep }
 
@@ -188,6 +200,8 @@ class GameCharacter {
   double seatTimer;
   DeskStation? seat;
   bool isOnSkateboard;
+  bool hasCoffee;
+  double coffeeTimer;
 
   GameCharacter({
     required this.agentId,
@@ -201,6 +215,8 @@ class GameCharacter {
     this.isActive = false,
     this.seatTimer = 0,
     this.isOnSkateboard = false,
+    this.hasCoffee = false,
+    this.coffeeTimer = 0,
   })  : paletteIndex = agentPaletteIndex[agentId] ?? 0,
         dir = dir ?? seat?.facingDir ?? CharDirection.down,
         x = x ??
@@ -383,6 +399,8 @@ class OfficeGameState {
       blockedTiles.add('${station.seatCol},${station.seatRow}');
     }
     blockedTiles.add('$kCoffeeMachineCol,$kCoffeeMachineRow');
+    blockedTiles.add('$kCoffeeMachineCol2,$kCoffeeMachineRow');
+    blockedTiles.add('$kSnackTableCol,$kSnackTableRow');
   }
 
   void _buildWalkableTiles() {
@@ -545,6 +563,15 @@ class OfficeGameState {
   void _updateCharacter(GameCharacter ch, double dt) {
     ch.frameTimer += dt;
 
+    // Count down coffee timer while typing
+    if (ch.hasCoffee && ch.state == CharState.typing) {
+      ch.coffeeTimer -= dt;
+      if (ch.coffeeTimer <= 0) {
+        ch.hasCoffee = false;
+        ch.coffeeTimer = 0;
+      }
+    }
+
     switch (ch.state) {
       case CharState.typing:
         if (ch.frameTimer >= kTypeFrameDuration) {
@@ -577,6 +604,7 @@ class OfficeGameState {
 
         ch.wanderTimer -= dt;
         if (ch.wanderTimer <= 0) {
+          // Return to seat when done wandering
           if (ch.wanderCount >= ch.wanderLimit && ch.seat != null) {
             final path = _findPathForCharacter(
               ch, ch.seat!.seatCol, ch.seat!.seatRow,
@@ -590,27 +618,83 @@ class OfficeGameState {
               break;
             }
           }
+
+          // Chance to go get coffee instead of random wander
+          if (!ch.hasCoffee && _rng.nextDouble() < kCoffeeWalkChance) {
+            final coffeePath = _findPathToCoffeeArea(ch);
+            if (coffeePath.isNotEmpty) {
+              ch.path = coffeePath;
+              ch.moveProgress = 0;
+              ch.state = CharState.walk;
+              ch.frame = 0;
+              ch.frameTimer = 0;
+              ch.wanderCount++;
+              break;
+            }
+          }
+
           if (walkableTiles.isNotEmpty) {
             final target = walkableTiles[_rng.nextInt(walkableTiles.length)];
             final path = _findPathForCharacter(ch, target.col, target.row);
             if (path.isNotEmpty) {
               ch.path = path;
               ch.moveProgress = 0;
-              ch.state = CharState.walk;
-              ch.frame = 0;
-              ch.frameTimer = 0;
               ch.wanderCount++;
-              ch.isOnSkateboard = _rng.nextDouble() < kSkateboardChance;
+              // Decide if skateboarding
+              final wantSkate = ch.hasCoffee
+                  ? _rng.nextDouble() < kCoffeeSkateChance
+                  : _rng.nextDouble() < kSkateboardChance;
+              if (wantSkate) {
+                // Enter mount phase before walking
+                ch.isOnSkateboard = true;
+                ch.state = CharState.skateMount;
+                ch.frame = 0;
+                ch.frameTimer = 0;
+              } else {
+                ch.state = CharState.walk;
+                ch.frame = 0;
+                ch.frameTimer = 0;
+              }
             }
           }
           ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
         }
         break;
 
+      case CharState.skateMount:
+        // Wait for mount animation, then start riding
+        if (ch.frameTimer >= kSkateMountDuration) {
+          ch.state = CharState.walk;
+          ch.frame = 0;
+          ch.frameTimer = 0;
+        }
+        // Cancel mount if activated
+        if (ch.isActive) {
+          ch.isOnSkateboard = false;
+          _activateCharacter(ch);
+        }
+        break;
+
+      case CharState.skateDismount:
+        // Wait for dismount animation, then go idle
+        if (ch.frameTimer >= kSkateDismountDuration) {
+          ch.isOnSkateboard = false;
+          _afterDismount(ch);
+        }
+        // Cancel dismount if activated
+        if (ch.isActive) {
+          ch.isOnSkateboard = false;
+          _activateCharacter(ch);
+        }
+        break;
+
       case CharState.walk:
-        if (ch.frameTimer >= kWalkFrameDuration) {
-          ch.frameTimer -= kWalkFrameDuration;
-          ch.frame = (ch.frame + 1) % 4;
+        final frameDuration =
+            ch.isOnSkateboard ? kSkateRideFrameDuration : kWalkFrameDuration;
+        final frameCount = ch.isOnSkateboard ? 2 : 4;
+        if (ch.frameTimer >= frameDuration) {
+          ch.frameTimer -= frameDuration;
+          ch.frame = (ch.frame + 1) % frameCount;
         }
 
         if (ch.path.isEmpty) {
@@ -645,6 +729,7 @@ class OfficeGameState {
 
         // Repath to seat if became active while wandering
         if (ch.isActive && ch.seat != null) {
+          ch.isOnSkateboard = false;
           final lastStep = ch.path.isNotEmpty ? ch.path.last : null;
           if (lastStep == null ||
               lastStep.col != ch.seat!.seatCol ||
@@ -662,7 +747,46 @@ class OfficeGameState {
     }
   }
 
+  /// Find a path to a tile adjacent to the coffee machine.
+  List<TilePos> _findPathToCoffeeArea(GameCharacter ch) {
+    // Try tiles adjacent to the coffee machine
+    for (final d in const [(0, 1), (1, 0), (-1, 0), (0, -1)]) {
+      final tc = kCoffeeMachineCol + d.$1;
+      final tr = kCoffeeMachineRow + d.$2;
+      if (_isWalkable(tc, tr, tileMap, blockedTiles)) {
+        final path = _findPathForCharacter(ch, tc, tr);
+        if (path.isNotEmpty) return path;
+      }
+    }
+    return [];
+  }
+
   void _onPathComplete(GameCharacter ch) {
+    // Check if arrived near coffee machine → get coffee
+    if (!ch.hasCoffee) {
+      final dc = (ch.tileCol - kCoffeeMachineCol).abs();
+      final dr = (ch.tileRow - kCoffeeMachineRow).abs();
+      if (dc + dr == 1) {
+        ch.hasCoffee = true;
+        ch.coffeeTimer = kCoffeeDrinkDuration;
+        coffeeMachineBrewing = true;
+        _coffeeBrewTimer = kCoffeeBrewDuration;
+      }
+    }
+
+    // If on skateboard, dismount first
+    if (ch.isOnSkateboard) {
+      ch.state = CharState.skateDismount;
+      ch.frame = 0;
+      ch.frameTimer = 0;
+      return;
+    }
+
+    _afterDismount(ch);
+  }
+
+  /// Called after skateboard dismount (or directly if not on skateboard).
+  void _afterDismount(GameCharacter ch) {
     ch.isOnSkateboard = false;
     if (ch.isActive) {
       if (ch.seat != null &&

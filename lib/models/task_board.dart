@@ -82,6 +82,35 @@ enum StickyColor {
 
 // ─── Task Card ──────────────────────────────────────────────────────────────
 
+// ─── Task Difficulty ────────────────────────────────────────────────────────
+
+/// Task difficulty level (1-5). Determines required agent avg skill level.
+/// 1=Trivial (skill 1+), 2=Easy (3+), 3=Medium (5+), 4=Hard (7+), 5=Expert (9+)
+extension TaskDifficultyExt on int {
+  /// Minimum required avg skill level for this difficulty.
+  double get requiredSkill => const [0, 1, 3, 5, 7, 9][clamp(0, 5).toInt()].toDouble();
+
+  String get difficultyLabel => switch (this) {
+        1 => 'Trivial',
+        2 => 'Easy',
+        3 => 'Medium',
+        4 => 'Hard',
+        5 => 'Expert',
+        _ => 'Easy',
+      };
+
+  String get difficultyStars => switch (this) {
+        1 => '·',
+        2 => '··',
+        3 => '···',
+        4 => '····',
+        5 => '·····',
+        _ => '··',
+      };
+}
+
+// ─── Task Card ──────────────────────────────────────────────────────────────
+
 class TaskCard {
   final String id;
   final String title;
@@ -92,6 +121,8 @@ class TaskCard {
   final List<String> assignedAgents;
   final DateTime createdAt;
   final DateTime updatedAt;
+  /// Difficulty level 1-5. Default 2 (Easy).
+  final int difficulty;
 
   const TaskCard({
     required this.id,
@@ -103,6 +134,7 @@ class TaskCard {
     this.assignedAgents = const [],
     required this.createdAt,
     required this.updatedAt,
+    this.difficulty = 2,
   });
 
   TaskCard copyWith({
@@ -113,6 +145,7 @@ class TaskCard {
     StickyColor? color,
     List<String>? assignedAgents,
     DateTime? updatedAt,
+    int? difficulty,
   }) =>
       TaskCard(
         id: id,
@@ -124,6 +157,7 @@ class TaskCard {
         assignedAgents: assignedAgents ?? this.assignedAgents,
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
+        difficulty: difficulty ?? this.difficulty,
       );
 
   factory TaskCard.fromJson(Map<String, dynamic> json) => TaskCard(
@@ -140,6 +174,7 @@ class TaskCard {
             [],
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
+        difficulty: json['difficulty'] as int? ?? 2,
       );
 
   Map<String, dynamic> toJson() => {
@@ -152,6 +187,7 @@ class TaskCard {
         'assignedAgents': assignedAgents,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
+        'difficulty': difficulty,
       };
 }
 

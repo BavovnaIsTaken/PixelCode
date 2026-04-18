@@ -86,9 +86,19 @@ sealed class ServerMessage {
       'input_text' => InputTextMessage.fromJson(json),
       'input_images' => InputImagesMessage.fromJson(json),
       'ios_deploy_status' => IOSDeployStatusMessage.fromJson(json),
+      'tailscale_log' => TailscaleLogMessage.fromJson(json),
       'chat_history' => ChatHistoryMessage.fromJson(json),
       'game_state_sync' => GameStateSyncMessage.fromJson(json),
       'positions_sync' => PositionsSyncMessage.fromJson(json),
+      'server_info' => ServerInfoMessage.fromJson(json),
+      'clients_updated' => ClientsUpdatedMessage.fromJson(json),
+      'task_dispatched' => TaskDispatchedMessage.fromJson(json),
+      'subagent_result' => SubagentResultMessage.fromJson(json),
+      'queue_status' => QueueStatusMessage.fromJson(json),
+      'task_too_hard' => TaskTooHardMessage.fromJson(json),
+      'dungeon_started' => DungeonStartedMessage.fromJson(json),
+      'dungeon_complete' => DungeonCompleteMessage.fromJson(json),
+      'dungeon_error' => DungeonErrorMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -454,6 +464,225 @@ class IOSDeployStatusMessage implements ServerMessage {
       success: json['success'] as bool?,
     );
   }
+}
+
+class TailscaleLogMessage implements ServerMessage {
+  final String message;
+  const TailscaleLogMessage({required this.message});
+  factory TailscaleLogMessage.fromJson(Map<String, dynamic> json) =>
+      TailscaleLogMessage(message: json['message'] as String);
+}
+
+class ServerInfoMessage implements ServerMessage {
+  final String hostname;
+  final List<String> localIps;
+  final int port;
+  final String? tunnelUrl;
+
+  ServerInfoMessage({
+    required this.hostname,
+    required this.localIps,
+    required this.port,
+    this.tunnelUrl,
+  });
+
+  factory ServerInfoMessage.fromJson(Map<String, dynamic> json) =>
+      ServerInfoMessage(
+        hostname: json['hostname'] as String? ?? '',
+        localIps: (json['localIps'] as List?)?.cast<String>() ?? const [],
+        port: json['port'] as int? ?? 9720,
+        tunnelUrl: json['tunnelUrl'] as String?,
+      );
+}
+
+// ─── Connected devices ─────────────────────────────────────────────────────
+
+class ConnectedClient {
+  final String clientId;
+  final String hostname;
+  final String platform; // "macos", "ios", "android", "web", "unknown"
+  final DateTime connectedAt;
+  final bool isLocal;
+
+  const ConnectedClient({
+    required this.clientId,
+    required this.hostname,
+    required this.platform,
+    required this.connectedAt,
+    required this.isLocal,
+  });
+
+  factory ConnectedClient.fromJson(Map<String, dynamic> json) =>
+      ConnectedClient(
+        clientId: json['clientId'] as String? ?? '',
+        hostname: json['hostname'] as String? ?? 'unknown',
+        platform: json['platform'] as String? ?? 'unknown',
+        connectedAt: DateTime.tryParse(json['connectedAt'] as String? ?? '') ??
+            DateTime.now(),
+        isLocal: json['isLocal'] as bool? ?? false,
+      );
+}
+
+class ClientsUpdatedMessage implements ServerMessage {
+  final List<ConnectedClient> clients;
+  ClientsUpdatedMessage({required this.clients});
+  factory ClientsUpdatedMessage.fromJson(Map<String, dynamic> json) =>
+      ClientsUpdatedMessage(
+        clients: (json['clients'] as List?)
+                ?.map((c) => ConnectedClient.fromJson(c as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+// ─── Task dispatch (non-blocking coordination) ───────────────────────────
+
+class TaskDispatchedMessage implements ServerMessage {
+  final String dispatchId;
+  final String agentId;
+  final String task;
+  final String priority;
+
+  TaskDispatchedMessage({
+    required this.dispatchId,
+    required this.agentId,
+    required this.task,
+    required this.priority,
+  });
+
+  factory TaskDispatchedMessage.fromJson(Map<String, dynamic> json) =>
+      TaskDispatchedMessage(
+        dispatchId: json['dispatchId'] as String? ?? '',
+        agentId: json['agentId'] as String? ?? '',
+        task: json['task'] as String? ?? '',
+        priority: json['priority'] as String? ?? 'normal',
+      );
+}
+
+class SubagentResultMessage implements ServerMessage {
+  final String dispatchId;
+  final String agentId;
+  final String result;
+  final double costUsd;
+  final int durationMs;
+
+  SubagentResultMessage({
+    required this.dispatchId,
+    required this.agentId,
+    required this.result,
+    required this.costUsd,
+    required this.durationMs,
+  });
+
+  factory SubagentResultMessage.fromJson(Map<String, dynamic> json) =>
+      SubagentResultMessage(
+        dispatchId: json['dispatchId'] as String? ?? '',
+        agentId: json['agentId'] as String? ?? '',
+        result: json['result'] as String? ?? '',
+        costUsd: (json['costUsd'] as num?)?.toDouble() ?? 0,
+        durationMs: json['durationMs'] as int? ?? 0,
+      );
+}
+
+class RunningAgentInfo {
+  final String dispatchId;
+  final String agentId;
+  final String task;
+  final int elapsedMs;
+
+  const RunningAgentInfo({
+    required this.dispatchId,
+    required this.agentId,
+    required this.task,
+    required this.elapsedMs,
+  });
+
+  factory RunningAgentInfo.fromJson(Map<String, dynamic> json) =>
+      RunningAgentInfo(
+        dispatchId: json['dispatchId'] as String? ?? '',
+        agentId: json['agentId'] as String? ?? '',
+        task: json['task'] as String? ?? '',
+        elapsedMs: json['elapsedMs'] as int? ?? 0,
+      );
+}
+
+class QueueStatusMessage implements ServerMessage {
+  final int pending;
+  final List<RunningAgentInfo> running;
+
+  QueueStatusMessage({required this.pending, required this.running});
+
+  factory QueueStatusMessage.fromJson(Map<String, dynamic> json) =>
+      QueueStatusMessage(
+        pending: json['pending'] as int? ?? 0,
+        running: (json['running'] as List?)
+                ?.map((r) => RunningAgentInfo.fromJson(r as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+// ─── Dungeon & difficulty messages ─────────────────────────────────────────
+
+class TaskTooHardMessage implements ServerMessage {
+  final String agentId;
+  final double required;
+  final double current;
+  TaskTooHardMessage({required this.agentId, required this.required, required this.current});
+  factory TaskTooHardMessage.fromJson(Map<String, dynamic> json) => TaskTooHardMessage(
+        agentId: json['agentId'] as String? ?? '',
+        required: (json['required'] as num?)?.toDouble() ?? 1,
+        current: (json['current'] as num?)?.toDouble() ?? 1,
+      );
+}
+
+class DungeonStartedMessage implements ServerMessage {
+  final String agentId;
+  final int skillType;
+  final int difficulty;
+  final String challenge;
+  DungeonStartedMessage({required this.agentId, required this.skillType, required this.difficulty, required this.challenge});
+  factory DungeonStartedMessage.fromJson(Map<String, dynamic> json) => DungeonStartedMessage(
+        agentId: json['agentId'] as String? ?? '',
+        skillType: json['skillType'] as int? ?? 0,
+        difficulty: json['difficulty'] as int? ?? 1,
+        challenge: json['challenge'] as String? ?? '',
+      );
+}
+
+class DungeonCompleteMessage implements ServerMessage {
+  final String agentId;
+  final int skillType;
+  final int xpEarned;
+  final int score;
+  final String feedback;
+  final bool passed;
+  DungeonCompleteMessage({
+    required this.agentId,
+    required this.skillType,
+    required this.xpEarned,
+    required this.score,
+    required this.feedback,
+    required this.passed,
+  });
+  factory DungeonCompleteMessage.fromJson(Map<String, dynamic> json) => DungeonCompleteMessage(
+        agentId: json['agentId'] as String? ?? '',
+        skillType: json['skillType'] as int? ?? 0,
+        xpEarned: json['xpEarned'] as int? ?? 0,
+        score: json['score'] as int? ?? 0,
+        feedback: json['feedback'] as String? ?? '',
+        passed: json['passed'] as bool? ?? false,
+      );
+}
+
+class DungeonErrorMessage implements ServerMessage {
+  final String agentId;
+  final String error;
+  DungeonErrorMessage({required this.agentId, required this.error});
+  factory DungeonErrorMessage.fromJson(Map<String, dynamic> json) => DungeonErrorMessage(
+        agentId: json['agentId'] as String? ?? '',
+        error: json['error'] as String? ?? '',
+      );
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

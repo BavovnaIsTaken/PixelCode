@@ -43,6 +43,9 @@ class PixelOfficePainter extends CustomPainter {
   final int tick;
   final OfficeLevel officeLevel;
   final CharacterSkin? skin;
+  final List<FurniturePlacement> placedFurniture;
+  final bool editMode;
+  final String? selectedFurnitureId;
 
   PixelOfficePainter({
     required this.gameState,
@@ -52,6 +55,9 @@ class PixelOfficePainter extends CustomPainter {
     this.tick = 0,
     this.officeLevel = OfficeLevel.garage,
     this.skin,
+    this.placedFurniture = const [],
+    this.editMode = false,
+    this.selectedFurnitureId,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -75,6 +81,7 @@ class PixelOfficePainter extends CustomPainter {
     _drawScene(canvas);
     _drawBubbles(canvas);
     _drawVignette(canvas);
+    if (editMode) _drawEditOverlay(canvas);
 
     canvas.restore();
   }
@@ -148,13 +155,17 @@ class PixelOfficePainter extends CustomPainter {
       _addStationFurniture(drawables, station, isActive, ch);
     }
 
-    // Coffee machine
+    // Coffee machine & snack table
     _addCoffeeMachine(drawables);
+    _addSnackTable(drawables);
 
     // Decorative plants in corners (not in garage)
     if (officeLevel != OfficeLevel.garage) {
       _addPlants(drawables);
     }
+
+    // Placed furniture items
+    _addPlacedFurniture(drawables);
 
     // Characters (only hired)
     for (final ch in gameState.characters.values) {
@@ -459,68 +470,379 @@ class PixelOfficePainter extends CustomPainter {
     }
 
     // ── Skateboard ──
-    if (ch.isOnSkateboard && ch.state == CharState.walk) {
+    final showBoard = ch.isOnSkateboard &&
+        (ch.state == CharState.walk ||
+         ch.state == CharState.skateMount ||
+         ch.state == CharState.skateDismount);
+    if (showBoard) {
       drawables.add(_Drawable(charZY - 0.004, (c) {
         final boardX = ch.x;
-        final boardY = ch.y + sittingOffset + 1;
+        final boardY = ch.y + 1;
+
+        // During mount: board fades in (scale up). During dismount: fades out.
+        double boardScale = 1.0;
+        double boardAlpha = 1.0;
+        if (ch.state == CharState.skateMount) {
+          final progress = (ch.frameTimer / kSkateMountDuration).clamp(0.0, 1.0);
+          boardScale = 0.3 + 0.7 * progress;
+          boardAlpha = progress;
+        } else if (ch.state == CharState.skateDismount) {
+          final progress = (ch.frameTimer / kSkateDismountDuration).clamp(0.0, 1.0);
+          boardScale = 1.0 - 0.7 * progress;
+          boardAlpha = 1.0 - progress;
+        }
+
+        final deckW = 12.0 * boardScale;
+        final deckH = 3.0 * boardScale;
+
         // Deck
         c.drawRRect(
           RRect.fromRectAndRadius(
-            Rect.fromCenter(center: Offset(boardX, boardY), width: 12, height: 3),
-            const Radius.circular(1.5),
+            Rect.fromCenter(center: Offset(boardX, boardY), width: deckW, height: deckH),
+            Radius.circular(1.5 * boardScale),
           ),
-          Paint()..color = skateboardDeck,
+          Paint()..color = skateboardDeck.withValues(alpha: boardAlpha),
         );
         // Wheels
-        final wp = Paint()..color = skateboardWheels;
-        c.drawRect(Rect.fromCenter(center: Offset(boardX - 4, boardY + 1.5), width: 2, height: 1.5), wp);
-        c.drawRect(Rect.fromCenter(center: Offset(boardX + 4, boardY + 1.5), width: 2, height: 1.5), wp);
-        // Speed trail
-        final trailPaint = Paint()
-          ..color = agentAccentColor(ch.agentId).withValues(alpha: 0.2)
-          ..strokeWidth = 0.5
-          ..style = PaintingStyle.stroke;
-        final trailDir = ch.dir == CharDirection.right || ch.dir == CharDirection.down ? -1.0 : 1.0;
-        for (int i = 0; i < 3; i++) {
-          final offset = (i + 1) * 3.0 * trailDir;
-          c.drawLine(
-            Offset(boardX + offset, boardY - 1),
-            Offset(boardX + offset + trailDir * 2, boardY - 1),
-            trailPaint,
-          );
+        final wp = Paint()..color = skateboardWheels.withValues(alpha: boardAlpha);
+        c.drawRect(
+          Rect.fromCenter(center: Offset(boardX - 4 * boardScale, boardY + 1.5 * boardScale), width: 2, height: 1.5),
+          wp,
+        );
+        c.drawRect(
+          Rect.fromCenter(center: Offset(boardX + 4 * boardScale, boardY + 1.5 * boardScale), width: 2, height: 1.5),
+          wp,
+        );
+        // Speed trail only while riding
+        if (ch.state == CharState.walk) {
+          final trailPaint = Paint()
+            ..color = agentAccentColor(ch.agentId).withValues(alpha: 0.2)
+            ..strokeWidth = 0.5
+            ..style = PaintingStyle.stroke;
+          final trailDir = ch.dir == CharDirection.right || ch.dir == CharDirection.down ? -1.0 : 1.0;
+          for (int i = 0; i < 3; i++) {
+            final offset = (i + 1) * 3.0 * trailDir;
+            c.drawLine(
+              Offset(boardX + offset, boardY - 1),
+              Offset(boardX + offset + trailDir * 2, boardY - 1),
+              trailPaint,
+            );
+          }
         }
+      }));
+    }
+
+    // ── Coffee cup in hand ──
+    if (ch.hasCoffee) {
+      drawables.add(_Drawable(charZY + 0.001, (c) {
+        _drawCoffeeCup(c, ch.x, ch.y + sittingOffset, ch.dir);
       }));
     }
   }
 
-  // ─── Coffee machine ────────────────────────────────────────────────────
+  /// Draw a tiny coffee cup at the character's hand position.
+  void _drawCoffeeCup(Canvas c, double cx, double cy, CharDirection dir) {
+    final cupPaint = Paint()..color = const Color(0xFF6B4226);
+    final rimPaint = Paint()..color = const Color(0xFFE8E0D8);
+    final steamPaint = Paint()..color = Colors.white.withValues(alpha: 0.35);
+
+    // Offset cup position based on facing direction
+    double cupX, cupY;
+    switch (dir) {
+      case CharDirection.down:
+        cupX = cx + 3.5;
+        cupY = cy - 4;
+      case CharDirection.up:
+        cupX = cx - 3.5;
+        cupY = cy - 6;
+      case CharDirection.right:
+        cupX = cx + 4;
+        cupY = cy - 5;
+      case CharDirection.left:
+        cupX = cx - 4;
+        cupY = cy - 5;
+    }
+
+    // Cup body (brown)
+    c.drawRect(Rect.fromLTWH(cupX, cupY, 3, 3), cupPaint);
+    // Rim (white)
+    c.drawRect(Rect.fromLTWH(cupX, cupY, 3, 1), rimPaint);
+    // Handle
+    c.drawRect(Rect.fromLTWH(cupX + 3, cupY + 1, 1, 1), cupPaint);
+    // Steam wisps (animated via tick)
+    final t = tick.toDouble();
+    for (int i = 0; i < 2; i++) {
+      final sx = cupX + 0.5 + i * 1.5 + math.sin(t * 0.7 + i * 2.0) * 0.8;
+      final sy = cupY - 1.0 - i * 1.0;
+      final alpha = (0.3 - i * 0.1).clamp(0.0, 0.3);
+      steamPaint.color = Colors.white.withValues(alpha: alpha);
+      c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1, height: 1), steamPaint);
+    }
+  }
+
+  // ─── Coffee machine (large, 2 tiles) ────────────────────────────────────
 
   void _addCoffeeMachine(List<_Drawable> drawables) {
     final brewing = gameState.coffeeMachineBrewing;
-    final sprite = brewing
-        ? (tick % 2 == 0 ? coffeeMachineBrew0 : coffeeMachineBrew1)
-        : coffeeMachineIdle;
-    final px = kCoffeeMachineCol * kTileSize + (kTileSize - sprite[0].length) / 2;
-    final py = kCoffeeMachineRow * kTileSize + (kTileSize - sprite.length) / 2;
+    final theme = _theme;
+    final baseX = kCoffeeMachineCol * kTileSize;
+    final baseY = kCoffeeMachineRow * kTileSize;
     final zY = (kCoffeeMachineRow + 1) * kTileSize.toDouble();
+    final p = Paint()..style = PaintingStyle.fill;
 
     drawables.add(_Drawable(zY, (c) {
-      drawSprite(c, sprite, px, py, 1.0,
-          (k) => CoffeeMachinePalette.resolve(k, brewing: brewing));
+      // ── Counter / table (spans 2 tiles) ──
+      p.color = theme.deskSurface;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 10, 30, 5), p);
+      p.color = theme.deskEdge;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 15, 30, 1), p);
 
-      // Steam particles when brewing
+      // ── Coffee machine body (left tile, bigger) ──
+      const machX = 3.0;
+      final mx = baseX + machX;
+      final my = baseY + 1.0;
+
+      // Main body
+      p.color = const Color(0xFF3A3A40);
+      c.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(mx, my, 12, 9),
+          const Radius.circular(1),
+        ),
+        p,
+      );
+
+      // Top panel
+      p.color = const Color(0xFF2A2A30);
+      c.drawRect(Rect.fromLTWH(mx, my, 12, 2), p);
+
+      // Indicator lights
+      p.color = brewing ? const Color(0xFF44FF44) : const Color(0xFF884444);
+      c.drawRect(Rect.fromLTWH(mx + 2, my + 0.5, 2, 1), p);
+      c.drawRect(Rect.fromLTWH(mx + 5, my + 0.5, 2, 1), p);
+
+      // Dispenser nozzle
+      p.color = const Color(0xFF2A2A30);
+      c.drawRect(Rect.fromLTWH(mx + 4, my + 4, 4, 2), p);
+
+      // Coffee drip when brewing
+      if (brewing) {
+        p.color = const Color(0xFF6B4226);
+        final dripY = my + 6 + (tick % 2 == 0 ? 0.0 : 1.0);
+        c.drawRect(Rect.fromLTWH(mx + 5.5, dripY, 1, 1.5), p);
+      }
+
+      // Cup on counter
+      p.color = const Color(0xFFE8E0D8);
+      c.drawRect(Rect.fromLTWH(mx + 4, my + 7, 4, 3), p);
+      p.color = const Color(0xFF6B4226);
+      if (brewing) {
+        c.drawRect(Rect.fromLTWH(mx + 4.5, my + 7.5, 3, 1.5), p);
+      }
+
+      // ── Water tank (right side of machine) ──
+      p.color = const Color(0xFF4A4A55);
+      c.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(mx + 13, my + 1, 5, 8),
+          const Radius.circular(1),
+        ),
+        p,
+      );
+      // Water level
+      p.color = const Color(0xFF5588AA).withValues(alpha: 0.4);
+      c.drawRect(Rect.fromLTWH(mx + 14, my + 3, 3, 5), p);
+
+      // ── Extra cups stack (right of water tank) ──
+      p.color = const Color(0xFFE8E0D8).withValues(alpha: 0.7);
+      for (int i = 0; i < 3; i++) {
+        c.drawRect(Rect.fromLTWH(mx + 20 + i * 1.5, my + 6.5 - i * 0.5, 3, 3.5 + i * 0.5), p);
+      }
+
+      // ── Steam when brewing ──
       if (brewing) {
         final steamPaint = Paint()..style = PaintingStyle.fill;
         final t = tick.toDouble();
-        for (int i = 0; i < 3; i++) {
-          final sx = px + 3.0 + i * 2.0 + math.sin(t + i * 1.5) * 1.5;
-          final sy = py - 2.0 - (t * 0.5 + i).remainder(4.0);
-          final alpha = (0.4 - (t * 0.5 + i).remainder(4.0) / 10.0).clamp(0.0, 0.4);
+        for (int i = 0; i < 5; i++) {
+          final sx = mx + 4.0 + i * 2.5 + math.sin(t + i * 1.2) * 1.5;
+          final sy = my - 1.5 - (t * 0.5 + i).remainder(5.0);
+          final alpha = (0.35 - (t * 0.5 + i).remainder(5.0) / 12.0).clamp(0.0, 0.35);
           steamPaint.color = Colors.white.withValues(alpha: alpha);
-          c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1, height: 1), steamPaint);
+          c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1.5, height: 1.5), steamPaint);
         }
       }
     }));
+  }
+
+  // ─── Snack table ──────────────────────────────────────────────────────────
+
+  void _addSnackTable(List<_Drawable> drawables) {
+    final theme = _theme;
+    final baseX = kSnackTableCol * kTileSize;
+    final baseY = kSnackTableRow * kTileSize;
+    final zY = (kSnackTableRow + 1) * kTileSize.toDouble();
+    final p = Paint()..style = PaintingStyle.fill;
+
+    drawables.add(_Drawable(zY, (c) {
+      // ── Table surface ──
+      p.color = theme.deskSurface;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 10, 14, 5), p);
+      p.color = theme.deskEdge;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 15, 14, 1), p);
+
+      // ── Plate of cookies ──
+      // Plate (light grey circle-ish)
+      p.color = const Color(0xFFD0D0D0);
+      c.drawOval(Rect.fromLTWH(baseX + 2, baseY + 11, 6, 3), p);
+      // Cookies (brown dots)
+      p.color = const Color(0xFF8B6914);
+      c.drawRect(Rect.fromLTWH(baseX + 3, baseY + 11.5, 1.5, 1.5), p);
+      c.drawRect(Rect.fromLTWH(baseX + 5, baseY + 11.5, 1.5, 1.5), p);
+      p.color = const Color(0xFFA07B28);
+      c.drawRect(Rect.fromLTWH(baseX + 4, baseY + 12.5, 1.5, 1), p);
+
+      // ── Sugar bowl ──
+      p.color = const Color(0xFFEEEEEE);
+      c.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(baseX + 9, baseY + 11, 4, 3),
+          const Radius.circular(1),
+        ),
+        p,
+      );
+      // Sugar cubes inside
+      p.color = const Color(0xFFF8F8F8);
+      c.drawRect(Rect.fromLTWH(baseX + 10, baseY + 11.5, 1, 1), p);
+      c.drawRect(Rect.fromLTWH(baseX + 11.5, baseY + 11.5, 1, 1), p);
+
+      // ── Napkin holder ──
+      p.color = const Color(0xFF8B4513);
+      c.drawRect(Rect.fromLTWH(baseX + 7, baseY + 3, 3, 7), p);
+      // Napkins (white)
+      p.color = const Color(0xFFF5F5F5);
+      c.drawRect(Rect.fromLTWH(baseX + 7.5, baseY + 3.5, 2, 6), p);
+    }));
+  }
+
+  // ─── Placed furniture ──────────────────────────────────────────────────
+
+  static const _furnitureColors = <FurnitureType, Color>{
+    FurnitureType.coffeeTable: Color(0xFF6B4226),
+    FurnitureType.snackTable: Color(0xFF8B6914),
+    FurnitureType.decoration: Color(0xFF44AA55),
+    FurnitureType.storage: Color(0xFF5566AA),
+    FurnitureType.lounge: Color(0xFFAA5566),
+  };
+
+  void _addPlacedFurniture(List<_Drawable> drawables) {
+    final theme = _theme;
+    for (final placement in placedFurniture) {
+      final item = furnitureById(placement.itemId);
+      if (item == null) continue;
+
+      final baseX = placement.col * kTileSize;
+      final baseY = placement.row * kTileSize;
+      final w = item.widthTiles * kTileSize;
+      final zY = (placement.row + 1) * kTileSize.toDouble();
+      final accent = _furnitureColors[item.type] ?? const Color(0xFF888888);
+
+      drawables.add(_Drawable(zY, (c) {
+        final p = Paint()..style = PaintingStyle.fill;
+
+        // Table/surface
+        p.color = theme.deskSurface;
+        c.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(baseX + 1, baseY + 8, w - 2, 7),
+            const Radius.circular(1),
+          ),
+          p,
+        );
+        p.color = theme.deskEdge;
+        c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 15, w - 2, 1), p);
+
+        // Item visual on top (small colored element)
+        p.color = accent.withValues(alpha: 0.8);
+        final itemW = (w - 6).clamp(4.0, 12.0);
+        c.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(baseX + (w - itemW) / 2, baseY + 3, itemW, 6),
+            const Radius.circular(1.5),
+          ),
+          p,
+        );
+
+        // Highlight dot
+        p.color = accent.withValues(alpha: 0.4);
+        c.drawRect(
+          Rect.fromLTWH(baseX + (w - itemW) / 2 + 1, baseY + 4, 2, 1),
+          p,
+        );
+      }));
+    }
+  }
+
+  // ─── Edit mode overlay ────────────────────────────────────────────────
+
+  void _drawEditOverlay(Canvas canvas) {
+    final blocked = gameState.blockedTiles;
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // Semi-transparent tile highlights
+    for (int r = 1; r < kGridRows - 1; r++) {
+      for (int c = 1; c < kGridCols - 1; c++) {
+        final tx = c * kTileSize;
+        final ty = r * kTileSize;
+        final key = '$c,$r';
+        final isBlocked = blocked.contains(key);
+
+        // Green = placeable, Red = blocked
+        p.color = isBlocked
+            ? const Color(0xFFFF4444).withValues(alpha: 0.08)
+            : const Color(0xFF44FF44).withValues(alpha: 0.06);
+        canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize, kTileSize), p);
+      }
+    }
+
+    // Grid lines (more visible in edit mode)
+    p
+      ..color = const Color(0xFF44FF44).withValues(alpha: 0.15)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.5;
+    for (int c = 1; c <= kGridCols - 1; c++) {
+      canvas.drawLine(
+        Offset(c * kTileSize, kTileSize),
+        Offset(c * kTileSize, (kGridRows - 1) * kTileSize),
+        p,
+      );
+    }
+    for (int r = 1; r <= kGridRows - 1; r++) {
+      canvas.drawLine(
+        Offset(kTileSize, r * kTileSize),
+        Offset((kGridCols - 1) * kTileSize, r * kTileSize),
+        p,
+      );
+    }
+
+    // Highlight placed furniture outlines
+    for (int i = 0; i < placedFurniture.length; i++) {
+      final placement = placedFurniture[i];
+      final item = furnitureById(placement.itemId);
+      if (item == null) continue;
+
+      final fx = placement.col * kTileSize;
+      final fy = placement.row * kTileSize;
+      final fw = item.widthTiles * kTileSize;
+      final fh = item.heightTiles * kTileSize;
+
+      canvas.drawRect(
+        Rect.fromLTWH(fx + 0.5, fy + 0.5, fw - 1, fh - 1),
+        Paint()
+          ..color = const Color(0xFFFFD700).withValues(alpha: 0.5)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
   }
 
   // ─── Office cat ─────────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ const _keyGlitchBandHeight = 'settings_glitch_band_height';
 const _keyGlitchShift = 'settings_glitch_shift';
 const _keyGlitchChroma = 'settings_glitch_chroma';
 const _keyNickname = 'settings_nickname';
+const _keyLaunchCount = 'settings_launch_count';
+const _keyLogoPathScript = 'settings_logo_path_script';
 
 // ─── Settings model ─────────────────────────────────────────────────────────
 
@@ -39,6 +41,11 @@ class AppSettings {
   final double glitchChroma;
 
   final String nickname;
+  final int launchCount;
+
+  /// Custom DSL script for logo path animation, or null to use the built-in
+  /// zigzag algorithm. See [kDefaultLogoPathScript] for the default.
+  final String? logoPathScript;
 
   const AppSettings({
     this.showArkanoidButton = false,
@@ -50,6 +57,8 @@ class AppSettings {
     this.glitchShift = 0.5,
     this.glitchChroma = 0.5,
     this.nickname = '',
+    this.launchCount = 0,
+    this.logoPathScript,
   });
 
   AppSettings copyWith({
@@ -62,6 +71,8 @@ class AppSettings {
     double? glitchShift,
     double? glitchChroma,
     String? nickname,
+    int? launchCount,
+    Object? logoPathScript = _sentinel,
   }) =>
       AppSettings(
         showArkanoidButton: showArkanoidButton ?? this.showArkanoidButton,
@@ -73,8 +84,15 @@ class AppSettings {
         glitchShift: glitchShift ?? this.glitchShift,
         glitchChroma: glitchChroma ?? this.glitchChroma,
         nickname: nickname ?? this.nickname,
+        launchCount: launchCount ?? this.launchCount,
+        logoPathScript: identical(logoPathScript, _sentinel)
+            ? this.logoPathScript
+            : logoPathScript as String?,
       );
 }
+
+// Sentinel for nullable copyWith
+const _sentinel = Object();
 
 // ─── SharedPreferences instance ─────────────────────────────────────────────
 
@@ -98,7 +116,16 @@ class SettingsNotifier extends Notifier<AppSettings> {
       glitchShift: prefs.getDouble(_keyGlitchShift) ?? 0.5,
       glitchChroma: prefs.getDouble(_keyGlitchChroma) ?? 0.5,
       nickname: prefs.getString(_keyNickname) ?? '',
+      launchCount: prefs.getInt(_keyLaunchCount) ?? 0,
+      logoPathScript: prefs.getString(_keyLogoPathScript),
     );
+  }
+
+  Future<void> incrementLaunchCount() async {
+    final prefs = ref.read(sharedPrefsProvider);
+    final next = state.launchCount + 1;
+    await prefs.setInt(_keyLaunchCount, next);
+    state = state.copyWith(launchCount: next);
   }
 
   Future<void> setShowArkanoidButton(bool value) async {
@@ -153,6 +180,16 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setString(_keyNickname, value);
     state = state.copyWith(nickname: value);
+  }
+
+  Future<void> setLogoPathScript(String? value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    if (value == null) {
+      await prefs.remove(_keyLogoPathScript);
+    } else {
+      await prefs.setString(_keyLogoPathScript, value);
+    }
+    state = state.copyWith(logoPathScript: value);
   }
 }
 

@@ -23,7 +23,7 @@ Tasks (in priority order):
 2. Team advisor — answer technical questions from other agents (coder, reviewer, tester).
 3. Decision maker — resolve trade-offs, choose libraries, define patterns.
 4. Code contributor (SECONDARY) — write code ONLY when architecture duties are handled.
-5. Delegation — can delegate implementation tasks to coder, testing to tester, etc. using the Agent tool.
+5. Delegation — can dispatch implementation tasks to coder, testing to tester, etc. using the Dispatch tool.
 
 Guidelines:
 - Read existing code thoroughly before making architectural decisions.
@@ -31,7 +31,7 @@ Guidelines:
 - Prefer editing existing files over creating new ones.
 - Explore the project structure first to understand the codebase before acting.
 - ${LANG_RULE}`,
-    tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "Agent"],
+    tools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
     model: "opus",
   },
 
@@ -136,6 +136,28 @@ export function hardwareToModel(tier: number): "haiku" | "sonnet" | "opus" {
   return "opus";
 }
 
+/**
+ * Maps average skill level to a Claude model.
+ * avg 1-3 → haiku, avg 4-6 → sonnet, avg 7-10 → opus
+ */
+export function skillsToModel(skills: Record<string, number>): "haiku" | "sonnet" | "opus" {
+  const levels = Object.values(skills);
+  if (levels.length === 0) return "haiku";
+  const avg = levels.reduce((a, b) => a + b, 0) / levels.length;
+  if (avg >= 7) return "opus";
+  if (avg >= 4) return "sonnet";
+  return "haiku";
+}
+
+/** Returns the lower-tier model of the two. Both hardware AND skills must be high to unlock better models. */
+function minModel(
+  a: "haiku" | "sonnet" | "opus",
+  b: "haiku" | "sonnet" | "opus",
+): "haiku" | "sonnet" | "opus" {
+  const rank: Record<string, number> = { haiku: 0, sonnet: 1, opus: 2 };
+  return rank[a] <= rank[b] ? a : b;
+}
+
 // ─── Skill names for prompts ───────────────────────────────────────────────
 
 const skillNames: Record<string, string> = {
@@ -179,10 +201,14 @@ export function buildDynamicAgents(gameState?: GameStateData): Record<string, Ag
   for (const [id, agent] of Object.entries(teamAgents)) {
     if (!hiredSet.has(id)) continue;
     const hwTier = gameState.agentHardware[id] ?? 0;
-    const model = hardwareToModel(hwTier);
+    const hwModel = hardwareToModel(hwTier);
 
     // Append skill profile to agent prompt (MUST use third-person to avoid identity confusion)
     const skills = gameState.agentSkills[id];
+    const skModel = skills ? skillsToModel(skills) : "haiku";
+    // Both hardware AND skills must be levelled up to unlock better models
+    const model = minModel(hwModel, skModel);
+
     const skillSection = skills
       ? `\n\nThis agent's skill profile:\n${formatSkillsForPrompt(skills)}`
       : "";
@@ -200,7 +226,7 @@ export function buildDynamicAgents(gameState?: GameStateData): Record<string, Ag
 // ─── Team member description ───────────────────────────────────────────────
 
 const teamDescriptions: Record<string, string> = {
-  "manager": "**manager** (Project Manager) — COORDINATOR. Breaks tasks into subtasks, delegates\n  using the Agent tool, tracks progress, never writes code. Default contact for tasks.",
+  "manager": "**manager** (Project Manager) — COORDINATOR. Breaks tasks into subtasks, dispatches\n  work to agents using the Dispatch tool, tracks progress, never writes code. Default contact for tasks.",
   "tech-lead": "**tech-lead** (Architect) — Owns architecture and global tech plan. Answers technical\n  questions, resolves trade-offs. Can write code when architecture duties are handled.",
   "coder": "**coder** (Senior Developer) — Implements features, fixes bugs, refactors code.",
   "reviewer": "**reviewer** (Code Reviewer) — Reviews code quality, identifies anti-patterns. Read-only.",
@@ -285,12 +311,17 @@ ${teamLines.join("\n")}
 ## Role-specific rules
 - You are **${targetAgentId}**. No other identity. Ever.
 - If the user's request is outside your role, say so and suggest who they should talk to.
-${targetAgentId === "manager" ? "- As **manager**: ALWAYS delegate using the Agent tool, never code directly. You coordinate, you don't implement." : ""}
-${targetAgentId === "tech-lead" ? "- As **tech-lead**: prioritize architecture. Can delegate to coder/tester/others using the Agent tool. Can write code if appropriate." : ""}
+${targetAgentId === "manager" ? `- As **manager**: ALWAYS dispatch work using the mcp__dispatch__dispatch tool, never code directly. You coordinate, you don't implement.
+- Dispatched agents work INDEPENDENTLY — you do NOT wait for their results. Continue with other work immediately.
+- Use the mcp__dispatch__team_status tool to check who is busy before dispatching.
+- When agents finish their work, you will receive their results automatically and should briefly report to the user.
+- PRIORITY SYSTEM: Always handle the user's chat messages FIRST, then board tasks. If the user writes something new while agents work — respond to them immediately.` : ""}
+${targetAgentId === "tech-lead" ? "- As **tech-lead**: prioritize architecture. Can dispatch tasks to coder/tester/others using the mcp__dispatch__dispatch tool. Can write code if appropriate." : ""}
 - Be natural and collegial — you're a teammate, not a service.
 
 ## Delegation (manager and tech-lead only)
-When delegating, use the Agent tool with clear specs. Available sub-agents:
+When dispatching work, use the mcp__dispatch__dispatch tool. The agent will work independently and you can continue with other tasks.
+Use mcp__dispatch__team_status to check team workload before dispatching. Available sub-agents:
 ${delegationLines}
 ${skillSection}${memorySection}${traitsSection}`;
 }

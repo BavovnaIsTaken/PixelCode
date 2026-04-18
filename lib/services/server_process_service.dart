@@ -154,17 +154,18 @@ class ServerProcessService {
       }
     });
 
-    _runningController.add(true);
+    if (!_runningController.isClosed) _runningController.add(true);
 
     _process!.exitCode.then((code) {
       if (_disposed) return;
       _emitLog(code == 0 ? 'info' : 'error', 'Server exited with code $code');
       _process = null;
-      _runningController.add(false);
+      if (!_runningController.isClosed) _runningController.add(false);
     });
   }
 
   void _emitLog(String level, String message) {
+    if (_logController.isClosed) return;
     _logController.add(ServerProcessLog(
       timestamp: DateTime.now(),
       level: level,

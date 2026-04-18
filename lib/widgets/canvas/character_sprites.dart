@@ -88,9 +88,16 @@ const _walkCols = [0, 1, 2, 1];
   int col;
   switch (ch.state) {
     case CharState.walk:
-      col = _walkCols[ch.frame % 4];
+      if (ch.isOnSkateboard) {
+        col = 1; // standing pose for ride (closest match in PNG sheet)
+      } else {
+        col = _walkCols[ch.frame % 4];
+      }
     case CharState.idle:
       col = 1; // standing pose
+    case CharState.skateMount:
+    case CharState.skateDismount:
+      col = 1; // standing pose (mount/dismount uses text sprites for detail)
     case CharState.typing:
       if (ch.isReading) {
         col = 5 + (ch.frame % 2); // read1 / read2

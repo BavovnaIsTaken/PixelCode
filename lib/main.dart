@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/agent_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
+import 'providers/theme_provider.dart';
 import 'screens/hub/hub_screen.dart';
 import 'services/project_persistence_service.dart';
 import 'services/server_process_service.dart';
@@ -38,7 +39,6 @@ class PixelCodeApp extends ConsumerStatefulWidget {
 
 class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
-  bool _ready = false;
 
   @override
   void initState() {
@@ -55,11 +55,15 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
 
   Future<void> _initSession() async {
     try {
+      await ref.read(settingsProvider.notifier).incrementLaunchCount();
       final session = ref.read(sessionProvider.notifier);
       await session.migrateFromLegacy();
 
       // Auto-start local server on desktop
       if (!Platform.isIOS && !Platform.isAndroid) {
+        // Ensure a default local session exists on macOS
+        await session.ensureDefaultDesktopProfile();
+
         final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
           ref.read(sharedPrefsProvider),
         );
@@ -75,8 +79,6 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     } catch (e) {
       debugPrint('[PixelCode] Init session failed: $e');
     }
-
-    if (mounted) setState(() => _ready = true);
   }
 
   @override
@@ -92,29 +94,17 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = ref.watch(appThemeDataProvider);
+
     return MaterialApp(
       title: 'PixelCode',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0E0E11),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00C0D1),
-          brightness: Brightness.dark,
-        ),
-      ),
+      theme: theme,
       builder: (context, child) => GestureDetector(
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
         child: child,
       ),
-      home: _ready
-          ? const HubScreen()
-          : const Scaffold(
-              body: Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF00C0D1),
-                ),
-              ),
-            ),
+      home: const HubScreen(),
     );
   }
 }

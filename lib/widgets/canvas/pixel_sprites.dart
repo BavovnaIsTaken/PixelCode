@@ -26,9 +26,20 @@ import 'office_game_state.dart';
           : (_typeSprites[lookupDir] ?? _typeSprites[CharDirection.up]!);
       return (sprites[ch.frame % sprites.length], isLeft);
     case CharState.walk:
+      // On skateboard: use ride sprites instead of walk cycle
+      if (ch.isOnSkateboard) {
+        final rideFrames = _rideSprites[lookupDir] ?? _rideSprites[CharDirection.down]!;
+        return (rideFrames[ch.frame % rideFrames.length], isLeft);
+      }
       return (_walkSprites[lookupDir]![ch.frame % 4], isLeft);
     case CharState.idle:
       return (_walkSprites[lookupDir]![1], isLeft); // standing pose
+    case CharState.skateMount:
+      final mount = _mountSprites[lookupDir] ?? _mountSprites[CharDirection.down]!;
+      return (mount, isLeft);
+    case CharState.skateDismount:
+      final mount = _mountSprites[lookupDir] ?? _mountSprites[CharDirection.down]!;
+      return (mount, isLeft);
   }
 }
 
@@ -656,6 +667,149 @@ const coffeeMachineBrew1 = [
   '.mkkkkm.',
   '..kkkk..',
 ];
+
+// ─── Skateboard ride sprites ──────────────────────────────────────────────
+
+// Down ride – surfing stance, arms wide for balance, legs together
+const _downRide0 = [
+  '...hh...',
+  '..hhhh..',
+  '..sffs..',
+  '..sees..',
+  '...ss...',
+  '.cccccc.',
+  'cccccccc',
+  '..cccc..',
+  '..pppp..',
+  '...pp...',
+  '...bb...',
+];
+
+const _downRide1 = [
+  '...hh...',
+  '..hhhh..',
+  '..sffs..',
+  '..sees..',
+  '...ss...',
+  '..cccc..',
+  'cccccccc',
+  '..cccc..',
+  '..pppp..',
+  '...pp...',
+  '...bb...',
+];
+
+// Up ride – back view, same surfing stance
+const _upRide0 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '.cccccc.',
+  'cccccccc',
+  '..cccc..',
+  '..pppp..',
+  '...pp...',
+  '...bb...',
+];
+
+const _upRide1 = [
+  '...hh...',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '..cccc..',
+  'cccccccc',
+  '..cccc..',
+  '..pppp..',
+  '...pp...',
+  '...bb...',
+];
+
+// Right ride – side view, crouched on board
+const _rightRide0 = [
+  '..hh....',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '..ccccc.',
+  '.cccccc.',
+  '..cccc..',
+  '...pp...',
+  '...pp...',
+  '...bb...',
+];
+
+const _rightRide1 = [
+  '..hh....',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '.ccccc..',
+  '.cccccc.',
+  '..cccc..',
+  '...pp...',
+  '...pp...',
+  '...bb...',
+];
+
+const _rideSprites = <CharDirection, List<List<String>>>{
+  CharDirection.down: [_downRide0, _downRide1],
+  CharDirection.up: [_upRide0, _upRide1],
+  CharDirection.right: [_rightRide0, _rightRide1],
+};
+
+// Down mount – bending down to place board
+const _downMount0 = [
+  '........',
+  '..hhhh..',
+  '..sffs..',
+  '..sees..',
+  '...ss...',
+  '.cccccc.',
+  'c.cccc.c',
+  '..pppp..',
+  '..p..p..',
+  '..b..b..',
+];
+
+// Up mount – back view, bending down
+const _upMount0 = [
+  '........',
+  '..hhhh..',
+  '..hhhh..',
+  '..hhhh..',
+  '...ss...',
+  '.cccccc.',
+  'c.cccc.c',
+  '..pppp..',
+  '..p..p..',
+  '..b..b..',
+];
+
+// Right mount – side view, bending
+const _rightMount0 = [
+  '........',
+  '..hhhh..',
+  '..shh...',
+  '..seh...',
+  '...ss...',
+  '..ccccc.',
+  '.cccc...',
+  '..pppp..',
+  '..p..p..',
+  '..b..b..',
+];
+
+const _mountSprites = <CharDirection, List<String>>{
+  CharDirection.down: _downMount0,
+  CharDirection.up: _upMount0,
+  CharDirection.right: _rightMount0,
+};
 
 // ─── Skateboard colors ─────────────────────────────────────────────────────
 

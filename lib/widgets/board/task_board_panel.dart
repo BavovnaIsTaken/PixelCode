@@ -802,6 +802,11 @@ class _MobileStickyNote extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  // Difficulty badge
+                  if (task.difficulty != 2) ...[
+                    const SizedBox(height: 5),
+                    _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
+                  ],
                   // Description
                   if (task.description.isNotEmpty) ...[
                     const SizedBox(height: 6),
@@ -1922,6 +1927,11 @@ class _DesktopStickyNote extends ConsumerWidget {
                   ),
                 ],
               ),
+              // Difficulty badge (desktop)
+              if (task.difficulty != 2) ...[
+                const SizedBox(height: 4),
+                _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
+              ],
               if (task.description.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
@@ -1953,6 +1963,48 @@ class _DesktopStickyNote extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─── Difficulty Badge ────────────────────────────────────────────────────────
+
+class _DifficultyBadge extends StatelessWidget {
+  final int difficulty;
+  final Color textColor;
+
+  const _DifficultyBadge({required this.difficulty, required this.textColor});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (difficulty) {
+      1 => ('· Trivial', const Color(0xFF78909C)),
+      3 => ('··· Medium', const Color(0xFFFFA726)),
+      4 => ('···· Hard', const Color(0xFFEF5350)),
+      5 => ('····· Expert', const Color(0xFFAB47BC)),
+      _ => ('·· Easy', const Color(0xFF66BB6A)),
+    };
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(3),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
