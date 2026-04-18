@@ -1,52 +1,93 @@
-/// Global iOS deploy state — one-click build+install from the toolbar.
+/// Global Android deploy state — one-click build+install from the toolbar.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/deploy_state.dart';
-import '../services/ios_deploy_service.dart';
+import '../services/android_deploy_service.dart';
 import 'agent_provider.dart';
-
-export '../models/deploy_state.dart' show DeployPhase, DeployState;
 
 // ─── Notifier ──────────────────────────────────────────────────────────────
 
-class IOSDeployNotifier extends Notifier<DeployState> {
-  IOSDeployService? _service;
+class AndroidDeployNotifier extends Notifier<DeployState> {
+  AndroidDeployService? _service;
 
   @override
   DeployState build() => const DeployState();
 
-  /// One-click: check deps → build → auto-open install URL.
+  AndroidDeployService _ensureService() {
+    final ws = ref.read(wsServiceProvider);
+    return _service ??= AndroidDeployService(wsService: ws);
+  }
+
+  /// Refresh the list of connected Android devices (adb devices -l).
+  Future<void> refreshDevices() async {
+    final svc = _ensureService();
+    final devices = await svc.listDevices();
+
+    // Prefer keeping an existing selection if it's still available & ready.
+    final currentSerial = state.selectedSerial;
+    final stillThere = devices.any(
+      (d) => d.serial == currentSerial && d.isReady,
+    );
+    // Otherwise auto-pick the first ready device.
+    final autoPick = devices.firstWhere(
+      (d) => d.isReady,
+      orElse: () => const AndroidDevice(serial: '', model: '', state: ''),
+    );
+    final nextSerial = stillThere
+        ? currentSerial
+        : (autoPick.serial.isEmpty ? null : autoPick.serial);
+
+    state = state.copyWith(
+      devices: devices,
+      selectedSerial: nextSerial,
+      clearSelectedSerial: nextSerial == null,
+    );
+  }
+
+  void selectDevice(String serial) {
+    state = state.copyWith(selectedSerial: serial);
+  }
+
+  /// One-click: check deps → build → serve APK download URL.
   Future<void> deploy() async {
     if (state.isBusy) return;
 
     final ws = ref.read(wsServiceProvider);
     _service?.dispose();
-    _service = IOSDeployService(wsService: ws);
+    _service = AndroidDeployService(wsService: ws);
 
-    // Reset
-    state = const DeployState(phase: DeployPhase.checking);
+    // Reset — keep devices list + current selection.
+    state = DeployState(
+      phase: DeployPhase.checking,
+      devices: state.devices,
+      selectedSerial: state.selectedSerial,
+    );
 
     // 1. Check dependencies
     _addLog('Перевірка залежностей...');
     final hasFlutter = await _service!.checkDependencies();
     if (!hasFlutter) {
-      _addLog('[ПОМИЛКА] Flutter не знайдено на сервері');
+      _addLog('[ПОМИЛКА] Flutter / Android SDK не знайдено на сервері');
       state = state.copyWith(
         phase: DeployPhase.error,
-        lastError: 'Flutter не знайдено на сервері',
+        lastError: 'Flutter / Android SDK не знайдено на сервері',
       );
       return;
     }
-    _addLog('Flutter: OK');
+    _addLog('Flutter + Android SDK: OK');
 
     // 2. Build + deploy
     state = state.copyWith(phase: DeployPhase.building);
-    _addLog('Запуск побудови IPA...');
+    final target = state.selectedSerial;
+    _addLog(target != null
+        ? 'Запуск побудови APK для пристрою $target...'
+        : 'Запуск побудови APK...');
 
     final result = await _service!.buildAndDeploy(
+      deviceSerial: target,
       onProgress: _addLog,
       onError: (msg) => _addLog('[ПОМИЛКА] $msg'),
       onInstallReady: (url) {
@@ -54,14 +95,13 @@ class IOSDeployNotifier extends Notifier<DeployState> {
           phase: DeployPhase.ready,
           installUrl: url,
         );
-        _addLog('OTA: IPA готовий! Відкриваю встановлення...');
+        _addLog('APK готовий! Відкриваю завантаження...');
         _openUrl(url);
       },
     );
 
     if (result && state.phase == DeployPhase.building) {
-      // Silent install via devicectl succeeded — no OTA needed
-      _addLog('Додаток встановлено на пристрій!');
+      _addLog('APK встановлено на пристрій!');
       state = state.copyWith(phase: DeployPhase.idle);
     } else if (!result && state.phase != DeployPhase.ready) {
       state = state.copyWith(
@@ -99,5 +139,6 @@ class IOSDeployNotifier extends Notifier<DeployState> {
 
 // ─── Provider ──────────────────────────────────────────────────────────────
 
-final iosDeployProvider =
-    NotifierProvider<IOSDeployNotifier, DeployState>(IOSDeployNotifier.new);
+final androidDeployProvider =
+    NotifierProvider<AndroidDeployNotifier, DeployState>(
+        AndroidDeployNotifier.new);

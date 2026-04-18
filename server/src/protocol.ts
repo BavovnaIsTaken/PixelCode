@@ -39,6 +39,7 @@ export type ClientMessage =
       agentHardware: Record<string, number>; // HardwareTier enum index
       agentSkills: Record<string, Record<string, number>>; // skillType → level (1-10)
       fullState?: string; // JSON-encoded full GameState for cross-device sync
+      stateUpdatedAt?: number; // epoch ms — last-write-wins guard, server rejects older
     }
   // Agent traits
   | { type: "get_traits" }
@@ -62,6 +63,11 @@ export type ClientMessage =
   | { type: "ios_deploy_check" }
   | { type: "ios_deploy_start" }
   | { type: "ios_deploy_cancel" }
+  // Android deploy
+  | { type: "android_deploy_check" }
+  | { type: "android_deploy_list_devices" }
+  | { type: "android_deploy_start"; deviceSerial?: string }
+  | { type: "android_deploy_cancel" }
   // Tailscale setup
   | { type: "tailscale_connect" }
   // Client identification (sent on connect)
@@ -239,10 +245,42 @@ export type ServerMessage =
       subtype: "complete";
       success: boolean;
     }
+  // Android deploy
+  | {
+      type: "android_deploy_status";
+      subtype: "deps_result";
+      hasFlutter: boolean;
+    }
+  | {
+      type: "android_deploy_status";
+      subtype: "log";
+      message: string;
+    }
+  | {
+      type: "android_deploy_status";
+      subtype: "error";
+      message: string;
+    }
+  | {
+      type: "android_deploy_status";
+      subtype: "install_ready";
+      installUrl: string;
+    }
+  | {
+      type: "android_deploy_status";
+      subtype: "complete";
+      success: boolean;
+    }
+  | {
+      type: "android_deploy_status";
+      subtype: "devices_list";
+      devices: AndroidDeviceInfo[];
+    }
   // Game state sync (cross-device)
   | {
       type: "game_state_sync";
       fullState: string; // JSON-encoded full GameState
+      stateUpdatedAt: number; // epoch ms — clients reject older than their local state
     }
   // Character position sync (cross-device)
   | {
@@ -325,6 +363,13 @@ export type ServerMessage =
       passed: boolean;
     }
   | { type: "dungeon_error"; agentId: string; error: string };
+
+/** Info about a connected Android device reported by `adb devices`. */
+export interface AndroidDeviceInfo {
+  serial: string;
+  model: string; // human-readable model (e.g. "Pixel_6") — falls back to serial
+  state: string; // "device" | "unauthorized" | "offline" | etc.
+}
 
 /** Info about a connected client device. */
 export interface ConnectedClientInfo {

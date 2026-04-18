@@ -1,4 +1,4 @@
-package com.example.pixel_code
+package com.danylooliinyk.pixelcode
 
 import android.content.ClipboardManager
 import android.content.Context

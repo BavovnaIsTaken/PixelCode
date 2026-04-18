@@ -11,7 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/connected_devices_provider.dart';
 import '../../providers/game_economy_provider.dart';
-import '../../providers/ios_deploy_provider.dart';
+import '../../widgets/deploy/device_deploy_popover.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_dsl.dart';
@@ -678,7 +678,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           if (isConnected)
             const SizedBox(width: 8),
           // iOS deploy
-          if (isConnected) _IOSDeployButton(),
+          if (isConnected) _DeviceDeployButton(),
           // Settings
           IconButton(
             onPressed: () => showSettingsDialog(context),
@@ -854,7 +854,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                 ),
               ),
             ),
-          if (isConnected) _IOSDeployButton(),
+          if (isConnected) _DeviceDeployButton(),
           const SizedBox(width: 4),
           Tooltip(
             message: 'Налаштування',
@@ -1065,181 +1065,61 @@ class _GrymniDisplay extends StatelessWidget {
   }
 }
 
-// ─── One-click iOS deploy button ───────────────────────────────────────────
+// ─── Device deploy button (opens popover with Android / iOS tabs) ─────────
 
-class _IOSDeployButton extends ConsumerStatefulWidget {
+class _DeviceDeployButton extends StatefulWidget {
   @override
-  ConsumerState<_IOSDeployButton> createState() => _IOSDeployButtonState();
+  State<_DeviceDeployButton> createState() => _DeviceDeployButtonState();
 }
 
-class _IOSDeployButtonState extends ConsumerState<_IOSDeployButton>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse;
-
-  @override
-  void initState() {
-    super.initState();
-    _pulse = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    );
-  }
+class _DeviceDeployButtonState extends State<_DeviceDeployButton> {
+  OverlayEntry? _popover;
 
   @override
   void dispose() {
-    _pulse.dispose();
+    _removePopover();
     super.dispose();
   }
 
+  void _removePopover() {
+    _popover?.remove();
+    _popover = null;
+  }
+
+  void _togglePopover() {
+    if (_popover != null) {
+      _removePopover();
+      return;
+    }
+
+    final renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
+    final offset = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+
+    _popover = showDeviceDeployPopover(
+      context: context,
+      anchor: Offset(offset.dx, offset.dy + size.height + 4),
+      onDismiss: _removePopover,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final deploy = ref.watch(iosDeployProvider);
-
-    // Start / stop pulse animation based on busy state.
-    if (deploy.isBusy) {
-      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
-    } else {
-      if (_pulse.isAnimating) {
-        _pulse.stop();
-        _pulse.value = 1.0;
-      }
-    }
-
-    final Color iconColor;
-    final String tooltip;
-
-    switch (deploy.phase) {
-      case DeployPhase.idle:
-        iconColor = Colors.white.withValues(alpha: 0.3);
-        tooltip = 'Встановити на iOS';
-      case DeployPhase.checking:
-        iconColor = const Color(0xFF00C0D1);
-        tooltip = 'Перевірка залежностей...';
-      case DeployPhase.building:
-        iconColor = const Color(0xFF00C0D1);
-        tooltip = 'Побудова IPA...';
-      case DeployPhase.ready:
-        iconColor = const Color(0xFF4ADE80);
-        tooltip = 'Готово — натисніть щоб відкрити знову';
-      case DeployPhase.error:
-        iconColor = const Color(0xFFEF4444);
-        tooltip = deploy.lastError ?? 'Помилка';
-    }
-
-    // Dot index: 0 = checking, 1 = building, 2 = ready
-    final int activeDot;
-    switch (deploy.phase) {
-      case DeployPhase.idle:
-        activeDot = -1;
-      case DeployPhase.checking:
-        activeDot = 0;
-      case DeployPhase.building:
-        activeDot = 1;
-      case DeployPhase.ready:
-        activeDot = 2;
-      case DeployPhase.error:
-        activeDot = -2; // special: all dots error
-    }
     return Tooltip(
-      message: tooltip,
+      message: 'Встановити на пристрій',
       child: InkWell(
-        onTap: () {
-          switch (deploy.phase) {
-            case DeployPhase.idle:
-            case DeployPhase.error:
-              ref.read(iosDeployProvider.notifier).deploy();
-            case DeployPhase.ready:
-              ref.read(iosDeployProvider.notifier).openInstallUrl();
-            case DeployPhase.checking:
-            case DeployPhase.building:
-              break;
-          }
-        },
+        onTap: _togglePopover,
         borderRadius: BorderRadius.circular(4),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.phone_iphone, size: 16, color: iconColor),
-              const SizedBox(height: 2),
-              AnimatedBuilder(
-                animation: _pulse,
-                builder: (_, _) => _DeployDots(
-                  activeDot: activeDot,
-                  phase: deploy.phase,
-                  accentColor: iconColor,
-                  pulseValue: _pulse.value,
-                ),
-              ),
-            ],
+          padding: const EdgeInsets.all(4),
+          child: Icon(
+            Icons.phone_iphone,
+            size: 16,
+            color: Colors.white.withValues(alpha: 0.3),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _DeployDots extends StatelessWidget {
-  const _DeployDots({
-    required this.activeDot,
-    required this.phase,
-    required this.accentColor,
-    required this.pulseValue,
-  });
-
-  final int activeDot;
-  final DeployPhase phase;
-  final Color accentColor;
-  final double pulseValue;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(3, (i) {
-        final isIdle = phase == DeployPhase.idle;
-        final isError = phase == DeployPhase.error;
-        final isCompleted = activeDot > i;
-        final isActive = activeDot == i;
-
-        final Color color;
-        double opacity;
-
-        if (isIdle) {
-          color = Colors.white;
-          opacity = 0.15;
-        } else if (isError) {
-          color = const Color(0xFFEF4444);
-          opacity = 0.8;
-        } else if (isCompleted) {
-          color = accentColor;
-          opacity = 1.0;
-        } else if (isActive) {
-          color = accentColor;
-          // Pulse between 0.3 and 1.0
-          opacity = 0.3 + 0.7 * pulseValue;
-        } else {
-          color = Colors.white;
-          opacity = 0.15;
-        }
-
-        final widget = i == 2 && isCompleted
-            ? Icon(Icons.check, size: 6, color: const Color(0xFF4ADE80))
-            : Container(
-                width: 3,
-                height: 3,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: color.withValues(alpha: opacity),
-                ),
-              );
-
-        return Padding(
-          padding: EdgeInsets.only(left: i == 0 ? 0 : 2),
-          child: widget,
-        );
-      }),
     );
   }
 }

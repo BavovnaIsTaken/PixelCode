@@ -298,6 +298,7 @@ class AgentWsService {
     required Map<String, int> agentHardware,
     required Map<String, Map<String, int>> agentSkills,
     String? fullState,
+    int? stateUpdatedAt,
   }) {
     _send({
       'type': 'set_game_state',
@@ -305,6 +306,7 @@ class AgentWsService {
       'agentHardware': agentHardware,
       'agentSkills': agentSkills,
       'fullState': ?fullState,
+      'stateUpdatedAt': ?stateUpdatedAt,
     });
   }
 
@@ -378,6 +380,27 @@ class AgentWsService {
 
   void iosDeployCancel() {
     _send({'type': 'ios_deploy_cancel'});
+  }
+
+  // ─── Android deploy ──────────────────────────────────────────────────────
+
+  void androidDeployCheck() {
+    _send({'type': 'android_deploy_check'});
+  }
+
+  void androidDeployListDevices() {
+    _send({'type': 'android_deploy_list_devices'});
+  }
+
+  void androidDeployStart({String? deviceSerial}) {
+    _send({
+      'type': 'android_deploy_start',
+      'deviceSerial': ?deviceSerial,
+    });
+  }
+
+  void androidDeployCancel() {
+    _send({'type': 'android_deploy_cancel'});
   }
 
   // ─── Tailscale setup ─────────────────────────────────────────────────────

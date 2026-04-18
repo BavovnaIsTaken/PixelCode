@@ -86,6 +86,7 @@ sealed class ServerMessage {
       'input_text' => InputTextMessage.fromJson(json),
       'input_images' => InputImagesMessage.fromJson(json),
       'ios_deploy_status' => IOSDeployStatusMessage.fromJson(json),
+      'android_deploy_status' => AndroidDeployStatusMessage.fromJson(json),
       'tailscale_log' => TailscaleLogMessage.fromJson(json),
       'chat_history' => ChatHistoryMessage.fromJson(json),
       'game_state_sync' => GameStateSyncMessage.fromJson(json),
@@ -385,9 +386,13 @@ class AgentTraitsMessage implements ServerMessage {
 
 class GameStateSyncMessage implements ServerMessage {
   final String fullState;
-  GameStateSyncMessage({required this.fullState});
+  final int stateUpdatedAt;
+  GameStateSyncMessage({required this.fullState, required this.stateUpdatedAt});
   factory GameStateSyncMessage.fromJson(Map<String, dynamic> json) =>
-      GameStateSyncMessage(fullState: json['fullState'] as String? ?? '{}');
+      GameStateSyncMessage(
+        fullState: json['fullState'] as String? ?? '{}',
+        stateUpdatedAt: (json['stateUpdatedAt'] as num?)?.toInt() ?? 0,
+      );
 }
 
 class RemoteCharPosition {
@@ -462,6 +467,58 @@ class IOSDeployStatusMessage implements ServerMessage {
       message: json['message'] as String?,
       installUrl: json['installUrl'] as String?,
       success: json['success'] as bool?,
+    );
+  }
+}
+
+class AndroidDevice {
+  final String serial;
+  final String model;
+  final String state; // "device", "unauthorized", "offline", …
+
+  const AndroidDevice({
+    required this.serial,
+    required this.model,
+    required this.state,
+  });
+
+  bool get isReady => state == 'device';
+
+  factory AndroidDevice.fromJson(Map<String, dynamic> json) => AndroidDevice(
+        serial: json['serial'] as String? ?? '',
+        model: json['model'] as String? ?? '',
+        state: json['state'] as String? ?? 'unknown',
+      );
+}
+
+class AndroidDeployStatusMessage implements ServerMessage {
+  /// deps_result, log, error, install_ready, complete, devices_list
+  final String subtype;
+  final bool? hasFlutter;
+  final String? message;
+  final String? installUrl;
+  final bool? success;
+  final List<AndroidDevice>? devices;
+
+  AndroidDeployStatusMessage({
+    required this.subtype,
+    this.hasFlutter,
+    this.message,
+    this.installUrl,
+    this.success,
+    this.devices,
+  });
+
+  factory AndroidDeployStatusMessage.fromJson(Map<String, dynamic> json) {
+    return AndroidDeployStatusMessage(
+      subtype: json['subtype'] as String,
+      hasFlutter: json['hasFlutter'] as bool?,
+      message: json['message'] as String?,
+      installUrl: json['installUrl'] as String?,
+      success: json['success'] as bool?,
+      devices: (json['devices'] as List?)
+          ?.map((e) => AndroidDevice.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 }

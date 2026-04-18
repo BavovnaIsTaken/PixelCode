@@ -55,6 +55,12 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   void _scheduleSave() {
+    // Stamp the state as locally mutated so cross-device sync can apply
+    // last-write-wins. Done synchronously so _syncToServer (which may run
+    // right after) sees the bumped timestamp.
+    state = state.copyWith(
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 2), () {
       final prefs = ref.read(sharedPrefsProvider);
@@ -62,8 +68,8 @@ class GameEconomyNotifier extends Notifier<GameState> {
     });
   }
 
-  /// Save locally without syncing back to the server (used when receiving
-  /// a remote game state update to avoid infinite broadcast loops).
+  /// Save locally without bumping updatedAt or syncing back to the server
+  /// (used when applying remote state to avoid infinite broadcast loops).
   void _scheduleSaveOnly() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 2), () {
@@ -94,6 +100,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       agentHardware: agentHardware,
       agentSkills: agentSkills,
       fullState: gs.encode(),
+      stateUpdatedAt: gs.updatedAt,
     );
   }
 
@@ -108,11 +115,20 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   /// Apply game state received from another device via the server.
+  /// Last-write-wins: only accept if the remote timestamp is strictly newer
+  /// than our local one. If ours is newer, push it back so the server (and
+  /// every other client) converges on our version instead.
   void _onGameStateSync(GameStateSyncMessage msg) {
     try {
       final remote = GameState.decode(msg.fullState);
-      state = remote;
-      _scheduleSaveOnly(); // Save locally without re-syncing to server
+      final remoteTs = msg.stateUpdatedAt != 0 ? msg.stateUpdatedAt : remote.updatedAt;
+      if (remoteTs > state.updatedAt) {
+        state = remote.copyWith(updatedAt: remoteTs);
+        _scheduleSaveOnly();
+      } else if (remoteTs < state.updatedAt) {
+        _syncToServer();
+      }
+      // ts == local → no-op (echo of our own write)
     } catch (_) {
       // Ignore malformed sync messages
     }

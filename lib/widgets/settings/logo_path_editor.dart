@@ -349,36 +349,36 @@ class _LogoPathEditorState extends State<LogoPathEditor> {
         // Reset
         OutlinedButton.icon(
           onPressed: _reset,
-          icon: const Icon(Icons.restart_alt_rounded, size: 14),
-          label: const Text('Скинути', style: TextStyle(fontSize: 12)),
+          icon: const Icon(Icons.restart_alt_rounded, size: 16),
+          label: const Text('Скинути', style: TextStyle(fontSize: 12.5)),
           style: OutlinedButton.styleFrom(
-            foregroundColor: Colors.white.withValues(alpha: 0.45),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+            foregroundColor: Colors.white.withValues(alpha: 0.55),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.16)),
             padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            minimumSize: const Size(0, 36),
+            visualDensity: VisualDensity.standard,
             shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
         const Spacer(),
         // Save
         FilledButton.icon(
           onPressed: _dirty ? _save : null,
-          icon: const Icon(Icons.check_rounded, size: 14),
-          label: const Text('Зберегти', style: TextStyle(fontSize: 12)),
+          icon: const Icon(Icons.check_rounded, size: 16),
+          label: const Text('Зберегти', style: TextStyle(fontSize: 12.5)),
           style: FilledButton.styleFrom(
             backgroundColor: _accent,
             foregroundColor: Colors.black,
             disabledBackgroundColor: _accent.withValues(alpha: 0.15),
             disabledForegroundColor: _accent.withValues(alpha: 0.35),
             padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            minimumSize: const Size(0, 36),
+            visualDensity: VisualDensity.standard,
             shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
       ],

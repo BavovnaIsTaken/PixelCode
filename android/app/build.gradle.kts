@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.pixel_code"
+    namespace = "com.danylooliinyk.pixelcode"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -20,7 +20,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.pixel_code"
+        applicationId = "com.danylooliinyk.pixelcode"
         minSdk = 24
         targetSdk = 34
         versionCode = flutter.versionCode
