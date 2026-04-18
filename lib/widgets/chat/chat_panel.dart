@@ -10,11 +10,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../models/agent_message.dart';
+import '../../models/app_theme.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/game_economy_provider.dart';
 import '../../services/clipboard_service.dart';
 
 /// Parses numbered choice options from agent text.
-/// Returns a list of choice labels if 2+ consecutive items starting from 1 are found.
+/// Returns a list of choice labels only when the numbered list is at the very
+/// end of the message (i.e. the agent is offering choices, not listing tasks
+/// in the middle of a sentence).
 List<String>? _extractChoices(String text) {
   final pattern = RegExp(r'(?:^|\n)\s*(\d+)[.)]\s+(.+)', multiLine: true);
   final matches = pattern.allMatches(text).toList();
@@ -24,6 +28,11 @@ List<String>? _extractChoices(String text) {
   for (int i = 1; i < numbers.length; i++) {
     if (numbers[i] != numbers[i - 1] + 1) return null;
   }
+  // Only treat as choices when the numbered list is at the end of the message.
+  // If there is meaningful text after the last item it's an informational list.
+  final lastMatch = matches.last;
+  final afterList = text.substring(lastMatch.end).trim();
+  if (afterList.isNotEmpty) return null;
   return matches.map((m) => m.group(2)!.trim()).toList();
 }
 
@@ -58,6 +67,15 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   Timer? _skeletonTimer;
   bool _showSkeleton = false;
 
+  // Task difficulty selector (optional, shown next to input)
+  int? _selectedDifficulty; // 1-5 or null = no gate
+
+  // Stored for forceSend retry after task_too_hard warning
+  String? _pendingText;
+  List<Uint8List> _pendingImages = [];
+  TaskTooHardMessage? _tooHardWarning;
+  StreamSubscription<ServerMessage>? _msgSub;
+
   @override
   void initState() {
     super.initState();
@@ -85,6 +103,24 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     _focusNode.addListener(_onFocusChange);
     _controller.addListener(_onInputChanged);
     _scrollController.addListener(_onScroll);
+
+    // Handle the initial syncing state — ref.listen only fires on *changes*,
+    // so if the provider already starts as syncing we must kick off the timer
+    // ourselves after the first frame (ref is not available synchronously).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(chatSyncStateProvider) == ChatSyncState.syncing) {
+        _skeletonTimer = Timer(const Duration(milliseconds: 200), () {
+          if (mounted) setState(() => _showSkeleton = true);
+        });
+      }
+      // Listen for task_too_hard responses
+      _msgSub = ref.read(wsServiceProvider).messages.listen((msg) {
+        if (msg is TaskTooHardMessage && mounted) {
+          setState(() => _tooHardWarning = msg);
+        }
+      });
+    });
   }
 
   void _onFocusChange() => setState(() {});
@@ -97,6 +133,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   @override
   void dispose() {
     _skeletonTimer?.cancel();
+    _msgSub?.cancel();
     _focusNode.removeListener(_onFocusChange);
     _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
@@ -118,11 +155,23 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     }
   }
 
-  void _send() {
+  void _send({bool forceSend = false}) {
     final text = _controller.text.trim();
     final loadedImages = _attachedImages.whereType<Uint8List>().toList();
     if (text.isEmpty && loadedImages.isEmpty) return;
-    ref.read(chatProvider.notifier).sendMessage(text, images: loadedImages);
+
+    // Store for possible forceSend retry
+    _pendingText = text;
+    _pendingImages = loadedImages;
+
+    setState(() => _tooHardWarning = null);
+
+    ref.read(chatProvider.notifier).sendMessage(
+          text,
+          images: loadedImages,
+          taskDifficulty: _selectedDifficulty,
+          forceSend: forceSend,
+        );
     _controller.clear();
     setState(() => _attachedImages.clear());
     ref.read(wsServiceProvider).sendInputText('');
@@ -132,6 +181,19 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     _focusNode.requestFocus();
     setState(() => _autoScroll = true);
     _scrollToBottom();
+  }
+
+  void _sendForce() {
+    final text = _pendingText;
+    if (text == null || text.isEmpty) return;
+    setState(() => _tooHardWarning = null);
+    ref.read(chatProvider.notifier).sendMessage(
+          text,
+          images: _pendingImages,
+          taskDifficulty: _selectedDifficulty,
+          forceSend: true,
+        );
+    _focusNode.requestFocus();
   }
 
   Future<void> _pickImages() async {
@@ -609,7 +671,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         }
       },
       child: Container(
-      color: const Color(0xFF0E0E11),
+      color: context.appColors.background,
       child: Column(
         children: [
           // Header
@@ -786,6 +848,71 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Task-too-hard warning banner
+          if (_tooHardWarning != null)
+            _TaskTooHardBanner(
+              warning: _tooHardWarning!,
+              agentId: ref.watch(selectedAgentProvider),
+              onForceSend: _sendForce,
+              onDismiss: () => setState(() => _tooHardWarning = null),
+            ),
+          // Difficulty selector row
+          if (_selectedDifficulty != null || true) // always show for discoverability
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              child: Row(
+                children: [
+                  Text(
+                    'Складність:',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      fontSize: 10,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  for (final (diff, label) in const [
+                    (0, 'Без'),
+                    (2, '··'),
+                    (3, '···'),
+                    (4, '····'),
+                    (5, '·····'),
+                  ])
+                    GestureDetector(
+                      onTap: () => setState(() =>
+                          _selectedDifficulty = diff == 0 ? null : diff),
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: (_selectedDifficulty == diff ||
+                                      (diff == 0 && _selectedDifficulty == null))
+                                  ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+                                  : Colors.transparent,
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                            color: (_selectedDifficulty == diff ||
+                                        (diff == 0 && _selectedDifficulty == null))
+                                    ? const Color(0xFF00C0D1).withValues(alpha: 0.5)
+                                    : Colors.white.withValues(alpha: 0.1),
+                          ),
+                        ),
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: (_selectedDifficulty == diff ||
+                                        (diff == 0 && _selectedDifficulty == null))
+                                    ? const Color(0xFF00C0D1)
+                                    : Colors.white.withValues(alpha: 0.3),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           // Attached image previews
           if (_attachedImages.isNotEmpty)
             Padding(
@@ -928,6 +1055,106 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Task Too Hard Banner ─────────────────────────────────────────────────────
+
+class _TaskTooHardBanner extends StatelessWidget {
+  final TaskTooHardMessage warning;
+  final String agentId;
+  final VoidCallback onForceSend;
+  final VoidCallback onDismiss;
+
+  const _TaskTooHardBanner({
+    required this.warning,
+    required this.agentId,
+    required this.onForceSend,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A2A10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFFA726).withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('⚠️', style: TextStyle(fontSize: 12)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '$agentId (рівень ${warning.current.toStringAsFixed(1)}) '
+                  'може не впоратися з цим завданням. '
+                  'Рекомендований мінімум: рівень ${warning.required.toStringAsFixed(0)}+',
+                  style: const TextStyle(
+                    color: Color(0xFFFFA726),
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: onDismiss,
+                child: Icon(
+                  Icons.close,
+                  size: 14,
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _BannerButton(
+                label: 'Відправити все одно',
+                color: const Color(0xFFFFA726),
+                onTap: onForceSend,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BannerButton extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _BannerButton({required this.label, required this.color, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ),
     );
   }

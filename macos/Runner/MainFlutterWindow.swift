@@ -29,6 +29,9 @@ class MainFlutterWindow: NSWindow {
       if call.method == "animateShutdown" {
         self?.animateShutdown()
         result(nil)
+      } else if call.method == "terminateApp" {
+        NSApplication.shared.terminate(nil)
+        result(nil)
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -94,16 +97,18 @@ class MainFlutterWindow: NSWindow {
       "h": frame.height,
     ], forKey: Self.frameKey)
 
-    // Collapse vertically to 50px height, then terminate
+    // Collapse vertically to 50px height.
+    // Terminate is driven by Flutter (via 'terminateApp') after all Flutter
+    // animations complete — this avoids a race where NSAnimationContext
+    // finishes instantly (Reduce Motion / background window) and calls
+    // terminate before Flutter's shutdown animations have a chance to play.
     NSAnimationContext.runAnimationGroup({ ctx in
-      ctx.duration = 0.55
+      ctx.duration = 0.4
       ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
       self.animator().setFrame(
         NSRect(x: frame.origin.x, y: cy - 25, width: frame.width, height: 50),
         display: true
       )
-    }) {
-      NSApplication.shared.terminate(nil)
-    }
+    })
   }
 }

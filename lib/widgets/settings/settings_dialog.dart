@@ -8,15 +8,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show ByteData, rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/app_theme.dart';
+import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
+import '../../providers/game_economy_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../providers/ios_deploy_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../providers/tailscale_provider.dart';
+import '../../providers/shop_navigation_provider.dart';
+import '../../services/logo_path_dsl.dart' show kDefaultLogoPathScript;
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
 import 'claude_avatar.dart';
+import 'logo_path_editor.dart';
+import 'theme_section.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
 /// or a centered dialog on desktop.
@@ -45,10 +53,11 @@ class _SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.appColors;
     return Scaffold(
-      backgroundColor: const Color(0xFF0E0E11),
+      backgroundColor: c.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A1F),
+        backgroundColor: c.surface,
         title: const Text(
           'Налаштування',
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
@@ -75,13 +84,14 @@ class _SettingsDialog extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.appColors;
     return Material(
       color: Colors.transparent,
       child: Container(
         width: 480,
         constraints: const BoxConstraints(maxHeight: 640),
         decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1F),
+          color: c.surface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: Colors.white.withValues(alpha: 0.08),
@@ -156,6 +166,21 @@ class _SettingsContent extends ConsumerWidget {
       children: [
         // ── Section: Account ──────────────────────────────────────────
         const _AccountSection(),
+
+        // ── Section: Themes ──────────────────────────────────────────
+        _SectionHeader(title: 'Теми'),
+        const SizedBox(height: 12),
+        Text(
+          'Обери стиль свого робочого простору. '
+          'Преміум теми можна кастомізувати.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        const ThemeSection(),
+        const SizedBox(height: 32),
 
         // ── Section: Sessions ──────────────────────────────────────────
         _SectionHeader(title: 'Сесії'),
@@ -265,6 +290,46 @@ class _SettingsContent extends ConsumerWidget {
               ref.read(settingsProvider.notifier).setGlitchChroma(v),
         ),
 
+        // ── Section: Logo Path Algorithm ──────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Алгоритм руху логотипа'),
+        const SizedBox(height: 12),
+        Text(
+          'Власна функція позиції логотипа під час анімації вимкнення. '
+          'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
+          'Output: return Point(x, y).',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        LogoPathEditor(
+          script: ref.watch(settingsProvider).logoPathScript ??
+              kDefaultLogoPathScript,
+          onSaved: (script) {
+            final isDefault = script.trim() == kDefaultLogoPathScript.trim();
+            ref
+                .read(settingsProvider.notifier)
+                .setLogoPathScript(isDefault ? null : script);
+          },
+        ),
+
+        // ── Section: Tailscale Funnel ──────────────────────────────
+        const SizedBox(height: 32),
+        _SectionHeader(title: 'Tailscale Funnel'),
+        const SizedBox(height: 12),
+        Text(
+          'Дозволяє підключатися до сервера та встановлювати '
+          'білди з iPhone з будь-якої мережі.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        const _TailscaleSection(),
+
         // ── Section: iOS Deployment ────────────────────────────────
         const SizedBox(height: 32),
         _SectionHeader(title: 'Конфігурація запуску iOS'),
@@ -283,7 +348,7 @@ class _SettingsContent extends ConsumerWidget {
 
         // ── Danger zone ─────────────────────────────────────────────
         const SizedBox(height: 32),
-        _SectionHeader(title: 'Небезпечна зона'),
+        _SectionHeader(title: 'Небезпечна зона', color: Colors.red.withValues(alpha: 0.7)),
         const SizedBox(height: 12),
         Text(
           'Операції, які можуть привести до втрати даних. '
@@ -319,17 +384,32 @@ class _SettingsContent extends ConsumerWidget {
             SizedBox(
               width: double.infinity,
               height: 44,
-              child: FilledButton.icon(
-                onPressed: () => _confirmClearSessions(context, ref),
-                icon: const Icon(Icons.cleaning_services_rounded, size: 16),
-                label: const Text('Очистити'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF00C0D1),
-                  foregroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  FilledButton.icon(
+                    onPressed: () => _confirmClearSessions(context, ref),
+                    icon: const Icon(Icons.cleaning_services_rounded, size: 16),
+                    label: const Text('Очистити'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF00C0D1),
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
                   ),
-                ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: const CustomPaint(
+                          painter: _DirtOverlayPainter(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -464,6 +544,50 @@ class _SettingsContent extends ConsumerWidget {
   }
 }
 
+// ─── Framed avatar ─────────────────────────────────────────────────────────
+
+class _FramedAvatar extends StatelessWidget {
+  final String? frameId;
+  final bool isLoggedIn;
+
+  const _FramedAvatar({this.frameId, required this.isLoggedIn});
+
+  static const _frameColors = <String, Color>{
+    'frame_neon': Color(0xFF00C0D1),
+    'frame_gold': Color(0xFFFFD700),
+    'frame_fire': Color(0xFFFF6B35),
+    'frame_glitch': Color(0xFF9B59B6),
+    'frame_pixel': Color(0xFF22C55E),
+    'frame_matrix': Color(0xFF00FF41),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final frameColor = frameId != null
+        ? (_frameColors[frameId!] ?? const Color(0xFF00C0D1))
+        : null;
+
+    if (frameColor == null) {
+      return ClaudeAvatar(isActive: isLoggedIn, size: 48);
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: frameColor, width: 2.5),
+        boxShadow: [
+          BoxShadow(
+            color: frameColor.withValues(alpha: 0.45),
+            blurRadius: 10,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: ClaudeAvatar(isActive: isLoggedIn, size: 48),
+    );
+  }
+}
+
 // ─── Account section ───────────────────────────────────────────────────────
 
 class _AccountSection extends ConsumerStatefulWidget {
@@ -475,14 +599,14 @@ class _AccountSection extends ConsumerStatefulWidget {
 
 class _AccountSectionState extends ConsumerState<_AccountSection> {
   bool _editingNickname = false;
+  bool _randomHovered = false;
   late TextEditingController _nicknameController;
 
   @override
   void initState() {
     super.initState();
-    _nicknameController = TextEditingController(
-      text: ref.read(settingsProvider).nickname,
-    );
+    final game = ref.read(gameEconomyProvider);
+    _nicknameController = TextEditingController(text: game.nickname);
   }
 
   @override
@@ -491,11 +615,43 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     super.dispose();
   }
 
+  void _submitNickname() {
+    final newNick = _nicknameController.text.trim();
+    if (newNick.isEmpty) {
+      setState(() => _editingNickname = false);
+      return;
+    }
+    final success = ref.read(gameEconomyProvider.notifier).changeNickname(newNick);
+    if (!success) {
+      // Not enough grymni
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Недостатньо гримнів для зміни нікнейму!',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.red.shade800,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    setState(() => _editingNickname = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final authAsync = ref.watch(claudeAuthProvider);
-    final nickname = ref.watch(settingsProvider).nickname;
+    final game = ref.watch(gameEconomyProvider);
     final isLoggedIn = authAsync.valueOrNull?.loggedIn ?? false;
+
+    final frameId = game.equippedFor(CosmeticType.avatarFrame);
+    final titleId = game.equippedFor(CosmeticType.titleBadge);
+    final title = titleId != null ? cosmeticById(titleId)?.preview : null;
+
+    final freeLeft = (freeNicknameChanges - game.nicknameChangesUsed)
+        .clamp(0, freeNicknameChanges);
+    final isFree = game.isNicknameChangeFree;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -505,71 +661,122 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
 
         // Avatar + info row
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ClaudeAvatar(isActive: isLoggedIn, size: 48),
+            // Avatar with frame
+            _FramedAvatar(frameId: frameId, isLoggedIn: isLoggedIn),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Title badge
+                  if (title != null) ...[
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: const Color(0xFFFFD700).withValues(alpha: 0.8),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                  ],
                   // Nickname row
                   if (_editingNickname)
-                    SizedBox(
-                      height: 28,
-                      child: TextField(
-                        controller: _nicknameController,
-                        autofocus: true,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide: BorderSide(
-                              color: const Color(0xFF00C0D1)
-                                  .withValues(alpha: 0.3),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SizedBox(
+                            height: 30,
+                            child: TextField(
+                              controller: _nicknameController,
+                              autofocus: true,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.3,
+                              ),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
+                                ),
+                                hintText: 'Latin nickname',
+                                hintStyle: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.25),
+                                  fontSize: 12,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                  borderSide: BorderSide(
+                                    color: const Color(0xFF00C0D1)
+                                        .withValues(alpha: 0.3),
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF00C0D1),
+                                  ),
+                                ),
+                              ),
+                              onSubmitted: (_) => _submitNickname(),
                             ),
                           ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(6),
-                            borderSide:
-                                const BorderSide(color: Color(0xFF00C0D1)),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: _submitNickname,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF00C0D1).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: const Color(0xFF00C0D1).withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: const Text(
+                              'OK',
+                              style: TextStyle(
+                                color: Color(0xFF00C0D1),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
                         ),
-                        onSubmitted: (value) {
-                          ref
-                              .read(settingsProvider.notifier)
-                              .setNickname(value.trim());
-                          setState(() => _editingNickname = false);
-                        },
-                      ),
+                      ],
                     )
                   else
                     GestureDetector(
                       onTap: () {
-                        _nicknameController.text = nickname;
+                        _nicknameController.text = game.nickname;
                         setState(() => _editingNickname = true);
                       },
                       child: Row(
                         children: [
-                          Text(
-                            nickname.isEmpty ? 'Без імені' : nickname,
-                            style: TextStyle(
-                              color: Colors.white.withValues(
-                                alpha: nickname.isEmpty ? 0.35 : 0.9,
+                          Flexible(
+                            child: Text(
+                              game.displayNickname.isEmpty
+                                  ? 'Без нікнейму'
+                                  : game.displayNickname,
+                              style: TextStyle(
+                                color: Colors.white.withValues(
+                                  alpha: game.nickname.isEmpty ? 0.35 : 0.9,
+                                ),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                fontStyle: game.nickname.isEmpty
+                                    ? FontStyle.italic
+                                    : FontStyle.normal,
+                                letterSpacing: 0.3,
                               ),
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              fontStyle: nickname.isEmpty
-                                  ? FontStyle.italic
-                                  : FontStyle.normal,
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -582,8 +789,154 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
                       ),
                     ),
 
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 5),
 
+                  // Nickname change counter
+                  Row(
+                    children: [
+                      Icon(
+                        isFree ? Icons.lock_open_outlined : Icons.lock_outlined,
+                        size: 10,
+                        color: isFree
+                            ? const Color(0xFF22C55E).withValues(alpha: 0.7)
+                            : const Color(0xFFFFD700).withValues(alpha: 0.7),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        isFree
+                            ? 'Безкоштовно ($freeLeft/$freeNicknameChanges залишилось)'
+                            : 'Далі',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.35),
+                          fontSize: 10,
+                        ),
+                      ),
+                      if (!isFree) ...[
+                        const SizedBox(width: 4),
+                        GestureDetector(
+                          onTap: () {
+                            ref.read(shopDeepLinkProvider.notifier).state =
+                                shopTabDonation;
+                            Navigator.of(context).pop();
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFD700).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: const Color(0xFFFFD700).withValues(alpha: 0.35),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '$nicknameChangeCost',
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFD700),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(width: 2),
+                                const Text(
+                                  '₲',
+                                  style: TextStyle(
+                                    color: Color(0xFFFFD700),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      // Randomize button
+                      MouseRegion(
+                        onEnter: (_) => setState(() => _randomHovered = true),
+                        onExit: (_) => setState(() => _randomHovered = false),
+                        child: GestureDetector(
+                          onTap: () {
+                            final success = ref
+                                .read(gameEconomyProvider.notifier)
+                                .randomizeNickname();
+                            if (!success) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: const Text(
+                                    'Недостатньо гримнів!',
+                                    style: TextStyle(color: Colors.white),
+                                  ),
+                                  backgroundColor: Colors.red.shade800,
+                                  behavior: SnackBarBehavior.floating,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                          },
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 75),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(
+                                  alpha: _randomHovered ? 0.1 : 0.04),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: Colors.white.withValues(
+                                    alpha: _randomHovered ? 0.2 : 0.1),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.shuffle_rounded,
+                                  size: 9,
+                                  color: Colors.white.withValues(
+                                      alpha: _randomHovered ? 0.7 : 0.35),
+                                ),
+                                const SizedBox(width: 3),
+                                Text(
+                                  'Random',
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(
+                                        alpha: _randomHovered ? 0.7 : 0.35),
+                                    fontSize: 8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 4),
+                  // Launch counter
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.rocket_launch_outlined,
+                        size: 10,
+                        color: const Color(0xFF00C0D1).withValues(alpha: 0.5),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Запусків: ${ref.watch(settingsProvider).launchCount}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.35),
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
                   // Auth status line
                   _buildAuthStatus(authAsync),
                 ],
@@ -832,7 +1185,7 @@ class _SessionProfileTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${profile.host}:${profile.port}',
+                  profile.wsUrl,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.25),
                     fontSize: 11,
@@ -1357,6 +1710,192 @@ class _GlitchControlsState extends State<_GlitchControls>
   }
 }
 
+// ─── Tailscale Funnel setup ────────────────────────────────────────────────
+
+class _TailscaleSection extends ConsumerStatefulWidget {
+  const _TailscaleSection();
+
+  @override
+  ConsumerState<_TailscaleSection> createState() => _TailscaleSectionState();
+}
+
+class _TailscaleSectionState extends ConsumerState<_TailscaleSection> {
+  bool _logsExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tunnelUrl = ref.watch(tunnelUrlProvider);
+    final setup = ref.watch(tailscaleSetupProvider);
+    final isActive = tunnelUrl != null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Status row
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: (isActive
+                    ? const Color(0xFF4ADE80)
+                    : setup.isConnecting
+                        ? const Color(0xFF00C0D1)
+                        : Colors.white.withValues(alpha: 0.15))
+                .withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: (isActive
+                      ? const Color(0xFF4ADE80)
+                      : setup.isConnecting
+                          ? const Color(0xFF00C0D1)
+                          : Colors.white.withValues(alpha: 0.15))
+                  .withValues(alpha: 0.25),
+            ),
+          ),
+          child: Row(
+            children: [
+              if (setup.isConnecting)
+                SizedBox(
+                  width: 8,
+                  height: 8,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    color: const Color(0xFF00C0D1),
+                  ),
+                )
+              else
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isActive
+                        ? const Color(0xFF4ADE80)
+                        : Colors.white.withValues(alpha: 0.2),
+                  ),
+                ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: isActive
+                    ? Text(
+                        tunnelUrl.replaceFirst('wss://', ''),
+                        style: const TextStyle(
+                          color: Color(0xFF4ADE80),
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : Text(
+                        setup.isConnecting
+                            ? 'Підключення…'
+                            : 'Не активний',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 12,
+                        ),
+                      ),
+              ),
+              if (isActive)
+                Icon(
+                  Icons.cloud_done_outlined,
+                  size: 16,
+                  color: const Color(0xFF4ADE80).withValues(alpha: 0.7),
+                ),
+            ],
+          ),
+        ),
+
+        // Connect button (when not active and not connecting)
+        if (!isActive && !setup.isConnecting) ...[
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 40,
+            child: FilledButton.icon(
+              onPressed: () =>
+                  ref.read(tailscaleSetupProvider.notifier).connect(),
+              icon: const Icon(Icons.vpn_key_outlined, size: 15),
+              label: const Text('Підключити Tailscale'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF00C0D1).withValues(alpha: 0.15),
+                foregroundColor: const Color(0xFF00C0D1),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(
+                    color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+
+        // Expandable logs
+        if (setup.logs.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          GestureDetector(
+            onTap: () => setState(() => _logsExpanded = !_logsExpanded),
+            child: Row(
+              children: [
+                Icon(
+                  _logsExpanded ? Icons.expand_less : Icons.expand_more,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Лог (${setup.logs.length})',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_logsExpanded) ...[
+            const SizedBox(height: 6),
+            Container(
+              height: 160,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A0A0E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              child: SingleChildScrollView(
+                reverse: true,
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final line in setup.logs)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        child: Text(
+                          line,
+                          style: TextStyle(
+                            color: line.startsWith('❌')
+                                ? const Color(0xFFFF6B6B)
+                                : line.startsWith('✓') || line.startsWith('🚀')
+                                    ? const Color(0xFF4ADE80)
+                                    : Colors.white.withValues(alpha: 0.6),
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
 // ─── iOS deploy status & logs ──────────────────────────────────────────────
 
 class _DeployStatusSection extends ConsumerStatefulWidget {
@@ -1543,14 +2082,15 @@ class _DeployStatusSectionState extends ConsumerState<_DeployStatusSection> {
 
 class _SectionHeader extends StatelessWidget {
   final String title;
-  const _SectionHeader({required this.title});
+  final Color? color;
+  const _SectionHeader({required this.title, this.color});
 
   @override
   Widget build(BuildContext context) {
     return Text(
       title.toUpperCase(),
       style: TextStyle(
-        color: Colors.white.withValues(alpha: 0.35),
+        color: color ?? Colors.white.withValues(alpha: 0.35),
         fontSize: 11,
         fontWeight: FontWeight.w600,
         letterSpacing: 1.2,
@@ -1647,4 +2187,87 @@ class _StopAllButtonState extends ConsumerState<_StopAllButton> {
       ),
     );
   }
+}
+
+// ─── Dirt overlay painter (Terraria-style) ────────────────────────────────
+
+/// Pixel-art dirt overlay drawn on top of the "Очистити" button.
+///
+/// Shape logic:
+///  • Dirt is concentrated on the LEFT and RIGHT sides.
+///  • An invisible oval around the button content repels dirt smoothly —
+///    inside the oval the probability drops to zero, outside it ramps up.
+///  • Even at the sides the coverage is soft (~55 % max) so the cyan
+///    button colour still breathes through.
+class _DirtOverlayPainter extends CustomPainter {
+  const _DirtOverlayPainter();
+
+  static const double _bs = 3.0; // block size in logical pixels
+
+  static const List<Color> _palette = [
+    Color(0xFF3A2010), // very dark dirt
+    Color(0xFF5C3D1E), // dark dirt
+    Color(0xFF7A5230), // mid-dark dirt
+    Color(0xFF8B6340), // mid dirt
+    Color(0xFFA07848), // light dirt
+    Color(0xFFB09060), // sandy patch
+    Color(0xFF6B6B6B), // stone grey
+    Color(0xFF555555), // dark stone
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cols = (size.width / _bs).ceil();
+    final rows = (size.height / _bs).ceil();
+
+    for (var row = 0; row < rows; row++) {
+      final rowFrac = rows > 1 ? row / (rows - 1) : 0.5;
+
+      for (var col = 0; col < cols; col++) {
+        final xFrac = cols > 1 ? col / (cols - 1) : 0.5;
+
+        // ── Horizontal side weight ──────────────────────────────────────
+        // 1.0 at left/right edges, 0.0 at horizontal centre.
+        // Power < 1 keeps the ramp gentle so the middle still gets some dirt.
+        final hSide = pow((xFrac - 0.5).abs() * 2.0, 0.65).toDouble();
+
+        // ── Oval clearing around the button content ─────────────────────
+        // Semi-axes in normalised [0,1] space. rx covers ~70 % of half-width,
+        // ry covers most of the height — creating a wide, squat clearing.
+        const rx = 0.34;
+        const ry = 0.46;
+        final dx = xFrac - 0.5;
+        final dy = rowFrac - 0.5;
+        final ovalDist = sqrt((dx / rx) * (dx / rx) + (dy / ry) * (dy / ry));
+        // Smooth ramp: 0.0 at ovalDist ≤ 0.85, 1.0 at ovalDist ≥ 1.2
+        final ovalMask = ((ovalDist - 0.85) / 0.35).clamp(0.0, 1.0);
+
+        // ── Mild vertical boost at top/bottom ───────────────────────────
+        final vBoost = 0.75 + (rowFrac - 0.5).abs() * 2.0 * 0.25; // 0.75 → 1.0
+
+        // ── Final probability (soft cap ~55 %) ──────────────────────────
+        final prob = hSide * ovalMask * vBoost * 0.55;
+
+        if (prob <= 0.0) continue;
+
+        final seed = (row * 997 + col) ^ 0x1A3F7C2B;
+        final rng = Random(seed);
+
+        if (rng.nextDouble() < prob) {
+          // Darker colours toward the outermost edges
+          final maxIdx =
+              (1.0 + hSide * (_palette.length - 1)).floor().clamp(1, _palette.length);
+          final colorIdx = rng.nextInt(maxIdx);
+
+          canvas.drawRect(
+            Rect.fromLTWH(col * _bs, row * _bs, _bs, _bs),
+            Paint()..color = _palette[colorIdx],
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DirtOverlayPainter old) => false;
 }

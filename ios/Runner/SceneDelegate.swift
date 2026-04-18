@@ -24,6 +24,8 @@ class SceneDelegate: FlutterSceneDelegate {
       if call.method == "animateShutdown" {
         self?.animateShutdown()
         result(nil)
+      } else if call.method == "terminateApp" {
+        exit(0)
       } else {
         result(FlutterMethodNotImplemented)
       }
@@ -60,16 +62,16 @@ class SceneDelegate: FlutterSceneDelegate {
     UserDefaults.standard.set(true, forKey: Self.frameKey)
     UserDefaults.standard.synchronize()
 
+    // Collapse to a thin bar. Terminate is driven by Flutter (via 'terminateApp')
+    // after all Flutter animations complete — avoids a race where UIView.animate
+    // finishes instantly and calls exit(0) before animations play.
     UIView.animate(
-      withDuration: 0.55,
+      withDuration: 0.4,
       delay: 0,
       options: [.curveEaseIn],
       animations: {
         keyWindow.frame = targetFrame
         keyWindow.layer.cornerRadius = 8
-      },
-      completion: { _ in
-        exit(0)
       }
     )
   }

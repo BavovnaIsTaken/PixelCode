@@ -9,9 +9,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/agent_provider.dart';
+import '../../providers/connected_devices_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/ios_deploy_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../providers/shop_navigation_provider.dart';
+import '../../services/logo_path_dsl.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
 import '../../widgets/canvas/agent_canvas.dart';
@@ -19,10 +22,12 @@ import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
+import '../../widgets/session/party_counter.dart';
 import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
 import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
+import '../../models/app_theme.dart';
 
 /// Main split-screen: Chat (left) + Agent Canvas (right) + Debug Console (bottom)
 class HubScreen extends ConsumerStatefulWidget {
@@ -43,19 +48,23 @@ class _HubScreenState extends ConsumerState<HubScreen>
   int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop
   bool _showGames = false;
   int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop
+  int _prevMobileTab = 0;
 
   // Icon fly-to-opposite-corner on shutdown
   bool _iconMoving = false;
   Offset _iconStart = Offset.zero;
-  Offset _iconEnd = Offset.zero;
   List<Offset> _iconPath = []; // zigzag waypoints: start → H → V → H → V … → end
 
   // Swipe-between-tabs tracking
   double _swipeDelta = 0;
-  int _swipeDirection = 0; // -1 = swiping left (next), 1 = swiping right (prev)
   late final AnimationController _iconMoveCtrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1100),
+  );
+
+  late final AnimationController _tabSwitchCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
   );
 
   static const double _iconSize = 24.0;
@@ -116,6 +125,31 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   final _rng = Random();
+
+  /// Builds the icon path: uses DSL script when set, otherwise the built-in
+  /// zigzag algorithm. The DSL path is sampled at 200 uniformly-spaced points
+  /// so the existing trail rendering code works unchanged.
+  List<Offset> _buildIconPath(Offset start, Offset end, Size screen) {
+    final script = ref.read(settingsProvider).logoPathScript;
+    if (script != null && script.isNotEmpty) {
+      const samples = 200;
+      final path = <Offset>[];
+      for (int i = 0; i <= samples; i++) {
+        final t = i / samples;
+        final pos = evalLogoPath(
+          script: script,
+          start: start,
+          end: end,
+          screenWidth: screen.width,
+          screenHeight: screen.height,
+          t: t,
+        );
+        path.add(pos ?? Offset.lerp(start, end, t)!);
+      }
+      return path;
+    }
+    return _computeIconPath(start, end, _rng);
+  }
 
   // Easter egg: 5-second long press on logo → Games
   Timer? _arkanoidTimer;
@@ -178,25 +212,20 @@ class _HubScreenState extends ConsumerState<HubScreen>
       });
   }
 
-  // Shutdown animation
+  // Shutdown animation — matches the native window collapse duration (1.5s).
   late final AnimationController _shutdownCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1600),
+    duration: const Duration(milliseconds: 1500),
   );
 
-  // Bright flash at the center
+  // CRT-style flash — stays dark while the icon flies, then ramps up during
+  // the rapid phase of the native easeIn collapse. Holds at peak so the very
+  // last frame the user sees is a bright glow before instant blackout.
   late final Animation<double> _flash = TweenSequence<double>([
-    TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.0), weight: 40),
-    TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.8), weight: 15),
-    TweenSequenceItem(tween: Tween(begin: 0.8, end: 0.0), weight: 45),
+    TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.0), weight: 68),
+    TweenSequenceItem(tween: Tween(begin: 0.0, end: 0.9), weight: 18),
+    TweenSequenceItem(tween: Tween(begin: 0.9, end: 0.9), weight: 14),
   ]).animate(_shutdownCtrl);
-
-  // Content lift + fade during native window collapse.
-  // Intentionally faster than the native 550ms so it finishes first.
-  late final AnimationController _liftCtrl = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 500),
-  );
 
   // Opening animation — content scales up from center
   late final AnimationController _openCtrl = AnimationController(
@@ -209,29 +238,40 @@ class _HubScreenState extends ConsumerState<HubScreen>
     final size = MediaQuery.of(context).size;
     _shutdownHeight = size.height;
     const iconSize = 24.0;
+    final start = const Offset(16, (48 - iconSize) / 2);
+    final end = Offset(size.width - iconSize - 16, size.height - iconSize - 16);
     setState(() {
       _isShuttingDown = true;
       _iconMoving = true;
-      // Icon lives at left padding=16, vertically centred in the 48px title bar
-      _iconStart = const Offset(16, (48 - iconSize) / 2);
-      // Opposite corner: bottom-right
-      _iconEnd = Offset(size.width - iconSize - 16, size.height - iconSize - 16);
-      _iconPath = _computeIconPath(_iconStart, _iconEnd, _rng);
+      _iconStart = start;
+      _iconPath = _buildIconPath(start, end, size);
     });
     _glitchCtrl.stop();
     _shutdownCtrl.forward();
     _iconMoveCtrl.forward();
-    // Run Dart-side cleanup in parallel with the icon animation, then trigger
-    // the native window collapse once both are done.
-    final cleanupFuture = _performCleanup();
-    final animationDelay = Future<void>.delayed(const Duration(milliseconds: 1200));
-    Future.wait([cleanupFuture, animationDelay]).then((_) {
+    // Fire-and-forget cleanup — AppDelegate.applicationWillTerminate is the
+    // safety net that kills any orphaned server processes.
+    _performCleanup();
+
+    final platform = defaultTargetPlatform;
+    final isNative =
+        platform == TargetPlatform.macOS || platform == TargetPlatform.iOS;
+
+    // After the icon finishes (1.1s), start the native window collapse (0.4s).
+    Future<void>.delayed(const Duration(milliseconds: 1100)).then((_) {
       if (!mounted) return;
-      final platform = defaultTargetPlatform;
-      if (platform == TargetPlatform.macOS || platform == TargetPlatform.iOS) {
-        _windowChannel.invokeMethod('animateShutdown');
+      if (isNative) _windowChannel.invokeMethod('animateShutdown');
+    });
+
+    // After ALL Flutter animations complete (1.5s), terminate the process.
+    // This decouples the exit from NSAnimationContext/UIView.animate — which
+    // can complete instantly when Reduce Motion is on or the window is in the
+    // background — eliminating the race condition where terminate() fires
+    // before Flutter's shutdown animations have a chance to play.
+    _shutdownCtrl.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        if (isNative) _windowChannel.invokeMethod('terminateApp');
       }
-      _liftCtrl.forward();
     });
   }
 
@@ -261,8 +301,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
     _logoImage?.dispose();
     _glitchCtrl.dispose();
     _shutdownCtrl.dispose();
-    _liftCtrl.dispose();
     _openCtrl.dispose();
+    _tabSwitchCtrl.dispose();
     _iconMoveCtrl.dispose();
     super.dispose();
   }
@@ -275,12 +315,21 @@ class _HubScreenState extends ConsumerState<HubScreen>
   /// Number of mobile tabs available (2 without server, 4 with).
   int get _mobileTabCount => _isServerConnected ? 4 : 2;
 
-  /// Builds the content widget for the current mobile tab.
+  void _switchMobileTab(int newTab) {
+    if (newTab < 0 || newTab >= _mobileTabCount || newTab == _mobileTab) return;
+    _prevMobileTab = _mobileTab;
+    _mobileTab = newTab;
+    _tabSwitchCtrl.forward(from: 0.0);
+    setState(() {});
+  }
+
+  /// Builds the content widget for the given mobile tab.
   /// Without server: 0=Chat, 1=Office.
   /// With server: 0=Chat, 1=Office, 2=Board, 3=Shop.
-  Widget _buildMobileTabContent() {
+  Widget _buildMobileTabContent([int? overrideTab]) {
+    final tab = overrideTab ?? _mobileTab;
     if (_isServerConnected) {
-      return switch (_mobileTab) {
+      return switch (tab) {
         1 => const AgentCanvas(),
         2 => const TaskBoardPanel(),
         3 => const ShopPanel(),
@@ -291,8 +340,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
             : const ChatPanel(),
       };
     }
-    return switch (_mobileTab) {
-      1 => const AgentCanvas(),
+    return switch (tab) {
+      1 => const _ConnectionWaiting(),
       _ => _showGames
           ? EasterEggGames(
               onClose: () => setState(() => _showGames = false),
@@ -310,44 +359,59 @@ class _HubScreenState extends ConsumerState<HubScreen>
     if (_mobileTab >= _mobileTabCount) {
       _mobileTab = _mobileTabCount - 1;
     }
+    if (_prevMobileTab >= _mobileTabCount) {
+      _prevMobileTab = _mobileTabCount - 1;
+      _tabSwitchCtrl.reset();
+    }
     // Clamp desktop view index (0=Office always available).
     if (!isConnected && _viewIndex > 0) {
       _viewIndex = 0;
     }
+
+    // Navigate to Shop + specific tab when requested (e.g. from settings).
+    ref.listen(shopDeepLinkProvider, (_, tab) {
+      if (tab != null) {
+        setState(() => _viewIndex = 2); // desktop: Shop
+        _switchMobileTab(3);            // mobile: Shop
+      }
+    });
 
     // Eagerly initialize providers so they collect data even when their
     // panels are closed.
     ref.watch(debugLogProvider);
     ref.watch(taskBoardProvider);
     ref.watch(gameEconomyProvider);
+    ref.watch(connectedDevicesProvider);
+
+    final tc = context.appColors;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0E0E11),
+      backgroundColor: tc.background,
       body: AnimatedBuilder(
-        animation: Listenable.merge([_shutdownCtrl, _liftCtrl, _openCtrl, _iconMoveCtrl]),
+        animation: Listenable.merge([_shutdownCtrl, _openCtrl, _iconMoveCtrl]),
         builder: (context, child) {
           final sy = _isShuttingDown
               ? 1.0
               : Curves.easeOut.transform(_openCtrl.value);
-          // Lift content UP + fade out, finishing before the native window
-          // collapse so the animation never lags behind the shrinking frame.
-          final t = Curves.easeOut.transform(_liftCtrl.value);
-          final liftY = _isShuttingDown ? -t * (_shutdownHeight - 50) / 2 : 0.0;
-          final contentOpacity = _isShuttingDown ? 1.0 - t : 1.0;
-          return Stack(
+          // Content fades out as the CRT flash ramps up — the flash replaces
+          // the content so the last visible frame is a bright glow.
+          final contentOpacity = _isShuttingDown ? 1.0 - _flash.value : 1.0;
+
+          Widget body = Stack(
+            clipBehavior: Clip.none,
             children: [
               Opacity(
-                opacity: contentOpacity,
-                child: Transform.translate(
-                  offset: Offset(0, liftY),
-                  child: Transform(
-                    alignment: Alignment.center,
-                    transform: Matrix4.diagonal3Values(1.0, sy, 1.0),
-                    child: child,
-                  ),
+                opacity: contentOpacity.clamp(0.0, 1.0),
+                child: Transform(
+                  alignment: Alignment.center,
+                  transform: Matrix4.diagonal3Values(1.0, sy, 1.0),
+                  child: child,
                 ),
               ),
-              // White flash overlay
+              // Icon flying to opposite corner + glitch trail
+              if (_iconMoving && _logoImage != null)
+                IgnorePointer(child: _buildIconTrail()),
+              // CRT flash overlay — on top of everything
               if (_flash.value > 0)
                 Positioned.fill(
                   child: IgnorePointer(
@@ -356,11 +420,23 @@ class _HubScreenState extends ConsumerState<HubScreen>
                     ),
                   ),
                 ),
-              // Icon flying to opposite corner + glitch trail
-              if (_iconMoving && _logoImage != null)
-                IgnorePointer(child: _buildIconTrail()),
             ],
           );
+
+          // During shutdown: freeze the layout at the original window height
+          // so content doesn't re-layout as the native frame shrinks.
+          // Alignment.center keeps the content's center at the window's center
+          // — the native collapse is symmetric, so the center stays put and
+          // top/bottom get progressively clipped (old-TV iris effect).
+          if (_isShuttingDown) {
+            body = OverflowBox(
+              maxHeight: _shutdownHeight,
+              alignment: Alignment.center,
+              child: body,
+            );
+          }
+
+          return body;
         },
         child: _isMobile
             ? _buildMobileLayout(isConnected)
@@ -480,34 +556,44 @@ class _HubScreenState extends ConsumerState<HubScreen>
           Expanded(
             child: Stack(
               children: [
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 250),
-                  transitionBuilder: (child, animation) {
-                    // Slide in from the swipe direction
-                    final isIncoming =
-                        child.key == ValueKey(_mobileTab);
-                    final offsetTween = Tween<Offset>(
-                      begin: Offset(
-                        isIncoming
-                            ? (_swipeDirection <= 0 ? 1.0 : -1.0)
-                            : (_swipeDirection <= 0 ? -1.0 : 1.0),
-                        0,
-                      ),
-                      end: Offset.zero,
-                    );
-                    return SlideTransition(
-                      position: offsetTween.animate(
-                        CurvedAnimation(
-                          parent: animation,
-                          curve: Curves.easeOutCubic,
-                        ),
-                      ),
-                      child: child,
-                    );
-                  },
-                  child: KeyedSubtree(
-                    key: ValueKey(_mobileTab),
-                    child: _buildMobileTabContent(),
+                // Tab content with push transition
+                ClipRect(
+                  child: AnimatedBuilder(
+                    animation: _tabSwitchCtrl,
+                    builder: (context, _) {
+                      if (!_tabSwitchCtrl.isAnimating) {
+                        return _buildMobileTabContent();
+                      }
+                      final progress = Curves.easeOutCubic
+                          .transform(_tabSwitchCtrl.value);
+                      final goingRight = _mobileTab > _prevMobileTab;
+                      return Stack(
+                        children: [
+                          // Outgoing page
+                          FractionalTranslation(
+                            translation: Offset(
+                              goingRight ? -progress : progress,
+                              0,
+                            ),
+                            child: SizedBox.expand(
+                              child: _buildMobileTabContent(_prevMobileTab),
+                            ),
+                          ),
+                          // Incoming page
+                          FractionalTranslation(
+                            translation: Offset(
+                              goingRight
+                                  ? 1.0 - progress
+                                  : -(1.0 - progress),
+                              0,
+                            ),
+                            child: SizedBox.expand(
+                              child: _buildMobileTabContent(_mobileTab),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
                 ),
                 // Overlay gesture detector for swipe-between-tabs
@@ -516,7 +602,6 @@ class _HubScreenState extends ConsumerState<HubScreen>
                     behavior: HitTestBehavior.translucent,
                     onHorizontalDragStart: (_) {
                       _swipeDelta = 0;
-                      _swipeDirection = 0;
                     },
                     onHorizontalDragUpdate: (d) {
                       _swipeDelta += d.delta.dx;
@@ -526,23 +611,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
                       const velocityThreshold = 300.0;
                       final velocity = d.primaryVelocity ?? 0;
 
-                      if (_swipeDelta > threshold || velocity > velocityThreshold) {
+                      if (_swipeDelta > threshold ||
+                          velocity > velocityThreshold) {
                         // Swipe right → previous tab
-                        if (_mobileTab > 0) {
-                          setState(() {
-                            _swipeDirection = 1;
-                            _mobileTab--;
-                          });
-                        }
+                        _switchMobileTab(_mobileTab - 1);
                       } else if (_swipeDelta < -threshold ||
                           velocity < -velocityThreshold) {
                         // Swipe left → next tab
-                        if (_mobileTab < _mobileTabCount - 1) {
-                          setState(() {
-                            _swipeDirection = -1;
-                            _mobileTab++;
-                          });
-                        }
+                        _switchMobileTab(_mobileTab + 1);
                       }
                     },
                   ),
@@ -558,13 +634,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   Widget _buildMobileTitleBar(bool isConnected) {
+    final tc = context.appColors;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1F),
+        color: tc.surface,
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: tc.divider),
         ),
       ),
       child: Row(
@@ -588,11 +665,20 @@ class _HubScreenState extends ConsumerState<HubScreen>
           const SizedBox(width: 8),
           const SessionPicker(compact: true),
           const Spacer(),
+          // Connected devices indicator (landscape only on iPhone)
+          if (isConnected &&
+              MediaQuery.orientationOf(context) == Orientation.landscape)
+            const PartyCounter(),
+          if (isConnected &&
+              MediaQuery.orientationOf(context) == Orientation.landscape)
+            const SizedBox(width: 6),
           // Currency (server-dependent)
           if (isConnected)
             _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
           if (isConnected)
             const SizedBox(width: 8),
+          // iOS deploy
+          if (isConnected) _IOSDeployButton(),
           // Settings
           IconButton(
             onPressed: () => showSettingsDialog(context),
@@ -619,11 +705,12 @@ class _HubScreenState extends ConsumerState<HubScreen>
       if (isConnected) (Icons.storefront_outlined, 'Крамниця'),
     ];
 
+    final tc = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1F),
+        color: tc.surface,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          top: BorderSide(color: tc.divider),
         ),
       ),
       child: SafeArea(
@@ -638,10 +725,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                   icon: items[i].$1,
                   label: items[i].$2,
                   isActive: _mobileTab == i,
-                  onTap: () => setState(() {
-                    _swipeDirection = i > _mobileTab ? -1 : 1;
-                    _mobileTab = i;
-                  }),
+                  onTap: () => _switchMobileTab(i),
                 ),
             ],
           ),
@@ -651,13 +735,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 
   Widget _buildTitleBar(bool isConnected) {
+    final tc = context.appColors;
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1F),
+        color: tc.surface,
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: tc.divider),
         ),
       ),
       child: Row(
@@ -718,16 +803,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               ),
             ),
           ),
-          const Text(
-            'PixelCode',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
-            ),
-          ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 4),
           const SessionPicker(),
           const SizedBox(width: 12),
           Container(
@@ -738,6 +814,9 @@ class _HubScreenState extends ConsumerState<HubScreen>
           const SizedBox(width: 12),
           const ProjectSelector(),
           const Spacer(),
+          // Connected devices indicator
+          if (isConnected) const PartyCounter(),
+          if (isConnected) const SizedBox(width: 8),
           // Currency display (server-dependent)
           if (isConnected)
             _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
@@ -988,44 +1067,79 @@ class _GrymniDisplay extends StatelessWidget {
 
 // ─── One-click iOS deploy button ───────────────────────────────────────────
 
-class _IOSDeployButton extends ConsumerWidget {
+class _IOSDeployButton extends ConsumerStatefulWidget {
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_IOSDeployButton> createState() => _IOSDeployButtonState();
+}
+
+class _IOSDeployButtonState extends ConsumerState<_IOSDeployButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final deploy = ref.watch(iosDeployProvider);
+
+    // Start / stop pulse animation based on busy state.
+    if (deploy.isBusy) {
+      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
+    } else {
+      if (_pulse.isAnimating) {
+        _pulse.stop();
+        _pulse.value = 1.0;
+      }
+    }
 
     final Color iconColor;
     final String tooltip;
-    final Widget child;
 
     switch (deploy.phase) {
       case DeployPhase.idle:
         iconColor = Colors.white.withValues(alpha: 0.3);
         tooltip = 'Встановити на iOS';
-        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
       case DeployPhase.checking:
+        iconColor = const Color(0xFF00C0D1);
+        tooltip = 'Перевірка залежностей...';
       case DeployPhase.building:
         iconColor = const Color(0xFF00C0D1);
-        tooltip = deploy.phase == DeployPhase.checking
-            ? 'Перевірка залежностей...'
-            : 'Побудова IPA...';
-        child = SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: iconColor,
-          ),
-        );
+        tooltip = 'Побудова IPA...';
       case DeployPhase.ready:
         iconColor = const Color(0xFF4ADE80);
         tooltip = 'Готово — натисніть щоб відкрити знову';
-        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
       case DeployPhase.error:
         iconColor = const Color(0xFFEF4444);
         tooltip = deploy.lastError ?? 'Помилка';
-        child = Icon(Icons.phone_iphone, size: 16, color: iconColor);
     }
 
+    // Dot index: 0 = checking, 1 = building, 2 = ready
+    final int activeDot;
+    switch (deploy.phase) {
+      case DeployPhase.idle:
+        activeDot = -1;
+      case DeployPhase.checking:
+        activeDot = 0;
+      case DeployPhase.building:
+        activeDot = 1;
+      case DeployPhase.ready:
+        activeDot = 2;
+      case DeployPhase.error:
+        activeDot = -2; // special: all dots error
+    }
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -1038,16 +1152,94 @@ class _IOSDeployButton extends ConsumerWidget {
               ref.read(iosDeployProvider.notifier).openInstallUrl();
             case DeployPhase.checking:
             case DeployPhase.building:
-              // already running — do nothing
               break;
           }
         },
         borderRadius: BorderRadius.circular(4),
         child: Padding(
-          padding: const EdgeInsets.all(4),
-          child: child,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.phone_iphone, size: 16, color: iconColor),
+              const SizedBox(height: 2),
+              AnimatedBuilder(
+                animation: _pulse,
+                builder: (_, _) => _DeployDots(
+                  activeDot: activeDot,
+                  phase: deploy.phase,
+                  accentColor: iconColor,
+                  pulseValue: _pulse.value,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _DeployDots extends StatelessWidget {
+  const _DeployDots({
+    required this.activeDot,
+    required this.phase,
+    required this.accentColor,
+    required this.pulseValue,
+  });
+
+  final int activeDot;
+  final DeployPhase phase;
+  final Color accentColor;
+  final double pulseValue;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(3, (i) {
+        final isIdle = phase == DeployPhase.idle;
+        final isError = phase == DeployPhase.error;
+        final isCompleted = activeDot > i;
+        final isActive = activeDot == i;
+
+        final Color color;
+        double opacity;
+
+        if (isIdle) {
+          color = Colors.white;
+          opacity = 0.15;
+        } else if (isError) {
+          color = const Color(0xFFEF4444);
+          opacity = 0.8;
+        } else if (isCompleted) {
+          color = accentColor;
+          opacity = 1.0;
+        } else if (isActive) {
+          color = accentColor;
+          // Pulse between 0.3 and 1.0
+          opacity = 0.3 + 0.7 * pulseValue;
+        } else {
+          color = Colors.white;
+          opacity = 0.15;
+        }
+
+        final widget = i == 2 && isCompleted
+            ? Icon(Icons.check, size: 6, color: const Color(0xFF4ADE80))
+            : Container(
+                width: 3,
+                height: 3,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: color.withValues(alpha: opacity),
+                ),
+              );
+
+        return Padding(
+          padding: EdgeInsets.only(left: i == 0 ? 0 : 2),
+          child: widget,
+        );
+      }),
     );
   }
 }
@@ -1183,6 +1375,50 @@ class _MobileNavItem extends StatelessWidget {
                 color: color,
                 fontSize: 10,
                 fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConnectionWaiting extends StatelessWidget {
+  const _ConnectionWaiting();
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.appColors;
+    return Container(
+      color: tc.background,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white.withValues(alpha: 0.15),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Очікування зʼєднання...',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.3),
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Офіс буде доступний після підключення до сервера',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.15),
+                fontSize: 11,
               ),
             ),
           ],

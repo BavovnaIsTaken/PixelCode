@@ -2,6 +2,8 @@
 /// Temporary debugging tool.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,9 +24,12 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
   bool _autoScroll = true;
   String _filter = 'all'; // all, session, sdk, ws, error
   String _searchQuery = '';
+  bool _showCopied = false;
+  Timer? _copiedTimer;
 
   @override
   void dispose() {
+    _copiedTimer?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -71,7 +76,9 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
 
     ref.listen(debugLogProvider, (_, _) => _scrollToBottom());
 
-    return Container(
+    return Stack(
+      children: [
+        Container(
       color: const Color(0xFF0A0A0D),
       child: Column(
         children: [
@@ -172,11 +179,17 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
                   icon: Icons.copy_rounded,
                   tooltip: 'Копіювати все',
                   onTap: () {
+                    if (filtered.isEmpty) return;
                     final text = filtered.map((l) {
                       final ts = _formatTime(l.timestamp);
                       return '$ts [${l.level}] [${l.category}] ${l.message}';
                     }).join('\n');
                     Clipboard.setData(ClipboardData(text: text));
+                    _copiedTimer?.cancel();
+                    setState(() => _showCopied = true);
+                    _copiedTimer = Timer(const Duration(milliseconds: 1500), () {
+                      if (mounted) setState(() => _showCopied = false);
+                    });
                   },
                 ),
                 const SizedBox(width: 4),
@@ -210,6 +223,44 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
           ),
         ],
       ),
+    ),
+        // "Скопійовано" popup
+        Positioned(
+          top: 40,
+          right: 12,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _showCopied ? 1.0 : 0.0,
+              duration: const Duration(milliseconds: 200),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1F27),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.4),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: const Text(
+                  'Скопійовано',
+                  style: TextStyle(
+                    color: Color(0xFF00C0D1),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -258,7 +309,7 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
       '${dt.millisecond.toString().padLeft(3, '0')}';
 }
 
-class _ToolbarButton extends StatelessWidget {
+class _ToolbarButton extends StatefulWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
@@ -272,20 +323,56 @@ class _ToolbarButton extends StatelessWidget {
   });
 
   @override
+  State<_ToolbarButton> createState() => _ToolbarButtonState();
+}
+
+class _ToolbarButtonState extends State<_ToolbarButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _fadeCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _fadeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 75),
+    );
+  }
+
+  @override
+  void dispose() {
+    _fadeCtrl.dispose();
+    super.dispose();
+  }
+
+  void _handleTap() {
+    _fadeCtrl.forward().then((_) => _fadeCtrl.reverse());
+    widget.onTap();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Tooltip(
-      message: tooltip,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(4),
-        child: Padding(
-          padding: const EdgeInsets.all(3),
-          child: Icon(
-            icon,
-            size: 14,
-            color: active
-                ? const Color(0xFF00C0D1)
-                : Colors.white.withValues(alpha: 0.3),
+      message: widget.tooltip,
+      child: GestureDetector(
+        onTap: _handleTap,
+        child: AnimatedBuilder(
+          animation: _fadeCtrl,
+          builder: (context, child) {
+            return Opacity(
+              opacity: 1.0 - _fadeCtrl.value * 0.6,
+              child: child,
+            );
+          },
+          child: Padding(
+            padding: const EdgeInsets.all(3),
+            child: Icon(
+              widget.icon,
+              size: 14,
+              color: widget.active
+                  ? const Color(0xFF00C0D1)
+                  : Colors.white.withValues(alpha: 0.3),
+            ),
           ),
         ),
       ),

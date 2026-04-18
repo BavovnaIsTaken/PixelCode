@@ -9,13 +9,13 @@ import { WebSocketServer, WebSocket } from "ws";
 import { rmSync, readdirSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { join, extname } from "path";
 import { homedir, hostname, networkInterfaces } from "os";
-import { execFile, spawn, ChildProcess } from "child_process";
-import { createServer as createHttpsServer } from "https";
+import { execFile, execFileSync, spawn, ChildProcess } from "child_process";
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "http";
 import { Bonjour } from "bonjour-service";
-import selfsigned from "selfsigned";
 import {
   query,
+  tool,
+  createSdkMcpServer,
   type SDKMessage,
   type SDKAssistantMessage,
   type SDKPartialAssistantMessage,
@@ -24,13 +24,17 @@ import {
   type SDKToolProgressMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { teamAgents, agentInfoList, buildOfficePrompt, buildDynamicAgents, hardwareToModel, type GameStateData } from "./agents.js";
-import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey } from "./protocol.js";
+import { z } from "zod";
+import { teamAgents, agentInfoList, buildOfficePrompt, buildDynamicAgents, hardwareToModel, skillsToModel, type GameStateData } from "./agents.js";
+import { runDungeon, getChallenge } from "./dungeon.js";
+import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
   formatTraitsForPrompt, getAllTraits,
   type TraitStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
+import { TaskQueue, type QueuedTask } from "./task_queue.js";
+import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
 import { ChatHistory } from "./chat_history.js";
 
 const PORT = parseInt(process.env.PORT ?? "9720", 10);
@@ -40,6 +44,10 @@ let PROJECT_CWD = process.env.PROJECT_CWD ?? process.cwd();
 
 type DebugLevel = "debug" | "info" | "warn" | "error";
 
+/** Stores log entries produced before any WebSocket client connects. */
+const earlyLogBuffer: Array<{ level: DebugLevel; category: string; message: string; timestamp: string }> = [];
+let wsClientsReady = false;
+
 function dbg(level: DebugLevel, category: string, message: string, data?: unknown): void {
   const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
   const prefix = { debug: "🔍", info: "ℹ️ ", warn: "⚠️ ", error: "❌" }[level];
@@ -48,6 +56,16 @@ function dbg(level: DebugLevel, category: string, message: string, data?: unknow
     console.log(line, typeof data === "string" ? data : JSON.stringify(data, null, 2));
   } else {
     console.log(line);
+  }
+  // Buffer early logs so they can be replayed when the first client connects
+  if (!wsClientsReady) {
+    earlyLogBuffer.push({ level, category, message, timestamp: new Date().toISOString() });
+  } else {
+    for (const client of wss.clients) {
+      if ((client as WebSocket).readyState === WebSocket.OPEN) {
+        sendDebug(client as WebSocket, level, category, message);
+      }
+    }
   }
 }
 
@@ -86,6 +104,12 @@ function toolStatusText(toolName: string, input: Record<string, unknown>): strin
       return `Finding: ${(input.pattern as string) ?? ""}`;
     case "Agent":
       return `Delegating to ${(input.description as string) ?? "agent"}`;
+    case "mcp__dispatch__dispatch":
+      return `Dispatching to ${(input.agent as string) ?? "agent"}`;
+    case "mcp__dispatch__team_status":
+      return `Checking team status`;
+    case "mcp__dispatch__cancel_task":
+      return `Cancelling task`;
     default:
       return `${toolName}`;
   }
@@ -196,6 +220,7 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
         chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp: new Date().toISOString() });
         chatHistory.save(historyFilePath(PROJECT_CWD));
         broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId });
+        clientSentAssistantMessage.set(ws, true);
       }
 
       // Parse tool uses from addressed agent
@@ -204,11 +229,21 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
           const input = block.input as Record<string, unknown>;
           const status = toolStatusText(block.name, input);
 
-          if (block.name === "Agent" || block.name === "Task") {
+          // Dispatch MCP tools are handled by the MCP server callback — skip delegation tracking here
+          if (block.name.startsWith("mcp__dispatch__")) {
+            // Just send the tool_use notification for UI status
+            send(ws, {
+              type: "tool_use",
+              agentId: targetAgentId,
+              toolUseId: block.id,
+              toolName: block.name,
+              status,
+            });
+          } else if (block.name === "Agent" || block.name === "Task") {
+            // Legacy Agent tool (shouldn't happen with new prompts, but keep for safety)
             const agentType = (input.subagent_type as string) ?? "general";
             const taskDesc = (input.description as string) ?? "";
 
-            // Register sub-agent tool_use_id → agent name
             getAgentMap(ws).set(block.id, agentType);
 
             send(ws, {
@@ -222,7 +257,6 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
             emitActivity(ws, targetAgentId, "delegated", `→ ${agentType}: ${taskDesc}`);
             emitActivity(ws, agentType, "started", taskDesc);
 
-            // Track metrics: task assigned
             const m = getAgentMetrics(ws, agentType);
             const activeTasks = getActiveTasks(ws);
             const prevCount = activeTasks.get(agentType) ?? 0;
@@ -234,17 +268,25 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
             m.tasksAssigned++;
             activeTasks.set(agentType, prevCount + 1);
             sendMetrics(ws);
+
+            send(ws, {
+              type: "tool_use",
+              agentId: targetAgentId,
+              toolUseId: block.id,
+              toolName: block.name,
+              status,
+            });
           } else {
             emitActivity(ws, targetAgentId, "tool_use", status);
-          }
 
-          send(ws, {
-            type: "tool_use",
-            agentId: targetAgentId,
-            toolUseId: block.id,
-            toolName: block.name,
-            status,
-          });
+            send(ws, {
+              type: "tool_use",
+              agentId: targetAgentId,
+              toolUseId: block.id,
+              toolName: block.name,
+              status,
+            });
+          }
         }
       }
       break;
@@ -317,9 +359,21 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       const costUsd = res.total_cost_usd ?? 0;
       emitActivity(ws, targetAgentId, "completed", `Query done in ${durationSec}s ($${costUsd.toFixed(2)})`);
 
+      const resultText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
+
+      // Fallback: if the agent finished without sending a visible chat message
+      // (e.g. the model ended silently after tool use), surface the SDK result text.
+      if (resultText && !clientSentAssistantMessage.get(ws)) {
+        const fallbackId = `fallback-${Date.now()}`;
+        chatHistory.add({ role: "assistant", text: resultText, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        chatHistory.save(historyFilePath(PROJECT_CWD));
+        broadcastAll({ type: "assistant_message_done", messageId: fallbackId, text: resultText, agentId: targetAgentId });
+        dbg("info", "sdk", `Surfaced SDK result as fallback chat message (${resultText.length} chars)`);
+      }
+
       send(ws, {
         type: "result",
-        text: "result" in res ? (res as unknown as Record<string, string>).result : "",
+        text: resultText,
         costUsd,
         durationMs: res.duration_ms ?? 0,
       });
@@ -378,6 +432,60 @@ const clientGameState = new WeakMap<WebSocket, GameStateData>();
 
 /** Latest full game state for cross-device sync (last-write-wins). */
 let latestFullGameState: string | null = null;
+
+/**
+ * Per-client flag: tracks whether an assistant_message_done was sent for the
+ * current query. Used as a fallback to surface the SDK result text when the
+ * model ends without producing a visible chat message.
+ */
+const clientSentAssistantMessage = new WeakMap<WebSocket, boolean>();
+
+// ─── Non-blocking orchestration ─────────────────────────────────────────────
+
+/** Global task queue — shared across all clients, tasks carry their own ws ref. */
+const taskQueue = new TaskQueue();
+
+/** Global agent runner — manages independent sub-agent query() calls. */
+const agentRunner = new AgentRunner();
+
+/** Per-client flag: whether the manager is currently processing a query. */
+const managerBusy = new WeakMap<WebSocket, boolean>();
+
+// ─── Connected client tracking ─────────────────────────────────────────────
+
+interface TrackedClient {
+  clientId: string;
+  hostname: string;
+  platform: string;
+  connectedAt: string; // ISO 8601
+  remoteAddress: string;
+  ws: WebSocket;
+}
+
+/** All currently connected clients with their identifying info. */
+const connectedClients = new Map<WebSocket, TrackedClient>();
+
+/** Build the clients list for broadcasting. */
+function buildClientsList(): ConnectedClientInfo[] {
+  const list: ConnectedClientInfo[] = [];
+  for (const client of connectedClients.values()) {
+    list.push({
+      clientId: client.clientId,
+      hostname: client.hostname,
+      platform: client.platform,
+      connectedAt: client.connectedAt,
+      isLocal: client.remoteAddress === "127.0.0.1" || client.remoteAddress === "::1" || client.remoteAddress === "::ffff:127.0.0.1",
+    });
+  }
+  return list;
+}
+
+/** Broadcast updated client list to all connected clients. */
+function broadcastClientsList(): void {
+  const clients = buildClientsList();
+  broadcastAll({ type: "clients_updated", clients } as any);
+  dbg("info", "clients", `Broadcast clients list: ${clients.length} device(s)`);
+}
 
 // ─── Team metrics tracking ──────────────────────────────────────────────────
 
@@ -705,6 +813,344 @@ If nothing notable happened, reply with: []`;
   }
 }
 
+// ─── Dispatch MCP Server ────────────────────────────────────────────────────
+
+/**
+ * Creates an in-process MCP server with Dispatch, TeamStatus, and CancelTask tools.
+ * The manager uses these instead of the built-in Agent tool.
+ * Each tool returns immediately — sub-agents run in the background.
+ */
+function createDispatchServer(ws: WebSocket) {
+  const dispatchTool = tool(
+    "dispatch",
+    "Dispatch a task to a team agent. The agent works independently — you do NOT wait for the result. Continue with other work immediately.",
+    {
+      agent: z.string().describe("Agent ID to dispatch to (e.g. coder, reviewer, tester, security, ui-ux-designer, tech-lead)"),
+      task: z.string().describe("Detailed task description for the agent. Be specific about what to do and expected output."),
+      priority: z.enum(["high", "normal", "low"]).optional().describe("Task priority. Default: normal"),
+    },
+    async (args) => {
+      const agentId = args.agent;
+      const taskDesc = args.task;
+      const priority = (args.priority ?? "normal") as "high" | "normal" | "low";
+
+      // Validate agent ID
+      const validAgents = new Set(agentInfoList.map(a => a.id).filter(id => id !== "manager"));
+      if (!validAgents.has(agentId)) {
+        return {
+          content: [{ type: "text" as const, text: `Unknown agent "${agentId}". Available: ${[...validAgents].join(", ")}` }],
+        };
+      }
+
+      // Check if agent is already busy
+      if (agentRunner.isAgentBusy(agentId)) {
+        return {
+          content: [{ type: "text" as const, text: `Agent "${agentId}" is already busy. Use team_status to check workload, or wait for them to finish.` }],
+        };
+      }
+
+      // Dispatch the sub-agent
+      const projectMemory = clientProjectContext.get(ws);
+      const gameState = clientGameState.get(ws);
+      const bypassPermissions = clientBypassPermissions.get(ws);
+
+      const dispatchId = agentRunner.dispatch({
+        agentId,
+        task: taskDesc,
+        ws,
+        projectCwd: PROJECT_CWD,
+        gameState,
+        projectMemory,
+        traitStore,
+        bypassPermissions,
+        onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
+        onComplete: (result) => handleSubAgentComplete(ws, result),
+        onError: (agId, dId, error) => handleSubAgentError(ws, agId, dId, error),
+      });
+
+      // Notify UI of dispatch
+      send(ws, {
+        type: "task_dispatched",
+        dispatchId,
+        agentId,
+        task: taskDesc,
+        priority,
+      } as ServerMessage);
+
+      // Set agent status to running
+      send(ws, {
+        type: "agent_status",
+        agentId,
+        status: "running",
+        tools: [],
+      });
+
+      emitActivity(ws, "manager", "delegated", `→ ${agentId}: ${taskDesc}`);
+      emitActivity(ws, agentId, "started", taskDesc);
+
+      // Track metrics
+      const m = getAgentMetrics(ws, agentId);
+      m.tasksAssigned++;
+      sendMetrics(ws);
+
+      trackComm(ws, "manager", agentId);
+      sendCommGraph(ws);
+
+      sendQueueStatus(ws);
+
+      dbg("info", "dispatch", `Dispatched to ${agentId}: "${taskDesc.slice(0, 80)}" (${dispatchId})`);
+
+      return {
+        content: [{ type: "text" as const, text: `Task dispatched to ${agentId} (ID: ${dispatchId}). They are working independently. Continue with other work or respond to the user.` }],
+      };
+    },
+  );
+
+  const teamStatusTool = tool(
+    "team_status",
+    "Check which agents are currently busy, idle, or queued. Use this before dispatching to balance workload.",
+    {},
+    async () => {
+      const running = agentRunner.getStatus();
+      const queuedCount = taskQueue.size;
+
+      const lines: string[] = [];
+
+      for (const agent of agentInfoList) {
+        if (agent.id === "manager") continue;
+        const runEntry = running.find(r => r.agentId === agent.id);
+        if (runEntry) {
+          const elapsed = Math.round(runEntry.elapsedMs / 1000);
+          lines.push(`- **${agent.id}** (${agent.name}): BUSY — "${runEntry.task.slice(0, 60)}" (${elapsed}s)`);
+        } else {
+          lines.push(`- **${agent.id}** (${agent.name}): idle`);
+        }
+      }
+
+      if (queuedCount > 0) {
+        lines.push(`\n${queuedCount} task(s) in queue.`);
+      }
+
+      return {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
+      };
+    },
+  );
+
+  const cancelTaskTool = tool(
+    "cancel_task",
+    "Cancel a running sub-agent task by its dispatch ID.",
+    {
+      dispatch_id: z.string().describe("The dispatch ID returned when the task was dispatched"),
+    },
+    async (args) => {
+      const ok = agentRunner.cancel(args.dispatch_id);
+      return {
+        content: [{ type: "text" as const, text: ok ? `Task ${args.dispatch_id} cancelled.` : `No running task with ID ${args.dispatch_id}.` }],
+      };
+    },
+  );
+
+  return createSdkMcpServer({
+    name: "dispatch",
+    tools: [dispatchTool, teamStatusTool, cancelTaskTool],
+  });
+}
+
+// ─── Sub-agent message handling ─────────────────────────────────────────────
+
+/** Handle real-time messages from independently running sub-agents. */
+function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, _dispatchId: string): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
+
+  try {
+    switch (message.type) {
+      case "assistant": {
+        const asst = message as SDKAssistantMessage;
+        // Forward tool uses for status updates
+        for (const block of asst.message.content) {
+          if (block.type === "tool_use") {
+            const input = block.input as Record<string, unknown>;
+            const status = toolStatusText(block.name, input);
+            send(ws, {
+              type: "tool_use",
+              agentId,
+              toolUseId: block.id,
+              toolName: block.name,
+              status,
+            });
+            emitActivity(ws, agentId, "tool_use", status);
+          }
+        }
+
+        // Forward text as chat messages from this agent
+        const text = extractText(asst);
+        if (text && !asst.parent_tool_use_id) {
+          chatHistory.add({ role: "assistant", text, agentId, timestamp: new Date().toISOString() });
+          chatHistory.save(historyFilePath(PROJECT_CWD));
+          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId });
+        }
+        break;
+      }
+
+      case "stream_event": {
+        const partial = message as SDKPartialAssistantMessage;
+        if (partial.parent_tool_use_id) break;
+        const event = partial.event;
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId });
+        }
+        break;
+      }
+
+      case "tool_progress": {
+        const prog = message as SDKToolProgressMessage;
+        const status = `${prog.tool_name} (${Math.round(prog.elapsed_time_seconds)}s)`;
+        send(ws, {
+          type: "agent_status",
+          agentId,
+          status: "running",
+          tools: [{ toolUseId: prog.tool_use_id, toolName: prog.tool_name, status }],
+        });
+        break;
+      }
+    }
+  } catch (err) {
+    dbg("error", "dispatch", `Sub-agent message handler error: ${err}`);
+  }
+}
+
+/** Handle sub-agent completion — enqueue result for manager acknowledgement. */
+function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
+  dbg("info", "dispatch", `Agent ${result.agentId} completed (${result.dispatchId}): ${result.text.slice(0, 100)}`);
+
+  // Set agent back to idle
+  send(ws, {
+    type: "agent_status",
+    agentId: result.agentId,
+    status: "idle",
+    tools: [],
+  });
+
+  // Track metrics
+  const m = getAgentMetrics(ws, result.agentId);
+  m.tasksCompleted++;
+  sendMetrics(ws);
+
+  emitActivity(ws, result.agentId, "completed", `Done ($${result.costUsd.toFixed(2)}, ${Math.round(result.durationMs / 1000)}s)`);
+  trackComm(ws, result.agentId, "user");
+  sendCommGraph(ws);
+
+  // Send the sub-agent result directly to the client
+  send(ws, {
+    type: "subagent_result",
+    dispatchId: result.dispatchId,
+    agentId: result.agentId,
+    result: result.text,
+    costUsd: result.costUsd,
+    durationMs: result.durationMs,
+  } as ServerMessage);
+
+  // Enqueue a notification for the manager to acknowledge
+  taskQueue.enqueue({
+    id: `result_${result.dispatchId}`,
+    priority: "critical",
+    type: "subagent_result",
+    agentId: result.agentId,
+    dispatchId: result.dispatchId,
+    result: result.text,
+    costUsd: result.costUsd,
+    durationMs: result.durationMs,
+    enqueuedAt: Date.now(),
+    ws,
+  });
+
+  sendQueueStatus(ws);
+
+  // Kick the queue — manager may be idle and can process the result
+  processQueue(ws);
+}
+
+/** Handle sub-agent error. */
+function handleSubAgentError(ws: WebSocket, agentId: string, dispatchId: string, error: string): void {
+  dbg("error", "dispatch", `Agent ${agentId} error (${dispatchId}): ${error}`);
+
+  send(ws, {
+    type: "agent_status",
+    agentId,
+    status: "idle",
+    tools: [],
+  });
+
+  emitActivity(ws, agentId, "error", error);
+
+  send(ws, { type: "error", message: `[${agentId}] ${error}` });
+
+  sendQueueStatus(ws);
+
+  // Still try to process next queue item
+  processQueue(ws);
+}
+
+// ─── Queue processor ────────────────────────────────────────────────────────
+
+/**
+ * Process the next task in the queue if the manager is not busy.
+ * Called after each query finishes and after new tasks are enqueued.
+ */
+async function processQueue(ws: WebSocket): Promise<void> {
+  if (managerBusy.get(ws)) return;
+  if (taskQueue.isEmpty) return;
+
+  const task = taskQueue.dequeue();
+  if (!task) return;
+
+  managerBusy.set(ws, true);
+
+  try {
+    switch (task.type) {
+      case "chat":
+        await runQuery(ws, task.userMessage!, task.targetAgentId!, task.images);
+        break;
+
+      case "subagent_result":
+        // Feed the result back to the manager for acknowledgement
+        await runQuery(
+          ws,
+          `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nBriefly report this completion to the user in 1-2 sentences. If there are more queued tasks or running agents, mention that too.`,
+          "manager",
+        );
+        break;
+
+      case "board":
+        await runQuery(
+          ws,
+          `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Please plan and dispatch this work to appropriate agents.`,
+          "manager",
+        );
+        break;
+    }
+  } catch (err) {
+    dbg("error", "queue", `processQueue error: ${err}`);
+  } finally {
+    managerBusy.set(ws, false);
+    sendQueueStatus(ws);
+    // Check if more work is queued
+    if (!taskQueue.isEmpty) {
+      setImmediate(() => processQueue(ws));
+    }
+  }
+}
+
+/** Send current queue status to the client. */
+function sendQueueStatus(ws: WebSocket): void {
+  send(ws, {
+    type: "queue_status",
+    pending: taskQueue.size,
+    running: agentRunner.getStatus(),
+  } as ServerMessage);
+}
+
 // ─── Run query for a client ─────────────────────────────────────────────────
 
 /**
@@ -738,6 +1184,9 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     // Clear activity buffer for this query (reflection uses it afterwards)
     getQueryActivities(ws).length = 0;
 
+    // Reset per-query flag so the result fallback can detect a silent finish
+    clientSentAssistantMessage.set(ws, false);
+
     // Build system prompt addressed to the target agent, with project memory + traits + game state
     const projectMemory = clientProjectContext.get(ws);
     const agentTraits = formatTraitsForPrompt(traitStore, targetAgentId);
@@ -754,21 +1203,24 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     // Determine tools based on target agent's definition + delegation capability
     const agentDef = teamAgents[targetAgentId];
     const baseTools = agentDef?.tools ?? ["Read", "Glob", "Grep", "Bash"];
-    // Manager and tech-lead can delegate to other agents
+    // Manager and tech-lead can delegate via Dispatch MCP tool (no blocking Agent tool)
     const canDelegate = targetAgentId === "manager" || targetAgentId === "tech-lead";
-    const allowedTools = canDelegate
-      ? [...new Set([...baseTools, "Agent"])]
-      : [...baseTools];
+    const allowedTools = [...baseTools];
 
     // Resume from existing session if available, persist for future resume.
     const existingSessionId = clientSessions.get(ws);
     const hasSession = existingSessionId && existingSessionId !== "pending";
 
+    // Create Dispatch MCP server for delegating agents
+    const mcpServers = canDelegate
+      ? { dispatch: createDispatchServer(ws) }
+      : undefined;
+
     const queryOptions = {
       systemPrompt,
       model: targetModel,
       allowedTools,
-      agents: dynamicAgents,
+      ...(mcpServers ? { mcpServers } : {}),
       cwd: PROJECT_CWD,
       includePartialMessages: true,
       permissionMode: (clientBypassPermissions.get(ws) ? "bypassPermissions" : "acceptEdits") as "bypassPermissions" | "acceptEdits",
@@ -944,6 +1396,28 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
         broadcastBoardState();
+
+        // Auto-enqueue board tasks moved to in_progress for the manager
+        if (task.column === "in_progress") {
+          const assignees = task.assignedAgents.length > 0
+            ? `Assigned agents: ${task.assignedAgents.join(", ")}.`
+            : "No specific agents assigned — decide who should handle this.";
+          taskQueue.enqueue({
+            id: `board_${task.id}`,
+            priority: "normal",
+            type: "board",
+            boardTaskId: task.id,
+            boardTaskTitle: task.title,
+            boardTaskDescription: task.description,
+            targetAgentId: "manager",
+            userMessage: `Board task "${task.title}": ${task.description}. ${assignees} Please dispatch this work.`,
+            enqueuedAt: Date.now(),
+            ws,
+          });
+          dbg("info", "board", `Auto-enqueued board task "${task.title}" for manager dispatch`);
+          sendQueueStatus(ws);
+          processQueue(ws);
+        }
       }
       break;
     }
@@ -1042,11 +1516,7 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
 
 // ─── iOS OTA deploy ────────────────────────────────────────────────────────
 
-const OTA_PORT = parseInt(process.env.OTA_PORT ?? "9721", 10);
-const OTA_HTTP_PORT = parseInt(process.env.OTA_HTTP_PORT ?? "9722", 10);
-const OTA_HOSTNAME = process.env.OTA_HOSTNAME; // e.g. "my-mac.tail12345.ts.net"
-const TLS_CERT_PATH = process.env.TLS_CERT_PATH;
-const TLS_KEY_PATH = process.env.TLS_KEY_PATH;
+const OTA_HOSTNAME = process.env.OTA_HOSTNAME; // optional local hostname override for LAN fallback
 
 /** Track active build process per client so we can cancel it. */
 const activeDeployProcess = new WeakMap<WebSocket, ChildProcess>();
@@ -1077,62 +1547,10 @@ function getOtaHost(): string {
   return "localhost";
 }
 
-/** Get or generate TLS certificates for the OTA HTTPS server. */
-async function getOtaTlsOptions(): Promise<{ cert: string; key: string }> {
-  // 1. User-provided certs
-  if (TLS_CERT_PATH && TLS_KEY_PATH) {
-    dbg("info", "ota", `Using user-provided TLS certs: ${TLS_CERT_PATH}`);
-    return {
-      cert: readFileSync(TLS_CERT_PATH, "utf-8"),
-      key: readFileSync(TLS_KEY_PATH, "utf-8"),
-    };
-  }
+/** Public Tailscale Funnel URL (set once at startup, null if unavailable). */
+let tailscaleUrl: string | null = null;
 
-  // 2. Fallback: self-signed cert
-  const certFile = join(otaDir, "server.crt");
-  const keyFile = join(otaDir, "server.key");
-
-  if (existsSync(certFile) && existsSync(keyFile)) {
-    return {
-      cert: readFileSync(certFile, "utf-8"),
-      key: readFileSync(keyFile, "utf-8"),
-    };
-  }
-
-  dbg("info", "ota", "Generating self-signed TLS certificate…");
-  const host = getOtaHost();
-  const altNames: Array<{ type: 2; value: string } | { type: 7; ip: string }> = [
-    { type: 2 as const, value: host },
-  ];
-  if (host.match(/^\d/)) {
-    altNames.push({ type: 7 as const, ip: host });
-  }
-
-  const notAfterDate = new Date();
-  notAfterDate.setFullYear(notAfterDate.getFullYear() + 1);
-
-  const pems = await selfsigned.generate(
-    [{ name: "commonName", value: host }],
-    {
-      notAfterDate,
-      keySize: 2048,
-      extensions: [
-        { name: "subjectAltName", altNames },
-      ],
-    },
-  );
-
-  writeFileSync(certFile, pems.cert);
-  writeFileSync(keyFile, pems.private);
-  dbg("info", "ota", `Self-signed cert saved to ${otaDir}`);
-
-  return { cert: pems.cert, key: pems.private };
-}
-
-/** Public Cloudflare Tunnel URL (set once at startup, null if unavailable). */
-let cloudflaredUrl: string | null = null;
-
-/** Shared request handler for both HTTPS and HTTP OTA servers. */
+/** Shared HTTP request handler — serves OTA artifacts (IPA + manifest). */
 function makeOtaHandler() {
   return (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
@@ -1165,72 +1583,73 @@ function makeOtaHandler() {
   };
 }
 
-/** Start plain HTTP server for cloudflared to tunnel through. */
-function startOtaHttpServer(): void {
-  const server = createHttpServer(makeOtaHandler());
-  server.listen(OTA_HTTP_PORT, "127.0.0.1", () => {
-    dbg("info", "ota", `OTA HTTP server on http://localhost:${OTA_HTTP_PORT} (cloudflared target)`);
-  });
+// ─── Tailscale Funnel ─────────────────────────────────────────────────────────
+
+/** Resolve tailscale binary — check PATH, then common install locations. */
+function findTailscale(): string | null {
+  try {
+    return execFileSync("which", ["tailscale"], { timeout: 3000 }).toString().trim() || null;
+  } catch { /* not in PATH */ }
+  for (const p of ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/usr/bin/tailscale"]) {
+    if (existsSync(p)) return p;
+  }
+  return null;
 }
 
-/** Start cloudflared quick tunnel. Returns the public HTTPS URL, or null. */
-function startCloudflaredTunnel(): Promise<string | null> {
+/** Get the stable MagicDNS hostname from `tailscale status --json`. */
+async function getTailscaleHostname(): Promise<string | null> {
+  const binary = findTailscale();
+  if (!binary) return null;
   return new Promise((resolve) => {
-    let resolved = false;
-
-    const done = (url: string | null) => {
-      if (!resolved) { resolved = true; resolve(url); }
-    };
-
-    let proc: ReturnType<typeof spawn>;
-    try {
-      proc = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${OTA_HTTP_PORT}`], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {
-      dbg("warn", "ota", "cloudflared not found");
-      return resolve(null);
-    }
-
-    const onData = (chunk: Buffer) => {
-      const text = chunk.toString();
-      const match = text.match(/https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/);
-      if (match) {
-        dbg("info", "ota", `Cloudflare tunnel ready: ${match[0]}`);
-        done(match[0]);
-      }
-    };
-
-    proc.stdout?.on("data", onData);
-    proc.stderr?.on("data", onData);
-    proc.on("error", () => { dbg("warn", "ota", "cloudflared error"); done(null); });
-    proc.on("close", () => done(null));
-
-    setTimeout(() => {
-      dbg("warn", "ota", "cloudflared tunnel timeout (15s)");
-      done(null);
-    }, 15_000);
+    execFile(binary, ["status", "--json"], { timeout: 5000 }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      try {
+        const status = JSON.parse(stdout) as { Self?: { DNSName?: string } };
+        const dns = status?.Self?.DNSName;
+        resolve(dns ? dns.replace(/\.$/, "") : null);
+      } catch { resolve(null); }
+    });
   });
 }
 
-/** Start the HTTPS server that serves IPA + manifest for OTA install. */
-async function startOtaServer(): Promise<void> {
-  const tls = await getOtaTlsOptions();
-  const server = createHttpsServer(tls, makeOtaHandler());
-  server.listen(OTA_PORT, () => {
-    dbg("info", "ota", `OTA HTTPS server on https://${getOtaHost()}:${OTA_PORT}`);
+/** Enable Tailscale Funnel for a local port (configures the Tailscale daemon). */
+async function enableTailscaleFunnel(localPort: number): Promise<void> {
+  const binary = findTailscale();
+  if (!binary) return;
+  return new Promise((resolve) => {
+    execFile(binary, ["funnel", "--bg", String(localPort)], { timeout: 15_000 }, (err) => {
+      if (err) dbg("warn", "tailscale", `funnel enable: ${err.message}`);
+      resolve();
+    });
   });
 }
 
-// Start OTA servers + try cloudflared tunnel
+// ─── Startup: enable Tailscale Funnel ────────────────────────────────────────
 (async () => {
-  await startOtaServer();       // HTTPS fallback
-  startOtaHttpServer();         // HTTP target for cloudflared
-  cloudflaredUrl = await startCloudflaredTunnel();
-  if (cloudflaredUrl) {
-    dbg("info", "ota", `OTA mode: Cloudflare tunnel → ${cloudflaredUrl}`);
+  const tsHostname = await getTailscaleHostname();
+
+  if (tsHostname) {
+    dbg("info", "tailscale", `MagicDNS hostname: ${tsHostname}`);
+    await enableTailscaleFunnel(PORT);
+    tailscaleUrl = `wss://${tsHostname}`;
+    console.log(`🌐 Remote access: ${tailscaleUrl}`);
+    dbg("info", "tailscale", `Funnel active: https://${tsHostname}`);
   } else {
-    dbg("info", "ota", "OTA mode: HTTPS fallback (cloudflared unavailable)");
+    dbg("warn", "tailscale",
+      "Tailscale not running — remote access disabled. " +
+      "Run: brew install tailscale && tailscale up"
+    );
+  }
+
+  // Broadcast updated server_info to any already-connected clients
+  if (tailscaleUrl) {
+    const localIps: string[] = [];
+    for (const ifaces of Object.values(networkInterfaces())) {
+      for (const iface of ifaces ?? []) {
+        if (iface.family === "IPv4" && !iface.internal) localIps.push(iface.address);
+      }
+    }
+    broadcastAll({ type: "server_info", hostname: hostname(), localIps, port: PORT, tunnelUrl: tailscaleUrl } as any);
   }
 })();
 
@@ -1455,7 +1874,15 @@ async function iosDeployStart(ws: WebSocket): Promise<void> {
   }
 
   const ipaFileName = "app.ipa";
-  const baseUrl = cloudflaredUrl ?? `https://${getOtaHost()}:${OTA_PORT}`;
+  if (!tailscaleUrl) {
+    sendDeployError(ws, "Tailscale Funnel не активний — OTA недоступний з іншої мережі.");
+    sendDeployError(ws, "Запустіть: tailscale up && tailscale funnel " + PORT);
+    send(ws, { type: "ios_deploy_status", subtype: "complete", success: false } as any);
+    activeDeployProcess.delete(ws);
+    return;
+  }
+  // tailscaleUrl is wss://... — convert to https:// for OTA base URL
+  const baseUrl = tailscaleUrl.replace("wss://", "https://");
   const ipaUrl = `${baseUrl}/${ipaFileName}`;
   const bundleId = readBundleId();
 
@@ -1465,15 +1892,7 @@ async function iosDeployStart(ws: WebSocket): Promise<void> {
   const manifestUrl = `${baseUrl}/manifest.plist`;
   const installUrl = `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`;
 
-  if (cloudflaredUrl) {
-    sendDeployLog(ws, `OTA через Cloudflare tunnel (довірений HTTPS)`);
-  } else {
-    const certPath = join(otaDir, "server.crt");
-    sendDeployLog(ws, `OTA через локальний HTTPS (${getOtaHost()}:${OTA_PORT})`);
-    sendDeployLog(ws, `⚠️  Самопідписаний сертифікат — потрібно встановити на iPhone`);
-    sendDeployLog(ws, `Файл: ${certPath}`);
-    sendDeployLog(ws, `Команда: open ${otaDir}`);
-  }
+  sendDeployLog(ws, `OTA через Tailscale Funnel (довірений HTTPS)`);
 
   sendDeployLog(ws, "");
   sendDeployLog(ws, "===============================================");
@@ -1495,9 +1914,11 @@ function iosDeployCancel(ws: WebSocket): void {
   }
 }
 
-// ─── WebSocket server ───────────────────────────────────────────────────────
+// ─── HTTP + WebSocket server (single port for WS and OTA file serving) ───────
 
-const wss = new WebSocketServer({ port: PORT });
+const httpServer = createHttpServer(makeOtaHandler());
+const wss = new WebSocketServer({ server: httpServer });
+httpServer.listen(PORT);
 
 // ─── mDNS advertisement ──────────────────────────────────────────────────────
 // Advertise this server on the local network so PixelCode clients can
@@ -1544,8 +1965,20 @@ console.log(`   Working directory: ${PROJECT_CWD}`);
 console.log(`   Agents: ${agentInfoList.map((a) => a.name).join(", ")}`);
 console.log(`   Trait memory: ${getAllTraits(traitStore).length} lessons loaded`);
 
-wss.on("connection", (ws) => {
-  dbg("info", "ws", "Client connected");
+wss.on("connection", (ws, request) => {
+  wsClientsReady = true;
+  const remoteAddress = request.socket.remoteAddress ?? "unknown";
+  dbg("info", "ws", `Client connected from ${remoteAddress}`);
+
+  // Register with placeholder info until client_info arrives
+  connectedClients.set(ws, {
+    clientId: `anon-${Date.now()}`,
+    hostname: "unknown",
+    platform: "unknown",
+    connectedAt: new Date().toISOString(),
+    remoteAddress,
+    ws,
+  });
 
   // Send initial agent list immediately
   send(ws, {
@@ -1554,7 +1987,25 @@ wss.on("connection", (ws) => {
     agents: agentInfoList,
     workingDirectory: PROJECT_CWD,
   });
+  // Send server connection info so clients can share/display it
+  const localIps: string[] = [];
+  for (const ifaces of Object.values(networkInterfaces())) {
+    for (const iface of ifaces ?? []) {
+      if (iface.family === "IPv4" && !iface.internal) localIps.push(iface.address);
+    }
+  }
+  send(ws, {
+    type: "server_info",
+    hostname: hostname(),
+    localIps,
+    port: PORT,
+    tunnelUrl: tailscaleUrl,
+  } as any);
   sendDebug(ws, "info", "ws", "Connected to PixelCode server");
+  // Replay logs that were produced before this client connected (e.g. Tailscale startup)
+  for (const entry of earlyLogBuffer) {
+    send(ws, { type: "debug_log", timestamp: entry.timestamp, level: entry.level, category: entry.category, message: entry.message });
+  }
   sendBoardState(ws);
   sendTraits(ws);
   // Send existing chat history so new clients are in sync
@@ -1564,23 +2015,70 @@ wss.on("connection", (ws) => {
     send(ws, { type: "game_state_sync", fullState: latestFullGameState } as any);
     dbg("info", "game", "Sent stored game state to new client");
   }
+  // Send current clients list to the new client + broadcast updated list to all
+  broadcastClientsList();
 
   ws.on("message", async (data) => {
     try {
       const msg = JSON.parse(data.toString()) as ClientMessage;
-      dbg("debug", "ws", `← ${msg.type}${msg.type === "send_message" ? `: "${(msg as {content: string}).content.slice(0, 60)}"` : ""}`);
+      if (msg.type !== "sync_positions") {
+        dbg("debug", "ws", `← ${msg.type}${msg.type === "send_message" ? `: "${(msg as {content: string}).content.slice(0, 60)}"` : ""}`);
+      }
 
       switch (msg.type) {
         case "send_message": {
           const targetAgent = msg.agentId || "manager";
           const images = msg.images;
           sendDebug(ws, "info", "ws", `User → ${targetAgent}: "${msg.content.slice(0, 60)}…"${images?.length ? ` [+${images.length} image(s)]` : ""}`);
+
+          // ── Task difficulty gate ───────────────────────────────────────
+          if (msg.taskDifficulty && !msg.forceSend) {
+            const gs = clientGameState.get(ws);
+            const agentSkills = gs?.agentSkills[targetAgent];
+            if (agentSkills) {
+              const levels = Object.values(agentSkills);
+              const avgSkill = levels.length > 0
+                ? levels.reduce((a, b) => a + b, 0) / levels.length
+                : 1;
+              // Required avg skill: difficulty maps to thresholds 1/3/5/7/9
+              const required = [0, 1, 3, 5, 7, 9][Math.min(msg.taskDifficulty, 5)] ?? 1;
+              if (avgSkill < required) {
+                send(ws, {
+                  type: "task_too_hard",
+                  agentId: targetAgent,
+                  required,
+                  current: Math.round(avgSkill * 10) / 10,
+                } as any);
+                sendDebug(ws, "warn", "game", `Task difficulty ${msg.taskDifficulty} rejected for ${targetAgent}: avg skill ${avgSkill.toFixed(1)} < required ${required}`);
+                break;
+              }
+            }
+          }
+
+          // If forceSend with a difficult task, add a note to the prompt
+          const contentWithNote = (msg.taskDifficulty && msg.forceSend)
+            ? `${msg.content}\n\n[System note: This task may exceed your current skill level. If you cannot complete it confidently, say so explicitly and describe what skill level would be needed.]`
+            : msg.content;
+
           // Store user message and broadcast snapshot to all other clients.
           // (Sender already added the message optimistically in the UI.)
           chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), ...(images?.length ? { images } : {}) });
           chatHistory.save(historyFilePath(PROJECT_CWD));
           broadcastExcept(ws, chatHistory.snapshot());
-          await runQuery(ws, msg.content, targetAgent, images);
+
+          // Enqueue instead of blocking — manager stays available for new messages
+          taskQueue.enqueue({
+            id: `chat_${Date.now()}`,
+            priority: "high",
+            type: "chat",
+            userMessage: contentWithNote,
+            targetAgentId: targetAgent,
+            images: images ?? undefined,
+            enqueuedAt: Date.now(),
+            ws,
+          });
+          sendQueueStatus(ws);
+          processQueue(ws); // non-blocking kick
           break;
         }
 
@@ -1735,6 +2233,52 @@ wss.on("connection", (ws) => {
           break;
         }
 
+        // ─── Dungeon training ─────────────────────────────────────────────
+
+        case "start_dungeon": {
+          const { agentId: dungeonAgentId, skillType, difficulty } = msg;
+          const gs = clientGameState.get(ws);
+
+          if (!gs?.hiredAgents.includes(dungeonAgentId)) {
+            send(ws, { type: "dungeon_error", agentId: dungeonAgentId, error: "Agent is not hired." } as any);
+            break;
+          }
+
+          const challenge = getChallenge(skillType, difficulty);
+          sendDebug(ws, "info", "dungeon", `Dungeon started for ${dungeonAgentId}: skill=${skillType}, diff=${difficulty}, challenge="${challenge.title}"`);
+
+          // Notify client: show what the agent will work on
+          send(ws, {
+            type: "dungeon_started",
+            agentId: dungeonAgentId,
+            skillType,
+            difficulty,
+            challenge: challenge.title,
+          } as any);
+
+          // Run dungeon asynchronously
+          runDungeon(dungeonAgentId, skillType, difficulty, gs, PROJECT_CWD)
+            .then((result) => {
+              sendDebug(ws, "info", "dungeon", `Dungeon complete for ${dungeonAgentId}: score=${result.score}, xp=${result.xpEarned}, passed=${result.passed}`);
+              send(ws, {
+                type: "dungeon_complete",
+                agentId: result.agentId,
+                skillType: result.skillType,
+                xpEarned: result.xpEarned,
+                score: result.score,
+                feedback: result.feedback,
+                passed: result.passed,
+              } as any);
+            })
+            .catch((err) => {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              sendDebug(ws, "error", "dungeon", `Dungeon error for ${dungeonAgentId}: ${errMsg}`);
+              send(ws, { type: "dungeon_error", agentId: dungeonAgentId, error: errMsg } as any);
+            });
+
+          break;
+        }
+
         // ─── Task board messages ──────────────────────────────────────────
 
         case "board_get_state":
@@ -1811,6 +2355,79 @@ wss.on("connection", (ws) => {
           iosDeployCancel(ws);
           break;
 
+        // ─── Tailscale setup ──────────────────────────────────────────
+        case "tailscale_connect": {
+          const binary = findTailscale();
+          const tsLog = (msg: string) =>
+            send(ws, { type: "tailscale_log", message: msg } as any);
+
+          if (!binary) {
+            tsLog("❌ tailscale не знайдено. Встановіть: brew install tailscale");
+            break;
+          }
+
+          tsLog("Запускаю tailscale up…");
+          const proc = spawn(binary, ["up"], { stdio: ["ignore", "pipe", "pipe"] });
+
+          const onOutput = (chunk: Buffer) => {
+            const text = chunk.toString();
+            for (const line of text.split("\n")) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+              tsLog(trimmed);
+              // Auto-open auth URL in Mac's default browser
+              const urlMatch = trimmed.match(/https:\/\/login\.tailscale\.com\/[^\s]+/);
+              if (urlMatch) {
+                spawn("open", [urlMatch[0]], { stdio: "ignore" });
+                tsLog("🌐 Відкриваю браузер для авторизації…");
+              }
+            }
+          };
+          proc.stdout?.on("data", onOutput);
+          proc.stderr?.on("data", onOutput);
+
+          proc.on("close", async (code) => {
+            if (code === 0) {
+              tsLog("✓ Tailscale підключено!");
+              await enableTailscaleFunnel(PORT);
+              const tsHostname = await getTailscaleHostname();
+              if (tsHostname) {
+                tailscaleUrl = `wss://${tsHostname}`;
+                tsLog(`🚀 Tunnel активний: ${tailscaleUrl}`);
+                const localIps: string[] = [];
+                for (const ifaces of Object.values(networkInterfaces())) {
+                  for (const iface of ifaces ?? []) {
+                    if (iface.family === "IPv4" && !iface.internal) localIps.push(iface.address);
+                  }
+                }
+                broadcastAll({ type: "server_info", hostname: hostname(), localIps, port: PORT, tunnelUrl: tailscaleUrl } as any);
+              } else {
+                tsLog("⚠️ Tailscale запущено, але hostname не знайдено");
+              }
+            } else {
+              tsLog(`tailscale up завершився з кодом ${code}`);
+            }
+          });
+          break;
+        }
+
+        // ─── Client identification ──────────────────────────────────────
+        case "client_info": {
+          const info = msg as { type: "client_info"; hostname: string; platform: string; clientId: string };
+          const existing = connectedClients.get(ws);
+          connectedClients.set(ws, {
+            clientId: info.clientId,
+            hostname: info.hostname,
+            platform: info.platform,
+            connectedAt: existing?.connectedAt ?? new Date().toISOString(),
+            remoteAddress: existing?.remoteAddress ?? "unknown",
+            ws,
+          });
+          dbg("info", "clients", `Client identified: ${info.hostname} (${info.platform}) [${info.clientId.slice(0, 8)}]`);
+          broadcastClientsList();
+          break;
+        }
+
         // ─── Character position sync ──────────────────────────────────────
         case "sync_positions": {
           broadcastExcept(ws, { type: "positions_sync", positions: msg.positions } as any);
@@ -1848,6 +2465,13 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     const session = clientSessions.get(ws);
-    dbg("info", "ws", `Client disconnected. Session was: ${session ?? "none"}`);
+    const clientInfo = connectedClients.get(ws);
+    dbg("info", "ws", `Client disconnected: ${clientInfo?.hostname ?? "unknown"} (${clientInfo?.platform ?? "?"}). Session was: ${session ?? "none"}`);
+    // Clean up task queue and running agents for this client
+    const removed = taskQueue.removeForClient(ws);
+    if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
+    agentRunner.cancelAll(ws);
+    connectedClients.delete(ws);
+    broadcastClientsList();
   });
 });

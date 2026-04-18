@@ -99,6 +99,17 @@ class SessionNotifier extends Notifier<SessionState> {
     await _save();
   }
 
+  /// Create a default "Local" session on desktop if no profiles exist.
+  Future<void> ensureDefaultDesktopProfile() async {
+    if (state.profiles.isNotEmpty) return;
+    final profile = SessionProfile(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: 'Локально',
+      host: 'localhost',
+    );
+    await addProfile(profile);
+  }
+
   /// Migrate from the old single-URL setting if no profiles exist yet.
   Future<void> migrateFromLegacy() async {
     if (state.profiles.isNotEmpty) return;

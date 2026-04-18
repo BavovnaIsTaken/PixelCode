@@ -20,7 +20,20 @@ class SessionProfile {
     this.port = 9720,
   });
 
-  String get wsUrl => 'ws://$host:$port';
+  /// Whether this host requires a secure WebSocket (tunnel or known secure domain).
+  bool get isSecure =>
+      host.endsWith('.trycloudflare.com') ||
+      host.endsWith('.ts.net') ||
+      host.startsWith('wss://');
+
+  String get wsUrl {
+    // If the host is already a full wss:// URL (e.g. from tunnel), use directly
+    if (host.startsWith('wss://')) return host;
+    if (host.startsWith('ws://')) return host;
+    // Cloudflare tunnel domains → wss:// (port 443 implicit)
+    if (isSecure) return 'wss://$host';
+    return 'ws://$host:$port';
+  }
 
   SessionProfile copyWith({
     String? name,

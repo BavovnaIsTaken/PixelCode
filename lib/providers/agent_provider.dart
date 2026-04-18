@@ -66,6 +66,35 @@ final workingDirectoryProvider =
   WorkingDirectoryNotifier.new,
 );
 
+// ─── Server info (connection details, tunnel URL) ──────────────────────────
+
+class ServerInfoNotifier extends Notifier<ServerInfoMessage?> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  ServerInfoMessage? build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen((msg) {
+      if (msg is ServerInfoMessage) {
+        state = msg;
+      }
+    });
+    ref.onDispose(() => _sub?.cancel());
+    // Seed from buffered value (message may have arrived before we subscribed)
+    return ws.lastServerInfo;
+  }
+}
+
+final serverInfoProvider = NotifierProvider<ServerInfoNotifier, ServerInfoMessage?>(
+  ServerInfoNotifier.new,
+);
+
+/// Convenience: tunnel URL from server info.
+final tunnelUrlProvider = Provider<String?>((ref) {
+  return ref.watch(serverInfoProvider)?.tunnelUrl;
+});
+
 // ─── Selected agent ──────────────────────────────────────────────────────
 
 final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
@@ -112,6 +141,19 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // Restore persisted messages for all agents
     final prefs = ref.read(sharedPrefsProvider);
     _allMessages = ChatPersistenceService.loadAllMessages(prefs);
+
+    // Seed from buffered chat_history that may have arrived before we
+    // subscribed (race condition on localhost where response is instant).
+    final buffered = ws.lastChatHistory;
+    if (buffered != null) {
+      final grouped = <String, List<ChatMessage>>{};
+      for (final m in buffered.messages) {
+        (grouped[m.agentId] ??= []).add(m);
+      }
+      _allMessages = grouped;
+      _scheduleSave();
+      ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
+    }
 
     // Resume server session if we have a stored session ID
     final sessionId = ChatPersistenceService.loadSessionId(prefs);
@@ -228,7 +270,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
-  void sendMessage(String text, {List<Uint8List> images = const []}) {
+  void sendMessage(
+    String text, {
+    List<Uint8List> images = const [],
+    int? taskDifficulty,
+    bool forceSend = false,
+  }) {
     final agentId = _selectedAgent;
     _activeStreamAgent = agentId;
     final imageBase64s = images.map((b) => base64Encode(b)).toList();
@@ -245,6 +292,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           text,
           agentId: agentId,
           images: imageBase64s.isNotEmpty ? imageBase64s : null,
+          taskDifficulty: taskDifficulty,
+          forceSend: forceSend,
         );
     _scheduleSave();
   }
@@ -258,7 +307,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     ref.read(activityLogProvider.notifier).clear();
     ref.read(debugLogProvider.notifier).clear();
-    ref.read(wsServiceProvider).newChat();
+    final ws = ref.read(wsServiceProvider);
+    ws.lastChatHistory = null; // Clear buffer so stale history isn't re-seeded
+    ws.newChat();
   }
 }
 
@@ -437,12 +488,40 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
           };
         }
 
+      case TaskDispatchedMessage(:final agentId, :final task):
+        // Agent was dispatched — set it to running with the task description
+        final current = state[agentId];
+        if (current != null) {
+          state = {
+            ...state,
+            agentId: current.copyWith(
+              status: AgentStatus.running,
+              currentTask: task,
+              activeSince: DateTime.now(),
+            ),
+          };
+        }
+
+      case SubagentResultMessage(:final agentId):
+        // Agent completed — set back to idle
+        final current = state[agentId];
+        if (current != null) {
+          state = {
+            ...state,
+            agentId: AgentState(info: current.info),
+          };
+        }
+
       case ResultMessage():
-        // Reset all to idle
-        state = {
-          for (final entry in state.entries)
-            entry.key: AgentState(info: entry.value.info),
-        };
+        // Manager's query finished — only reset the manager to idle
+        // (sub-agents may still be running independently)
+        final manager = state['manager'];
+        if (manager != null) {
+          state = {
+            ...state,
+            'manager': AgentState(info: manager.info),
+          };
+        }
 
       default:
         break;
@@ -465,6 +544,9 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
         'Edit' || 'Write' => AgentStatus.typing,
         'Bash' => AgentStatus.running,
         'Agent' || 'Task' => AgentStatus.thinking,
+        'mcp__dispatch__dispatch' => AgentStatus.thinking,
+        'mcp__dispatch__team_status' => AgentStatus.thinking,
+        'mcp__dispatch__cancel_task' => AgentStatus.running,
         _ => AgentStatus.running,
       };
 }
@@ -564,12 +646,16 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
   static const _maxEntries = 500;
   StreamSubscription<ServerMessage>? _wsSub;
   StreamSubscription<ServerProcessLog>? _procSub;
+  StreamSubscription<String>? _connSub;
 
   @override
   List<DebugLogMessage> build() {
     final ws = ref.watch(wsServiceProvider);
     _wsSub?.cancel();
     _wsSub = ws.messages.listen(_onMessage);
+
+    _connSub?.cancel();
+    _connSub = ws.connectionLog.listen(_onConnLog);
 
     final proc = ref.watch(serverProcessProvider);
     _procSub?.cancel();
@@ -578,14 +664,25 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
     ref.onDispose(() {
       _wsSub?.cancel();
       _procSub?.cancel();
+      _connSub?.cancel();
     });
-    return [];
+    // Preserve existing logs across reconnections (state may not exist on first build)
+    try { return state; } catch (_) { return []; }
   }
 
   void _onMessage(ServerMessage msg) {
     if (msg is DebugLogMessage) {
       _add(msg);
     }
+  }
+
+  void _onConnLog(String line) {
+    _add(DebugLogMessage(
+      timestamp: DateTime.now(),
+      level: 'info',
+      category: 'ws',
+      message: line,
+    ));
   }
 
   void _onProcessLog(ServerProcessLog log) {
@@ -598,6 +695,10 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
   }
 
   void _add(DebugLogMessage msg) {
+    // Skip duplicates (early logs replayed on every reconnect)
+    if (state.isNotEmpty &&
+        state.last.timestamp == msg.timestamp &&
+        state.last.message == msg.message) { return; }
     final updated = [...state, msg];
     state = updated.length > _maxEntries
         ? updated.sublist(updated.length - _maxEntries)
@@ -679,4 +780,30 @@ class TraitsNotifier extends Notifier<List<AgentTrait>> {
 
 final traitsProvider = NotifierProvider<TraitsNotifier, List<AgentTrait>>(
   TraitsNotifier.new,
+);
+
+// ─── Queue status ──────────────────────────────────────────────────────────
+
+class QueueStatusNotifier extends Notifier<QueueStatusMessage> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  QueueStatusMessage build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return QueueStatusMessage(pending: 0, running: const []);
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is QueueStatusMessage) {
+      state = msg;
+    }
+  }
+}
+
+final queueStatusProvider =
+    NotifierProvider<QueueStatusNotifier, QueueStatusMessage>(
+  QueueStatusNotifier.new,
 );

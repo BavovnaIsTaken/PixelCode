@@ -6,13 +6,15 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/shop_navigation_provider.dart';
 import 'spinning_coin.dart';
 
-// ─── Colors ────────────────────────────────────────────────────────────────
+// ─── Fallback colours (used when context isn't available) ─────────────────
+// Widgets that have BuildContext should prefer `context.appColors` instead.
 
-const _bg = Color(0xFF0E0E11);
 const _cardBg = Color(0xFF1A1A1F);
 const _accent = Color(0xFF00C0D1);
 const _gold = Color(0xFFFFD700);
@@ -35,7 +37,7 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 4, vsync: this);
+    _tabCtrl = TabController(length: 6, vsync: this);
   }
 
   @override
@@ -48,8 +50,18 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
   Widget build(BuildContext context) {
     final game = ref.watch(gameEconomyProvider);
 
+    // Jump to the requested tab when navigated here via deep-link.
+    ref.listen(shopDeepLinkProvider, (_, tab) {
+      if (tab != null && mounted) {
+        _tabCtrl.animateTo(tab);
+        ref.read(shopDeepLinkProvider.notifier).state = null;
+      }
+    });
+
+    final c = context.appColors;
+
     return Container(
-      color: _bg,
+      color: c.background,
       child: Column(
         children: [
           // Balance header
@@ -59,14 +71,15 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
             decoration: BoxDecoration(
               border: Border(
                 bottom:
-                    BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                    BorderSide(color: c.divider),
               ),
             ),
             child: TabBar(
               controller: _tabCtrl,
-              isScrollable: false,
-              labelColor: _accent,
-              unselectedLabelColor: Colors.white.withValues(alpha: 0.3),
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              labelColor: c.accent,
+              unselectedLabelColor: c.textLow,
               labelStyle: const TextStyle(
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
@@ -76,13 +89,15 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
                 fontSize: 11,
                 fontWeight: FontWeight.w400,
               ),
-              indicatorColor: _accent,
+              indicatorColor: c.accent,
               indicatorWeight: 2,
               dividerColor: Colors.transparent,
               tabs: const [
                 Tab(text: 'Наймання'),
                 Tab(text: 'Навички'),
                 Tab(text: 'Офіс'),
+                Tab(text: 'Меблі'),
+                Tab(text: 'Косметика'),
                 Tab(text: 'Донат'),
               ],
             ),
@@ -96,6 +111,8 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
                 _HiringTab(),
                 _SkillsTab(),
                 _OfficeTab(),
+                _FurnitureTab(),
+                _CosmeticsTab(),
                 _DonationTab(),
               ],
             ),
@@ -301,6 +318,39 @@ class _AgentHireCard extends StatelessWidget {
                     fontSize: 9,
                   ),
                 ),
+                // Passive ability badge
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _accent.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(
+                        color: _accent.withValues(alpha: 0.15),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          entry.passive.icon,
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          entry.passive.name,
+                          style: TextStyle(
+                            color: _accent.withValues(alpha: 0.8),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 if (isHired && agentData != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -462,10 +512,12 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
             _SkillUpgradeCard(
               skill: skill,
               level: selectedAgent.skills[skill] ?? 1,
-              canUpgrade:
-                  notifier.canUpgradeSkill(_selectedAgentId!, skill),
-              onUpgrade: () =>
-                  notifier.upgradeSkill(_selectedAgentId!, skill),
+              currentXp: selectedAgent.skillXp[skill] ?? 0,
+              xpNeeded: selectedAgent.xpForNextLevel(skill),
+              hasXpButNotGrymni: notifier.hasXpButNotGrymni(_selectedAgentId!, skill),
+              canUpgrade: notifier.canUpgradeSkill(_selectedAgentId!, skill),
+              onUpgrade: () => notifier.upgradeSkill(_selectedAgentId!, skill),
+              onTrain: (difficulty) => notifier.startDungeon(_selectedAgentId!, skill, difficulty),
             ),
         ],
       ],
@@ -613,20 +665,30 @@ class _HardwareUpgradeCard extends StatelessWidget {
 class _SkillUpgradeCard extends StatelessWidget {
   final SkillType skill;
   final int level;
+  final int currentXp;
+  final int xpNeeded;
+  final bool hasXpButNotGrymni;
   final bool canUpgrade;
   final VoidCallback onUpgrade;
+  final void Function(int difficulty) onTrain;
 
   const _SkillUpgradeCard({
     required this.skill,
     required this.level,
+    required this.currentXp,
+    required this.xpNeeded,
+    required this.hasXpButNotGrymni,
     required this.canUpgrade,
     required this.onUpgrade,
+    required this.onTrain,
   });
 
   @override
   Widget build(BuildContext context) {
     final cost = skill.upgradeCost(level);
     final isMaxed = level >= 10;
+    final xpProgress = isMaxed ? 1.0 : (currentXp / xpNeeded).clamp(0.0, 1.0);
+    final xpReady = currentXp >= xpNeeded;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -636,69 +698,242 @@ class _SkillUpgradeCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(skill.icon, style: const TextStyle(fontSize: 14)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  skill.label,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                // Level bar
-                Row(
+          Row(
+            children: [
+              Text(skill.icon, style: const TextStyle(fontSize: 14)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (int i = 0; i < 10; i++)
-                      Container(
-                        width: 12,
-                        height: 4,
-                        margin: const EdgeInsets.only(right: 2),
-                        decoration: BoxDecoration(
-                          color: i < level
-                              ? _accent
-                              : Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(1),
-                        ),
-                      ),
-                    const SizedBox(width: 4),
                     Text(
-                      '$level/10',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.3),
-                        fontSize: 8,
-                        fontWeight: FontWeight.w600,
+                      skill.label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
                       ),
+                    ),
+                    const SizedBox(height: 3),
+                    // Skill level bar
+                    Row(
+                      children: [
+                        for (int i = 0; i < 10; i++)
+                          Container(
+                            width: 12,
+                            height: 4,
+                            margin: const EdgeInsets.only(right: 2),
+                            decoration: BoxDecoration(
+                              color: i < level
+                                  ? _accent
+                                  : Colors.white.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$level/10',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.3),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
+              ),
+              if (isMaxed)
+                Text(
+                  'MAX',
+                  style: TextStyle(
+                    color: _gold.withValues(alpha: 0.6),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                  ),
+                )
+              else ...[
+                // Train button
+                GestureDetector(
+                  onTap: () => _showDungeonPicker(context),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2A4A2A),
+                      borderRadius: BorderRadius.circular(5),
+                      border: Border.all(color: const Color(0xFF4CAF50).withValues(alpha: 0.4)),
+                    ),
+                    child: const Text(
+                      'Train',
+                      style: TextStyle(
+                        color: Color(0xFF4CAF50),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Buy button — disabled until XP gate met
+                Tooltip(
+                  message: xpReady
+                      ? ''
+                      : 'Потрібно ${xpNeeded - currentXp} XP ще',
+                  child: _ActionButton(
+                    label: '${_formatNumber(cost)}₲',
+                    color: canUpgrade
+                        ? _accent
+                        : xpReady
+                            ? _gold.withValues(alpha: 0.6)
+                            : Colors.white.withValues(alpha: 0.15),
+                    onTap: canUpgrade ? onUpgrade : null,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (!isMaxed) ...[
+            const SizedBox(height: 6),
+            // XP progress bar
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      value: xpProgress,
+                      minHeight: 3,
+                      backgroundColor: Colors.white.withValues(alpha: 0.07),
+                      valueColor: AlwaysStoppedAnimation(
+                        xpReady
+                            ? const Color(0xFF4CAF50)
+                            : const Color(0xFF9C6ADE).withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '$currentXp/$xpNeeded XP',
+                  style: TextStyle(
+                    color: xpReady
+                        ? const Color(0xFF4CAF50)
+                        : Colors.white.withValues(alpha: 0.3),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ],
             ),
-          ),
-          if (isMaxed)
-            Text(
-              'MAX',
-              style: TextStyle(
-                color: _gold.withValues(alpha: 0.6),
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-              ),
-            )
-          else
-            _ActionButton(
-              label: '${_formatNumber(cost)}₲',
-              color:
-                  canUpgrade ? _accent : Colors.white.withValues(alpha: 0.15),
-              onTap: canUpgrade ? onUpgrade : null,
-            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  void _showDungeonPicker(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _DungeonPickerDialog(
+        skill: skill,
+        onSelect: onTrain,
+      ),
+    );
+  }
+}
+
+// ─── Dungeon picker dialog ──────────────────────────────────────────────────
+
+class _DungeonPickerDialog extends StatelessWidget {
+  final SkillType skill;
+  final void Function(int difficulty) onSelect;
+
+  const _DungeonPickerDialog({required this.skill, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    const difficulties = [
+      (1, 'Легкий', '×10 XP за бал', Color(0xFF4CAF50)),
+      (2, 'Середній', '×20 XP за бал', Color(0xFFFFA726)),
+      (3, 'Складний', '×30 XP за бал', Color(0xFFEF5350)),
+    ];
+
+    return Dialog(
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(skill.icon, style: const TextStyle(fontSize: 18)),
+                const SizedBox(width: 8),
+                Text(
+                  'Тренування: ${skill.label}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Обери складність данжу',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.4),
+                fontSize: 11,
+              ),
+            ),
+            const SizedBox(height: 16),
+            for (final (diff, label, reward, color) in difficulties) ...[
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  onSelect(diff);
+                },
+                child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: color.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        label,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        reward,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -850,6 +1085,799 @@ class _OfficeLevelCard extends StatelessWidget {
             Icon(Icons.check_circle,
                 size: 18, color: _green.withValues(alpha: 0.5)),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Furniture tab ────────────────────────────────────────────────────────
+
+class _FurnitureTab extends ConsumerStatefulWidget {
+  const _FurnitureTab();
+
+  @override
+  ConsumerState<_FurnitureTab> createState() => _FurnitureTabState();
+}
+
+class _FurnitureTabState extends ConsumerState<_FurnitureTab> {
+  FurnitureType _selectedType = FurnitureType.coffeeTable;
+
+  @override
+  Widget build(BuildContext context) {
+    final game = ref.watch(gameEconomyProvider);
+    final notifier = ref.read(gameEconomyProvider.notifier);
+
+    final filtered = furnitureCatalog
+        .where((f) => f.type == _selectedType)
+        .toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        // Owned furniture summary
+        _SectionHeader(
+          icon: Icons.chair_outlined,
+          title: 'Меблі офісу',
+          trailing: '${game.ownedFurniture.length} придбано',
+        ),
+        const SizedBox(height: 8),
+
+        // Edit mode toggle & placement info
+        Builder(builder: (context) {
+          final isEditMode = ref.watch(furnitureEditModeProvider);
+          final selectedId = ref.watch(selectedFurnitureIdProvider);
+          final selectedItem =
+              selectedId != null ? furnitureById(selectedId) : null;
+
+          return Column(
+            children: [
+              // Edit mode toggle
+              GestureDetector(
+                onTap: () {
+                  final current = ref.read(furnitureEditModeProvider);
+                  ref.read(furnitureEditModeProvider.notifier).state =
+                      !current;
+                  if (current) {
+                    ref.read(selectedFurnitureIdProvider.notifier).state =
+                        null;
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isEditMode
+                        ? _accent.withValues(alpha: 0.12)
+                        : _cardBg,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: isEditMode
+                          ? _accent.withValues(alpha: 0.4)
+                          : Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isEditMode
+                            ? Icons.grid_on_rounded
+                            : Icons.grid_view_rounded,
+                        size: 14,
+                        color: isEditMode
+                            ? _accent
+                            : _accent.withValues(alpha: 0.6),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        isEditMode
+                            ? 'Редактор увімкнено'
+                            : 'Розмістити меблі',
+                        style: TextStyle(
+                          color: isEditMode
+                              ? _accent
+                              : Colors.white.withValues(alpha: 0.5),
+                          fontSize: 10,
+                          fontWeight:
+                              isEditMode ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: isEditMode
+                              ? _accent.withValues(alpha: 0.2)
+                              : Colors.white.withValues(alpha: 0.04),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          isEditMode ? 'ВИМКНУТИ' : 'УВІМКНУТИ',
+                          style: TextStyle(
+                            color: isEditMode
+                                ? _accent
+                                : Colors.white.withValues(alpha: 0.3),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Selected item for placement
+              if (isEditMode) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: _cardBg,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        selectedItem != null
+                            ? 'Обрано: ${selectedItem.name}'
+                            : 'Обери предмет для розміщення:',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 9,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          for (final id in game.ownedFurniture)
+                            GestureDetector(
+                              onTap: () => ref
+                                  .read(
+                                      selectedFurnitureIdProvider.notifier)
+                                  .state = selectedId == id ? null : id,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: selectedId == id
+                                      ? _accent.withValues(alpha: 0.2)
+                                      : Colors.white
+                                          .withValues(alpha: 0.04),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: selectedId == id
+                                        ? _accent.withValues(alpha: 0.5)
+                                        : Colors.white
+                                            .withValues(alpha: 0.08),
+                                  ),
+                                ),
+                                child: Text(
+                                  furnitureById(id)?.name ?? id,
+                                  style: TextStyle(
+                                    color: selectedId == id
+                                        ? _accent
+                                        : Colors.white
+                                            .withValues(alpha: 0.4),
+                                    fontSize: 9,
+                                    fontWeight: selectedId == id
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Тап на полотні = розмістити. Тап на меблях = прибрати.',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          fontSize: 8,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              // Placed items count
+              if (!isEditMode)
+                Container(
+                  margin: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.02),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        'Розміщено: ${game.placedFurniture.length}',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.3),
+                          fontSize: 9,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          );
+        }),
+        const SizedBox(height: 16),
+
+        // Type selector
+        _SectionHeader(icon: Icons.category_outlined, title: 'Категорія'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final type in FurnitureType.values)
+              _FurnitureTypeChip(
+                type: type,
+                isSelected: _selectedType == type,
+                onTap: () => setState(() => _selectedType = type),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Items
+        _SectionHeader(
+          icon: Icons.storefront_outlined,
+          title: _selectedType.label,
+        ),
+        const SizedBox(height: 8),
+        for (final item in filtered)
+          _FurnitureItemCard(
+            item: item,
+            isOwned: game.ownedFurniture.contains(item.id),
+            canBuy: notifier.canPurchaseFurniture(item.id),
+            onBuy: () {
+              notifier.purchaseFurniture(item.id);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    '«${item.name}» придбано! -${_formatNumber(item.cost)}₲',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  backgroundColor: _green,
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _FurnitureTypeChip extends StatelessWidget {
+  final FurnitureType type;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _FurnitureTypeChip({
+    required this.type,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? _accent.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected
+                ? _accent.withValues(alpha: 0.4)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(type.icon, style: const TextStyle(fontSize: 10)),
+            const SizedBox(width: 5),
+            Text(
+              type.label,
+              style: TextStyle(
+                color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FurnitureItemCard extends StatelessWidget {
+  final FurnitureItem item;
+  final bool isOwned;
+  final bool canBuy;
+  final VoidCallback onBuy;
+
+  const _FurnitureItemCard({
+    required this.item,
+    required this.isOwned,
+    required this.canBuy,
+    required this.onBuy,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = isOwned
+        ? _green.withValues(alpha: 0.2)
+        : Colors.white.withValues(alpha: 0.06);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          // Icon
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Center(
+              child: Text(
+                item.type.icon,
+                style: const TextStyle(fontSize: 16),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      item.name,
+                      style: TextStyle(
+                        color: isOwned
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.5),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (item.widthTiles > 1 || item.heightTiles > 1) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _accent.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Text(
+                          '${item.widthTiles}x${item.heightTiles}',
+                          style: TextStyle(
+                            color: _accent.withValues(alpha: 0.6),
+                            fontSize: 7,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (isOwned) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _green.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'КУПЛЕНО',
+                          style: TextStyle(
+                            color: _green,
+                            fontSize: 7,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  item.description,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    fontSize: 9,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (isOwned)
+            Icon(Icons.check_circle,
+                size: 18, color: _green.withValues(alpha: 0.5))
+          else
+            _ActionButton(
+              label: '${_formatNumber(item.cost)}₲',
+              color: canBuy ? _accent : Colors.white.withValues(alpha: 0.15),
+              onTap: canBuy ? onBuy : null,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Cosmetics tab ─────────────────────────────────────────────────────────
+
+class _CosmeticsTab extends ConsumerStatefulWidget {
+  const _CosmeticsTab();
+
+  @override
+  ConsumerState<_CosmeticsTab> createState() => _CosmeticsTabState();
+}
+
+class _CosmeticsTabState extends ConsumerState<_CosmeticsTab> {
+  CosmeticType _selectedType = CosmeticType.nicknameDecor;
+
+  @override
+  Widget build(BuildContext context) {
+    final game = ref.watch(gameEconomyProvider);
+    final notifier = ref.read(gameEconomyProvider.notifier);
+
+    final filtered = cosmeticCatalog
+        .where((c) => c.type == _selectedType)
+        .toList();
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        // Nickname preview with current decor
+        if (game.nickname.isNotEmpty) ...[
+          _SectionHeader(icon: Icons.badge_outlined, title: 'Твій профіль'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: _cardBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _accent.withValues(alpha: 0.2)),
+            ),
+            child: Row(
+              children: [
+                // Avatar with frame indicator
+                _AvatarFramePreview(
+                  frameId: game.equippedFor(CosmeticType.avatarFrame),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Title badge
+                      if (game.equippedFor(CosmeticType.titleBadge) != null) ...[
+                        Text(
+                          cosmeticById(game.equippedFor(CosmeticType.titleBadge)!)?.preview ?? '',
+                          style: TextStyle(
+                            color: _gold.withValues(alpha: 0.8),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                      ],
+                      // Decorated nickname
+                      Text(
+                        game.displayNickname,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        // Type selector
+        _SectionHeader(icon: Icons.palette_outlined, title: 'Категорія'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final type in CosmeticType.values)
+              _CosmeticTypeChip(
+                type: type,
+                isSelected: _selectedType == type,
+                onTap: () => setState(() => _selectedType = type),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+
+        // Items
+        _SectionHeader(
+          icon: Icons.storefront_outlined,
+          title: _selectedType.label,
+        ),
+        const SizedBox(height: 8),
+        for (final item in filtered)
+          _CosmeticItemCard(
+            item: item,
+            isOwned: game.ownedCosmetics.contains(item.id),
+            isEquipped: game.equippedFor(item.type) == item.id,
+            canBuy: notifier.canPurchaseCosmetic(item.id),
+            onBuy: () {
+              notifier.purchaseCosmetic(item.id);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    '«${item.name}» придбано! -${_formatNumber(item.cost)}₲',
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  backgroundColor: _green,
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            onEquip: () => notifier.equipCosmetic(item.id),
+            onUnequip: () => notifier.unequipCosmetic(item.type),
+          ),
+      ],
+    );
+  }
+}
+
+class _CosmeticTypeChip extends StatelessWidget {
+  final CosmeticType type;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _CosmeticTypeChip({
+    required this.type,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? _accent.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected
+                ? _accent.withValues(alpha: 0.4)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(type.icon, style: const TextStyle(fontSize: 10)),
+            const SizedBox(width: 5),
+            Text(
+              type.label,
+              style: TextStyle(
+                color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CosmeticItemCard extends StatelessWidget {
+  final CosmeticItem item;
+  final bool isOwned;
+  final bool isEquipped;
+  final bool canBuy;
+  final VoidCallback onBuy;
+  final VoidCallback onEquip;
+  final VoidCallback onUnequip;
+
+  const _CosmeticItemCard({
+    required this.item,
+    required this.isOwned,
+    required this.isEquipped,
+    required this.canBuy,
+    required this.onBuy,
+    required this.onEquip,
+    required this.onUnequip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = isEquipped
+        ? _gold.withValues(alpha: 0.4)
+        : isOwned
+            ? _green.withValues(alpha: 0.2)
+            : Colors.white.withValues(alpha: 0.06);
+    final bgColor = isEquipped
+        ? _gold.withValues(alpha: 0.06)
+        : _cardBg;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          // Preview
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Center(
+              child: Text(
+                item.preview.length <= 4 ? item.preview : item.preview.substring(0, 1),
+                style: const TextStyle(fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      item.name,
+                      style: TextStyle(
+                        color: isOwned ? Colors.white : Colors.white.withValues(alpha: 0.5),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (isEquipped) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: _gold.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'ОДЯГНЕНО',
+                          style: TextStyle(
+                            color: _gold,
+                            fontSize: 7,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 3),
+                // Preview text for nickname decorations
+                if (item.type == CosmeticType.nicknameDecor ||
+                    item.type == CosmeticType.titleBadge)
+                  Text(
+                    item.preview.replaceAll('{n}', 'NickName'),
+                    style: TextStyle(
+                      color: _gold.withValues(alpha: 0.5),
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Action
+          if (isOwned)
+            _ActionButton(
+              label: isEquipped ? 'Зняти' : 'Одягнути',
+              color: isEquipped ? Colors.white.withValues(alpha: 0.3) : _green,
+              onTap: isEquipped ? onUnequip : onEquip,
+            )
+          else
+            _ActionButton(
+              label: item.cost == 0
+                  ? 'Безкоштовно'
+                  : '${_formatNumber(item.cost)}₲',
+              color: canBuy ? _accent : Colors.white.withValues(alpha: 0.15),
+              onTap: canBuy ? onBuy : null,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AvatarFramePreview extends StatelessWidget {
+  final String? frameId;
+  const _AvatarFramePreview({this.frameId});
+
+  static const _frameColors = <String, Color>{
+    'frame_neon': Color(0xFF00C0D1),
+    'frame_gold': Color(0xFFFFD700),
+    'frame_fire': Color(0xFFFF6B35),
+    'frame_glitch': Color(0xFF9B59B6),
+    'frame_pixel': Color(0xFF22C55E),
+    'frame_matrix': Color(0xFF00FF41),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final frameColor = frameId != null
+        ? (_frameColors[frameId!] ?? _accent)
+        : Colors.white.withValues(alpha: 0.12);
+
+    return Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: frameColor,
+          width: frameId != null ? 2.5 : 1,
+        ),
+        boxShadow: frameId != null
+            ? [BoxShadow(color: frameColor.withValues(alpha: 0.4), blurRadius: 8)]
+            : null,
+      ),
+      child: Center(
+        child: Text(
+          '👤',
+          style: const TextStyle(fontSize: 22),
+        ),
       ),
     );
   }
