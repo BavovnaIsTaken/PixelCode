@@ -2,6 +2,9 @@
 /// [ThemeColors] and a ready-to-use [ThemeData] for MaterialApp.
 library;
 
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -29,6 +32,7 @@ final appThemeDataProvider = Provider<ThemeData>((ref) {
 });
 
 ThemeData _buildThemeData(ThemeColors c) {
+  final isMacOS = !kIsWeb && Platform.isMacOS;
   return ThemeData.dark(useMaterial3: true).copyWith(
     scaffoldBackgroundColor: c.background,
     colorScheme: ColorScheme.dark(
@@ -41,6 +45,12 @@ ThemeData _buildThemeData(ThemeColors c) {
       onSurface: c.textHigh,
       onError: Colors.white,
     ),
+    tooltipTheme: isMacOS
+        ? const TooltipThemeData(
+            waitDuration: Duration(milliseconds: 2000),
+            showDuration: Duration(seconds: 10),
+          )
+        : null,
     extensions: [AppColorsExtension(c)],
   );
 }

@@ -796,6 +796,11 @@ class GameState {
   /// Placed furniture items with their grid positions.
   final List<FurniturePlacement> placedFurniture;
 
+  /// Epoch millis of the last local mutation. Drives last-write-wins sync
+  /// between devices — the server only accepts state with a newer timestamp
+  /// than what it already holds.
+  final int updatedAt;
+
   const GameState({
     this.grymni = 500,
     this.officeLevel = OfficeLevel.garage,
@@ -809,6 +814,7 @@ class GameState {
     this.themeState = const ThemeState(),
     this.ownedFurniture = const {},
     this.placedFurniture = const [],
+    this.updatedAt = 0,
   });
 
   int get hiredCount => agents.values.where((a) => a.isHired).length;
@@ -848,6 +854,7 @@ class GameState {
     ThemeState? themeState,
     Set<String>? ownedFurniture,
     List<FurniturePlacement>? placedFurniture,
+    int? updatedAt,
   }) =>
       GameState(
         grymni: grymni ?? this.grymni,
@@ -862,6 +869,7 @@ class GameState {
         themeState: themeState ?? this.themeState,
         ownedFurniture: ownedFurniture ?? this.ownedFurniture,
         placedFurniture: placedFurniture ?? this.placedFurniture,
+        updatedAt: updatedAt ?? this.updatedAt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -884,6 +892,7 @@ class GameState {
         'placedFurniture': [
           for (final p in placedFurniture) p.toJson(),
         ],
+        'updatedAt': updatedAt,
       };
 
   factory GameState.fromJson(Map<String, dynamic> json) => GameState(
@@ -920,6 +929,7 @@ class GameState {
           for (final p in (json['placedFurniture'] as List<dynamic>?) ?? [])
             FurniturePlacement.fromJson(p as Map<String, dynamic>),
         ],
+        updatedAt: json['updatedAt'] as int? ?? 0,
       );
 
   String encode() => jsonEncode(toJson());
@@ -950,6 +960,7 @@ class GameState {
       placedFurniture: [
         FurniturePlacement(itemId: 'snack_table_basic', col: 14, row: 1),
       ],
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
   }
 }

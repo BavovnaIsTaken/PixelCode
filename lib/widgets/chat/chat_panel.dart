@@ -68,7 +68,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   bool _showSkeleton = false;
 
   // Task difficulty selector (optional, shown next to input)
-  int? _selectedDifficulty; // 1-5 or null = no gate
+  int? _selectedDifficulty = 2; // 1-5 or null = no gate
 
   // Stored for forceSend retry after task_too_hard warning
   String? _pendingText;
@@ -857,8 +857,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
               onDismiss: () => setState(() => _tooHardWarning = null),
             ),
           // Difficulty selector row
-          if (_selectedDifficulty != null || true) // always show for discoverability
-            Padding(
+          Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
               child: Row(
                 children: [
@@ -870,40 +869,37 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  for (final (diff, label) in const [
-                    (0, 'Без'),
-                    (2, '··'),
-                    (3, '···'),
-                    (4, '····'),
-                    (5, '·····'),
+                  for (final (diff, label, color) in const [
+                    (2, 'Легко', Color(0xFF4CAF50)),
+                    (3, 'Середнє', Color(0xFFFFC107)),
+                    (4, 'Складно', Color(0xFFFF9800)),
+                    (5, 'Хардкор', Color(0xFFF44336)),
                   ])
                     GestureDetector(
                       onTap: () => setState(() =>
-                          _selectedDifficulty = diff == 0 ? null : diff),
+                          _selectedDifficulty =
+                              _selectedDifficulty == diff ? null : diff),
                       child: Container(
                         margin: const EdgeInsets.only(right: 4),
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: (_selectedDifficulty == diff ||
-                                      (diff == 0 && _selectedDifficulty == null))
-                                  ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
-                                  : Colors.transparent,
+                          color: _selectedDifficulty == diff
+                              ? color.withValues(alpha: 0.2)
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(4),
                           border: Border.all(
-                            color: (_selectedDifficulty == diff ||
-                                        (diff == 0 && _selectedDifficulty == null))
-                                    ? const Color(0xFF00C0D1).withValues(alpha: 0.5)
-                                    : Colors.white.withValues(alpha: 0.1),
+                            color: _selectedDifficulty == diff
+                                ? color.withValues(alpha: 0.5)
+                                : Colors.white.withValues(alpha: 0.1),
                           ),
                         ),
                         child: Text(
                           label,
                           style: TextStyle(
-                            color: (_selectedDifficulty == diff ||
-                                        (diff == 0 && _selectedDifficulty == null))
-                                    ? const Color(0xFF00C0D1)
-                                    : Colors.white.withValues(alpha: 0.3),
+                            color: _selectedDifficulty == diff
+                                ? color
+                                : Colors.white.withValues(alpha: 0.3),
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),

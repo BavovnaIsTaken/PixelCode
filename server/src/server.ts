@@ -430,8 +430,47 @@ const clientBypassPermissions = new WeakMap<WebSocket, boolean>();
 /** Per-client game economy state (hired agents, hardware, skills). */
 const clientGameState = new WeakMap<WebSocket, GameStateData>();
 
-/** Latest full game state for cross-device sync (last-write-wins). */
+/** Latest full game state for cross-device sync (last-write-wins by timestamp). */
 let latestFullGameState: string | null = null;
+let latestStateUpdatedAt: number = 0;
+
+/** Path where the authoritative game state is persisted across server restarts. */
+function gameStateFile(projectPath: string): string {
+  const key = projectPath.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".pixelcode", "projects", key, "game_state.json");
+}
+
+function loadPersistedGameState(): void {
+  const file = gameStateFile(PROJECT_CWD);
+  if (!existsSync(file)) return;
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf-8")) as { fullState?: string; updatedAt?: number };
+    if (typeof raw.fullState === "string" && typeof raw.updatedAt === "number") {
+      latestFullGameState = raw.fullState;
+      latestStateUpdatedAt = raw.updatedAt;
+      dbg("info", "game", `Loaded persisted game state (updatedAt=${raw.updatedAt})`);
+    }
+  } catch (e) {
+    dbg("warn", "game", `Failed to load persisted game state: ${e}`);
+  }
+}
+
+function persistGameState(): void {
+  if (!latestFullGameState) return;
+  const file = gameStateFile(PROJECT_CWD);
+  const dir = file.substring(0, file.lastIndexOf("/"));
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      fullState: latestFullGameState,
+      updatedAt: latestStateUpdatedAt,
+    }));
+  } catch (e) {
+    dbg("warn", "game", `Failed to persist game state: ${e}`);
+  }
+}
+
+loadPersistedGameState();
 
 /**
  * Per-client flag: tracks whether an assistant_message_done was sent for the
@@ -1574,6 +1613,7 @@ function makeOtaHandler() {
     const contentType: Record<string, string> = {
       ".ipa": "application/octet-stream",
       ".plist": "text/xml",
+      ".apk": "application/vnd.android.package-archive",
     };
 
     res.writeHead(200, {
@@ -1914,6 +1954,334 @@ function iosDeployCancel(ws: WebSocket): void {
   }
 }
 
+// ─── Android deploy ────────────────────────────────────────────────────────
+
+/** Track active Android build process per client so we can cancel it. */
+const activeAndroidDeployProcess = new WeakMap<WebSocket, ChildProcess>();
+
+function sendAndroidDeployLog(ws: WebSocket, message: string): void {
+  send(ws, { type: "android_deploy_status", subtype: "log", message } as any);
+}
+
+function sendAndroidDeployError(ws: WebSocket, message: string): void {
+  send(ws, { type: "android_deploy_status", subtype: "error", message } as any);
+}
+
+/** Resolve the Android SDK root from env vars or common default locations. */
+function findAndroidSdk(): string | null {
+  const envPath = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT;
+  if (envPath && existsSync(envPath)) return envPath;
+  const candidates = [
+    join(homedir(), "Library/Android/sdk"),
+    join(homedir(), "Android/Sdk"),
+    "/usr/local/lib/android/sdk",
+    "/opt/android-sdk",
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** Resolve adb binary — prefer Android SDK's platform-tools, fall back to PATH. */
+function findAdb(): string | null {
+  const sdk = findAndroidSdk();
+  if (sdk) {
+    const adbPath = join(sdk, "platform-tools/adb");
+    if (existsSync(adbPath)) return adbPath;
+  }
+  try {
+    const p = execFileSync("which", ["adb"], { timeout: 3000 }).toString().trim();
+    if (p) return p;
+  } catch { /* not in PATH */ }
+  return null;
+}
+
+async function androidDeployCheck(ws: WebSocket): Promise<void> {
+  let hasFlutter = false;
+
+  try {
+    await new Promise<void>((resolve) => {
+      execFile("flutter", ["--version"], { timeout: 10000 }, (err) => {
+        hasFlutter = !err;
+        resolve();
+      });
+    });
+  } catch { /* not installed */ }
+
+  // Also require Android SDK to be present.
+  const hasAndroidSdk = findAndroidSdk() !== null;
+  const ok = hasFlutter && hasAndroidSdk;
+
+  send(ws, { type: "android_deploy_status", subtype: "deps_result", hasFlutter: ok } as any);
+}
+
+/** Detect first connected Android device via adb. Returns device serial or null. */
+async function detectAndroidDevice(adbPath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(adbPath, ["devices"], { timeout: 10000 }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      // Parse output: lines after "List of devices attached" with "\t device"
+      for (const line of stdout.split("\n").slice(1)) {
+        const match = line.match(/^(\S+)\s+device$/);
+        if (match) { resolve(match[1]); return; }
+      }
+      resolve(null);
+    });
+  });
+}
+
+/** List every device reported by `adb devices -l` (any state). */
+async function listAndroidDevices(adbPath: string): Promise<Array<{ serial: string; model: string; state: string }>> {
+  return new Promise((resolve) => {
+    execFile(adbPath, ["devices", "-l"], { timeout: 10000 }, (err, stdout) => {
+      if (err) { resolve([]); return; }
+      const out: Array<{ serial: string; model: string; state: string }> = [];
+      for (const line of stdout.split("\n").slice(1)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        // Example: "emulator-5554  device product:sdk_gphone ... model:sdk_gphone64_x86_64 ..."
+        const parts = trimmed.split(/\s+/);
+        if (parts.length < 2) continue;
+        const serial = parts[0];
+        const state = parts[1];
+        const modelMatch = trimmed.match(/\bmodel:(\S+)/);
+        const model = modelMatch ? modelMatch[1].replace(/_/g, " ") : serial;
+        out.push({ serial, model, state });
+      }
+      resolve(out);
+    });
+  });
+}
+
+async function androidDeployListDevices(ws: WebSocket): Promise<void> {
+  const adbPath = findAdb();
+  const devices = adbPath ? await listAndroidDevices(adbPath) : [];
+  send(ws, { type: "android_deploy_status", subtype: "devices_list", devices } as any);
+}
+
+/** Try to install APK silently via adb. Returns true on success. */
+async function tryAdbInstall(ws: WebSocket, adbPath: string, apkPath: string, serial: string): Promise<boolean> {
+  sendAndroidDeployLog(ws, `Встановлення на "${serial}"...`);
+  sendAndroidDeployLog(ws, `Команда: adb -s ${serial} install -r ${apkPath}`);
+
+  return new Promise((resolve) => {
+    const proc = spawn(adbPath, ["-s", serial, "install", "-r", apkPath]);
+    activeAndroidDeployProcess.set(ws, proc);
+
+    proc.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendAndroidDeployLog(ws, line.trim());
+      }
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendAndroidDeployLog(ws, line.trim());
+      }
+    });
+
+    proc.on("close", (code) => resolve(code === 0));
+    proc.on("error", () => resolve(false));
+  });
+}
+
+const ANDROID_PACKAGE = "com.danylooliinyk.pixelcode";
+
+/** Launch the installed app via adb monkey (uses LAUNCHER intent). Returns true on success. */
+async function tryAdbLaunch(ws: WebSocket, adbPath: string, serial: string): Promise<boolean> {
+  sendAndroidDeployLog(ws, `Запуск додатку на "${serial}"...`);
+  sendAndroidDeployLog(
+    ws,
+    `Команда: adb -s ${serial} shell monkey -p ${ANDROID_PACKAGE} -c android.intent.category.LAUNCHER 1`,
+  );
+
+  return new Promise((resolve) => {
+    const proc = spawn(adbPath, [
+      "-s",
+      serial,
+      "shell",
+      "monkey",
+      "-p",
+      ANDROID_PACKAGE,
+      "-c",
+      "android.intent.category.LAUNCHER",
+      "1",
+    ]);
+    activeAndroidDeployProcess.set(ws, proc);
+
+    let stdout = "";
+    proc.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendAndroidDeployLog(ws, line.trim());
+      }
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        if (line.trim()) sendAndroidDeployLog(ws, line.trim());
+      }
+    });
+
+    proc.on("close", (code) => {
+      // monkey can exit 0 even if it fails to find the package, so also check stdout.
+      const ok = code === 0 && !/No activities found/i.test(stdout) && !/Error/i.test(stdout);
+      resolve(ok);
+    });
+    proc.on("error", () => resolve(false));
+  });
+}
+
+async function androidDeployStart(ws: WebSocket, requestedSerial?: string): Promise<void> {
+  dbg("info", "deploy", `Starting Android build…${requestedSerial ? ` (target: ${requestedSerial})` : ""}`);
+
+  sendAndroidDeployLog(ws, "Побудова Android APK...");
+  sendAndroidDeployLog(ws, "Команда: flutter build apk --release");
+
+  const buildProcess = spawn("flutter", ["build", "apk", "--release"], {
+    cwd: PROJECT_CWD,
+  });
+  activeAndroidDeployProcess.set(ws, buildProcess);
+
+  buildProcess.stdout.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      if (line.trim()) sendAndroidDeployLog(ws, line.trim());
+    }
+  });
+  buildProcess.stderr.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      if (line.trim()) sendAndroidDeployError(ws, line.trim());
+    }
+  });
+
+  const buildExitCode = await new Promise<number | null>((resolve) => {
+    buildProcess.on("close", resolve);
+    buildProcess.on("error", (err) => {
+      sendAndroidDeployError(ws, `Помилка при побудові: ${err.message}`);
+      resolve(1);
+    });
+  });
+
+  if (buildExitCode !== 0) {
+    sendAndroidDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
+    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+    activeAndroidDeployProcess.delete(ws);
+    return;
+  }
+
+  const apkCandidates = [
+    join(PROJECT_CWD, "build/app/outputs/flutter-apk/app-release.apk"),
+    join(PROJECT_CWD, "build/app/outputs/apk/release/app-release.apk"),
+  ];
+  const apkPath = apkCandidates.find((p) => existsSync(p));
+
+  if (!apkPath) {
+    sendAndroidDeployError(ws, "APK не знайдено після побудови");
+    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+    activeAndroidDeployProcess.delete(ws);
+    return;
+  }
+
+  sendAndroidDeployLog(ws, `Білд завершено: ${apkPath}`);
+  sendAndroidDeployLog(ws, "");
+
+  // Try direct install via adb if a device is connected.
+  const adbPath = findAdb();
+  if (adbPath) {
+    let serial: string | null = null;
+    if (requestedSerial) {
+      // Verify the requested device is still connected & in "device" state.
+      const all = await listAndroidDevices(adbPath);
+      const match = all.find((d) => d.serial === requestedSerial && d.state === "device");
+      if (match) {
+        serial = match.serial;
+        sendAndroidDeployLog(ws, `Обрано пристрій: ${match.model} (${match.serial})`);
+      } else {
+        sendAndroidDeployLog(ws, `Пристрій "${requestedSerial}" не доступний. Шукаю інші...`);
+      }
+    }
+    if (!serial) {
+      sendAndroidDeployLog(ws, "Шукаю підключені Android пристрої...");
+      serial = await detectAndroidDevice(adbPath);
+    }
+
+    if (serial) {
+      sendAndroidDeployLog(ws, `Знайдено пристрій: ${serial}`);
+      const ok = await tryAdbInstall(ws, adbPath, apkPath, serial);
+
+      if (ok) {
+        sendAndroidDeployLog(ws, "");
+        sendAndroidDeployLog(ws, "===============================================");
+        sendAndroidDeployLog(ws, "APK встановлено на пристрій!");
+        sendAndroidDeployLog(ws, "===============================================");
+        sendAndroidDeployLog(ws, "");
+
+        const launched = await tryAdbLaunch(ws, adbPath, serial);
+        if (launched) {
+          sendAndroidDeployLog(ws, "Додаток запущено.");
+        } else {
+          sendAndroidDeployLog(ws, "Не вдалося автоматично запустити додаток. Запустіть вручну.");
+        }
+
+        send(ws, { type: "android_deploy_status", subtype: "complete", success: true } as any);
+        activeAndroidDeployProcess.delete(ws);
+        return;
+      }
+
+      sendAndroidDeployLog(ws, "Пряме встановлення не вдалося. Перемикаюсь на завантаження...");
+      sendAndroidDeployLog(ws, "");
+    } else {
+      sendAndroidDeployLog(ws, "Пристрій не знайдено. Використовую завантаження...");
+      sendAndroidDeployLog(ws, "");
+    }
+  } else {
+    sendAndroidDeployLog(ws, "adb не знайдено. Використовую завантаження...");
+    sendAndroidDeployLog(ws, "");
+  }
+
+  // Fallback: serve APK for download.
+  const apkFileName = "app-release.apk";
+  const servedApkPath = join(otaDir, apkFileName);
+  try { rmSync(servedApkPath, { force: true }); } catch { /* ok */ }
+
+  const cpProcess = spawn("cp", [apkPath, servedApkPath]);
+  const cpExitCode = await new Promise<number | null>((resolve) => {
+    cpProcess.on("close", resolve);
+    cpProcess.on("error", () => resolve(1));
+  });
+
+  if (cpExitCode !== 0 || !existsSync(servedApkPath)) {
+    sendAndroidDeployError(ws, "Не вдалося підготувати APK до роздачі");
+    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+    activeAndroidDeployProcess.delete(ws);
+    return;
+  }
+
+  // Prefer Tailscale Funnel (HTTPS) if available, else fall back to LAN IP.
+  const baseUrl = tailscaleUrl
+    ? tailscaleUrl.replace("wss://", "https://")
+    : `http://${getOtaHost()}:${PORT}`;
+  const installUrl = `${baseUrl}/${apkFileName}`;
+
+  sendAndroidDeployLog(ws, `APK готовий: ${installUrl}`);
+  sendAndroidDeployLog(ws, "");
+  sendAndroidDeployLog(ws, "===============================================");
+  sendAndroidDeployLog(ws, "Відкрийте посилання на пристрої та встановіть APK");
+  sendAndroidDeployLog(ws, "===============================================");
+
+  send(ws, { type: "android_deploy_status", subtype: "install_ready", installUrl } as any);
+  activeAndroidDeployProcess.delete(ws);
+}
+
+function androidDeployCancel(ws: WebSocket): void {
+  const proc = activeAndroidDeployProcess.get(ws);
+  if (proc) {
+    proc.kill("SIGTERM");
+    activeAndroidDeployProcess.delete(ws);
+    sendAndroidDeployLog(ws, "Операцію скасовано.");
+    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+  }
+}
+
 // ─── HTTP + WebSocket server (single port for WS and OTA file serving) ───────
 
 const httpServer = createHttpServer(makeOtaHandler());
@@ -2012,8 +2380,12 @@ wss.on("connection", (ws, request) => {
   sendChatHistory(ws);
   // Send stored game state for cross-device sync
   if (latestFullGameState) {
-    send(ws, { type: "game_state_sync", fullState: latestFullGameState } as any);
-    dbg("info", "game", "Sent stored game state to new client");
+    send(ws, {
+      type: "game_state_sync",
+      fullState: latestFullGameState,
+      stateUpdatedAt: latestStateUpdatedAt,
+    } as any);
+    dbg("info", "game", `Sent stored game state to new client (updatedAt=${latestStateUpdatedAt})`);
   }
   // Send current clients list to the new client + broadcast updated list to all
   broadcastClientsList();
@@ -2219,11 +2591,32 @@ wss.on("connection", (ws, request) => {
           dbg("info", "game", `Game state updated: ${gs.hiredAgents.length} hired, hardware=${JSON.stringify(gs.agentHardware)}`);
           sendDebug(ws, "info", "game", `Team: ${gs.hiredAgents.join(", ")} | HW: ${Object.entries(gs.agentHardware).map(([k,v]) => `${k}=${v}`).join(", ")}`);
 
-          // Cross-device sync: broadcast full game state to other clients
+          // Cross-device sync: last-write-wins by timestamp. Older writes are
+          // rejected and the authoritative state is pushed back so the stale
+          // client converges instead of clobbering everyone.
           if (msg.fullState) {
-            latestFullGameState = msg.fullState;
-            broadcastExcept(ws, { type: "game_state_sync", fullState: msg.fullState } as any);
-            dbg("info", "game", `Game state synced to ${wss.clients.size - 1} other client(s)`);
+            const incomingTs = msg.stateUpdatedAt ?? 0;
+            // Accept as seed when the server has nothing yet (first client
+            // after a fresh install / wiped state file).
+            const isSeed = latestFullGameState === null;
+            if (isSeed || incomingTs > latestStateUpdatedAt) {
+              latestFullGameState = msg.fullState;
+              latestStateUpdatedAt = incomingTs;
+              persistGameState();
+              broadcastExcept(ws, {
+                type: "game_state_sync",
+                fullState: msg.fullState,
+                stateUpdatedAt: incomingTs,
+              } as any);
+              dbg("info", "game", `Game state accepted (ts=${incomingTs}), synced to ${wss.clients.size - 1} other client(s)`);
+            } else if (latestFullGameState) {
+              send(ws, {
+                type: "game_state_sync",
+                fullState: latestFullGameState,
+                stateUpdatedAt: latestStateUpdatedAt,
+              } as any);
+              dbg("info", "game", `Game state rejected (ts=${incomingTs} <= ${latestStateUpdatedAt}); pushed authoritative state back`);
+            }
           }
           break;
         }
@@ -2353,6 +2746,32 @@ wss.on("connection", (ws, request) => {
 
         case "ios_deploy_cancel":
           iosDeployCancel(ws);
+          break;
+
+        // ─── Android deploy ──────────────────────────────────────────────
+        case "android_deploy_check":
+          androidDeployCheck(ws).catch((err) => {
+            sendAndroidDeployError(ws, `Check failed: ${err}`);
+          });
+          break;
+
+        case "android_deploy_list_devices":
+          androidDeployListDevices(ws).catch((err) => {
+            sendAndroidDeployError(ws, `List devices failed: ${err}`);
+          });
+          break;
+
+        case "android_deploy_start": {
+          const serial = (msg as { type: "android_deploy_start"; deviceSerial?: string }).deviceSerial;
+          androidDeployStart(ws, serial).catch((err) => {
+            sendAndroidDeployError(ws, `Deploy failed: ${err}`);
+            send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+          });
+          break;
+        }
+
+        case "android_deploy_cancel":
+          androidDeployCancel(ws);
           break;
 
         // ─── Tailscale setup ──────────────────────────────────────────
