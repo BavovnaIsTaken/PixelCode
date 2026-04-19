@@ -25,7 +25,18 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { teamAgents, agentInfoList, buildOfficePrompt, buildDynamicAgents, hardwareToModel, skillsToModel, type GameStateData } from "./agents.js";
+import {
+  roleCatalog,
+  roleTemplateFor,
+  roleTypeOf,
+  buildOfficePrompt,
+  buildDynamicAgents,
+  buildHiredAgentInfoList,
+  hardwareToModel,
+  skillsToModel,
+  type GameStateData,
+  type HiredAgentInfo,
+} from "./agents.js";
 import { runDungeon, getChallenge } from "./dungeon.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
@@ -146,7 +157,7 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
         send(ws, {
           type: "init",
           sessionId: sys.session_id,
-          agents: agentInfoList,
+          agents: agentInfoForClient(ws),
           workingDirectory: PROJECT_CWD,
         });
       }
@@ -377,8 +388,8 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
         costUsd,
         durationMs: res.duration_ms ?? 0,
       });
-      // Reset all agent statuses to idle
-      for (const agent of agentInfoList) {
+      // Reset all hired-instance statuses to idle
+      for (const agent of agentInfoForClient(ws)) {
         send(ws, {
           type: "agent_status",
           agentId: agent.id,
@@ -494,7 +505,8 @@ const managerBusy = new WeakMap<WebSocket, boolean>();
 
 interface TrackedClient {
   clientId: string;
-  hostname: string;
+  nickname: string;
+  deviceName: string;
   platform: string;
   connectedAt: string; // ISO 8601
   remoteAddress: string;
@@ -504,16 +516,21 @@ interface TrackedClient {
 /** All currently connected clients with their identifying info. */
 const connectedClients = new Map<WebSocket, TrackedClient>();
 
+function isLoopback(addr: string): boolean {
+  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
 /** Build the clients list for broadcasting. */
 function buildClientsList(): ConnectedClientInfo[] {
   const list: ConnectedClientInfo[] = [];
   for (const client of connectedClients.values()) {
     list.push({
       clientId: client.clientId,
-      hostname: client.hostname,
+      nickname: client.nickname,
+      deviceName: client.deviceName,
       platform: client.platform,
       connectedAt: client.connectedAt,
-      isLocal: client.remoteAddress === "127.0.0.1" || client.remoteAddress === "::1" || client.remoteAddress === "::ffff:127.0.0.1",
+      isHostMachine: isLoopback(client.remoteAddress),
     });
   }
   return list;
@@ -601,13 +618,30 @@ function getAgentMap(ws: WebSocket): Map<string, string> {
   return map;
 }
 
-/** Pre-computed set of known agent IDs for fast lookup. */
-const knownAgentIds = new Set(agentInfoList.map(a => a.id));
-
-/** Resolve a tool_use_id or agent name to a human-readable agent name. */
+/** Resolve a tool_use_id or agent name to an instanceId / roleType.
+ *
+ * Priority:
+ *  1. If the raw string matches a hired instanceId (from any client's game
+ *     state), return it unchanged.
+ *  2. Fall back to the per-client tool_use_id → agent map (sub-agent launches).
+ *  3. Otherwise return the raw string (e.g. a role type like "coder").
+ */
 function resolveAgentId(ws: WebSocket, raw: string): string {
-  if (knownAgentIds.has(raw)) return raw;
-  return getAgentMap(ws).get(raw) ?? raw;
+  const gs = clientGameState.get(ws);
+  if (gs?.instances[raw]) return raw;
+  const mapped = getAgentMap(ws).get(raw);
+  if (mapped) return mapped;
+  return raw;
+}
+
+/** AgentInfo list for a client — computed from their game state.
+ *
+ * Used in init/new_chat/resume_session responses so Flutter can enumerate
+ * hired instances. Falls back to an empty list when no game state is set yet;
+ * Flutter's own GameState is the primary source of truth either way.
+ */
+function agentInfoForClient(ws: WebSocket): HiredAgentInfo[] {
+  return buildHiredAgentInfoList(clientGameState.get(ws));
 }
 
 // ─── Trait memory ──────────────────────────────────────────────────────────
@@ -824,7 +858,8 @@ If nothing notable happened, reply with: []`;
       "code_quality", "architecture", "testing", "security",
       "communication", "delegation", "problem_solving", "tools_usage",
     ]);
-    const validAgents = new Set(agentInfoList.map(a => a.id));
+    // Valid lesson targets = hired instanceIds (lessons are per-instance).
+    const validAgents = new Set(agentInfoForClient(ws).map(a => a.id));
 
     for (const l of lessons.slice(0, 3)) {
       if (!validAgents.has(l.agentId)) continue;
@@ -862,9 +897,9 @@ If nothing notable happened, reply with: []`;
 function createDispatchServer(ws: WebSocket) {
   const dispatchTool = tool(
     "dispatch",
-    "Dispatch a task to a team agent. The agent works independently — you do NOT wait for the result. Continue with other work immediately.",
+    "Dispatch a task to a specific team agent INSTANCE. The agent works independently — you do NOT wait for the result. Continue with other work immediately.",
     {
-      agent: z.string().describe("Agent ID to dispatch to (e.g. coder, reviewer, tester, security, ui-ux-designer, tech-lead)"),
+      agent: z.string().describe("Exact instanceId to dispatch to (e.g. 'coder#1', 'reviewer#2'). Use team_status to see who is available."),
       task: z.string().describe("Detailed task description for the agent. Be specific about what to do and expected output."),
       priority: z.enum(["high", "normal", "low"]).optional().describe("Task priority. Default: normal"),
     },
@@ -873,18 +908,23 @@ function createDispatchServer(ws: WebSocket) {
       const taskDesc = args.task;
       const priority = (args.priority ?? "normal") as "high" | "normal" | "low";
 
-      // Validate agent ID
-      const validAgents = new Set(agentInfoList.map(a => a.id).filter(id => id !== "manager"));
+      // Validate instanceId against the hired team (excluding the manager role).
+      const gsForValidation = clientGameState.get(ws);
+      const hired = gsForValidation?.instances ?? {};
+      const availableIds = Object.keys(hired).filter(
+        (id) => hired[id].roleType !== "manager",
+      );
+      const validAgents = new Set(availableIds);
       if (!validAgents.has(agentId)) {
         return {
-          content: [{ type: "text" as const, text: `Unknown agent "${agentId}". Available: ${[...validAgents].join(", ")}` }],
+          content: [{ type: "text" as const, text: `Unknown instance "${agentId}". Available: ${availableIds.length > 0 ? availableIds.join(", ") : "(no teammates hired — hire more in the shop)"}.` }],
         };
       }
 
-      // Check if agent is already busy
+      // Check if this specific instance is already busy
       if (agentRunner.isAgentBusy(agentId)) {
         return {
-          content: [{ type: "text" as const, text: `Agent "${agentId}" is already busy. Use team_status to check workload, or wait for them to finish.` }],
+          content: [{ type: "text" as const, text: `Instance "${agentId}" is already busy. Use team_status to see workload, or dispatch to another instance.` }],
         };
       }
 
@@ -955,14 +995,14 @@ function createDispatchServer(ws: WebSocket) {
 
       const lines: string[] = [];
 
-      for (const agent of agentInfoList) {
-        if (agent.id === "manager") continue;
+      for (const agent of agentInfoForClient(ws)) {
+        if (agent.roleType === "manager") continue;
         const runEntry = running.find(r => r.agentId === agent.id);
         if (runEntry) {
           const elapsed = Math.round(runEntry.elapsedMs / 1000);
-          lines.push(`- **${agent.id}** (${agent.name}): BUSY — "${runEntry.task.slice(0, 60)}" (${elapsed}s)`);
+          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): BUSY — "${runEntry.task.slice(0, 60)}" (${elapsed}s)`);
         } else {
-          lines.push(`- **${agent.id}** (${agent.name}): idle`);
+          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): idle`);
         }
       }
 
@@ -1232,18 +1272,23 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const gameState = clientGameState.get(ws);
     const systemPrompt = buildOfficePrompt(targetAgentId, projectMemory, agentTraits, gameState);
 
-    // Build dynamic agent definitions (filtered by hired, models from hardware)
+    // Build dynamic agent definitions (one per hired instance, models from hardware)
     const dynamicAgents = buildDynamicAgents(gameState);
+    void dynamicAgents; // currently only used for prompt composition inside buildOfficePrompt
 
-    // Determine model based on target agent's hardware
-    const targetHardware = gameState?.agentHardware[targetAgentId] ?? 0;
+    // Determine model based on target instance's hardware
+    const targetInstance = gameState?.instances[targetAgentId];
+    const targetHardware = targetInstance?.hardware ?? 0;
     const targetModel = hardwareToModel(targetHardware);
 
-    // Determine tools based on target agent's definition + delegation capability
-    const agentDef = teamAgents[targetAgentId];
+    // Determine tools based on the instance's role template + delegation capability.
+    // Fall back to roleTypeOf() so clients can address a bare role type during
+    // startup (before the first set_game_state arrives).
+    const targetRoleType = roleTypeOf(targetAgentId, gameState);
+    const agentDef = roleTemplateFor(targetAgentId, gameState);
     const baseTools = agentDef?.tools ?? ["Read", "Glob", "Grep", "Bash"];
     // Manager and tech-lead can delegate via Dispatch MCP tool (no blocking Agent tool)
-    const canDelegate = targetAgentId === "manager" || targetAgentId === "tech-lead";
+    const canDelegate = targetRoleType === "manager" || targetRoleType === "tech-lead";
     const allowedTools = [...baseTools];
 
     // Resume from existing session if available, persist for future resume.
@@ -2353,12 +2398,44 @@ async function captureAndroidScreenshot(ws: WebSocket, requestedSerial?: string)
   sendScreenshotReady(ws, "android", otaFileUrl(fileName));
 }
 
-async function captureIosScreenshot(ws: WebSocket): Promise<void> {
-  const fileName = `screenshot-ios-${Date.now()}.png`;
-  const filePath = join(otaDir, fileName);
-  try { mkdirSync(otaDir, { recursive: true }); } catch { /* ok */ }
+/** Resolve idevicescreenshot binary (libimobiledevice) — PATH, then brew locations. */
+function findIdeviceScreenshot(): string | null {
+  try {
+    return execFileSync("which", ["idevicescreenshot"], { timeout: 3000 }).toString().trim() || null;
+  } catch { /* not in PATH */ }
+  for (const p of ["/opt/homebrew/bin/idevicescreenshot", "/usr/local/bin/idevicescreenshot"]) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
 
-  const ok = await new Promise<boolean>((resolve) => {
+type IosCaptureResult = "ok" | "not_installed" | "no_device" | "failed";
+
+/** Try capturing from a physical iPhone via libimobiledevice. */
+async function tryPhysicalIosScreenshot(filePath: string): Promise<IosCaptureResult> {
+  const binary = findIdeviceScreenshot();
+  if (!binary) return "not_installed";
+
+  return new Promise((resolve) => {
+    const proc = spawn(binary, [filePath]);
+    let stderr = "";
+    proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+    proc.on("error", () => resolve("failed"));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        dbg("warn", "screenshot", `idevicescreenshot exit ${code}: ${stderr}`);
+        const noDevice = /No device found|ERROR: Could not connect/i.test(stderr);
+        resolve(noDevice ? "no_device" : "failed");
+        return;
+      }
+      resolve(existsSync(filePath) ? "ok" : "failed");
+    });
+  });
+}
+
+/** Try capturing from a booted iOS simulator. */
+async function trySimulatorScreenshot(filePath: string): Promise<boolean> {
+  return new Promise((resolve) => {
     const proc = spawn("xcrun", ["simctl", "io", "booted", "screenshot", filePath]);
     let stderr = "";
     proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
@@ -2370,12 +2447,38 @@ async function captureIosScreenshot(ws: WebSocket): Promise<void> {
       resolve(code === 0 && existsSync(filePath));
     });
   });
+}
 
-  if (!ok) {
-    sendScreenshotError(ws, "ios", "Скріншот не вдався — запущений iOS симулятор?");
+async function captureIosScreenshot(ws: WebSocket): Promise<void> {
+  const fileName = `screenshot-ios-${Date.now()}.png`;
+  const filePath = join(otaDir, fileName);
+  try { mkdirSync(otaDir, { recursive: true }); } catch { /* ok */ }
+
+  // 1) Physical iPhone via libimobiledevice.
+  const physical = await tryPhysicalIosScreenshot(filePath);
+  if (physical === "ok") {
+    sendScreenshotReady(ws, "ios", otaFileUrl(fileName));
     return;
   }
-  sendScreenshotReady(ws, "ios", otaFileUrl(fileName));
+
+  // 2) Fallback: booted simulator.
+  if (await trySimulatorScreenshot(filePath)) {
+    sendScreenshotReady(ws, "ios", otaFileUrl(fileName));
+    return;
+  }
+
+  if (physical === "not_installed") {
+    sendScreenshotError(ws, "ios",
+      "Для фізичного iPhone потрібен libimobiledevice: `brew install libimobiledevice`. " +
+      "Або запустіть iOS Simulator.");
+  } else if (physical === "no_device") {
+    sendScreenshotError(ws, "ios",
+      "iPhone не знайдено. Підключіть розблокований iPhone (Trust This Computer) " +
+      "або запустіть Simulator.");
+  } else {
+    sendScreenshotError(ws, "ios",
+      "Скріншот не вдався. Перевірте, що iPhone підключений і розблокований, або запустіть Simulator.");
+  }
 }
 
 // ─── HTTP + WebSocket server (single port for WS and OTA file serving) ───────
@@ -2443,7 +2546,7 @@ function sendChatHistory(ws: WebSocket): void {
 
 console.log(`🏗️  PixelCode server listening on ws://localhost:${PORT}`);
 console.log(`   Working directory: ${PROJECT_CWD}`);
-console.log(`   Agents: ${agentInfoList.map((a) => a.name).join(", ")}`);
+console.log(`   Roles available: ${Object.keys(roleCatalog).join(", ")}`);
 console.log(`   Trait memory: ${getAllTraits(traitStore).length} lessons loaded`);
 
 wss.on("connection", (ws, request) => {
@@ -2454,7 +2557,8 @@ wss.on("connection", (ws, request) => {
   // Register with placeholder info until client_info arrives
   connectedClients.set(ws, {
     clientId: `anon-${Date.now()}`,
-    hostname: "unknown",
+    nickname: "",
+    deviceName: "",
     platform: "unknown",
     connectedAt: new Date().toISOString(),
     remoteAddress,
@@ -2465,7 +2569,7 @@ wss.on("connection", (ws, request) => {
   send(ws, {
     type: "init",
     sessionId: "pending",
-    agents: agentInfoList,
+    agents: agentInfoForClient(ws),
     workingDirectory: PROJECT_CWD,
   });
   // Send server connection info so clients can share/display it
@@ -2519,7 +2623,7 @@ wss.on("connection", (ws, request) => {
           // ── Task difficulty gate ───────────────────────────────────────
           if (msg.taskDifficulty && !msg.forceSend) {
             const gs = clientGameState.get(ws);
-            const agentSkills = gs?.agentSkills[targetAgent];
+            const agentSkills = gs?.instances[targetAgent]?.skills;
             if (agentSkills) {
               const levels = Object.values(agentSkills);
               const avgSkill = levels.length > 0
@@ -2568,7 +2672,7 @@ wss.on("connection", (ws, request) => {
         }
 
         case "get_status":
-          for (const agent of agentInfoList) {
+          for (const agent of agentInfoForClient(ws)) {
             send(ws, {
               type: "agent_status",
               agentId: agent.id,
@@ -2588,7 +2692,7 @@ wss.on("connection", (ws, request) => {
           send(ws, {
             type: "init",
             sessionId: "pending",
-            agents: agentInfoList,
+            agents: agentInfoForClient(ws),
             workingDirectory: PROJECT_CWD,
           });
           break;
@@ -2602,7 +2706,7 @@ wss.on("connection", (ws, request) => {
           send(ws, {
             type: "init",
             sessionId: requestedId,
-            agents: agentInfoList,
+            agents: agentInfoForClient(ws),
             workingDirectory: PROJECT_CWD,
           });
           break;
@@ -2637,7 +2741,7 @@ wss.on("connection", (ws, request) => {
             send(ws, {
               type: "init",
               sessionId: "pending",
-              agents: agentInfoList,
+              agents: agentInfoForClient(ws),
               workingDirectory: PROJECT_CWD,
             });
           } catch (err) {
@@ -2676,7 +2780,7 @@ wss.on("connection", (ws, request) => {
           send(ws, {
             type: "init",
             sessionId: "pending",
-            agents: agentInfoList,
+            agents: agentInfoForClient(ws),
             workingDirectory: PROJECT_CWD,
           });
           sendDebug(ws, "info", "project", `Switched to: ${newPath}`);
@@ -2695,14 +2799,14 @@ wss.on("connection", (ws, request) => {
         // ─── Game economy ──────────────────────────────────────────────────
 
         case "set_game_state": {
-          const gs: GameStateData = {
-            hiredAgents: msg.hiredAgents,
-            agentHardware: msg.agentHardware,
-            agentSkills: msg.agentSkills,
-          };
+          const gs: GameStateData = { instances: msg.instances };
           clientGameState.set(ws, gs);
-          dbg("info", "game", `Game state updated: ${gs.hiredAgents.length} hired, hardware=${JSON.stringify(gs.agentHardware)}`);
-          sendDebug(ws, "info", "game", `Team: ${gs.hiredAgents.join(", ")} | HW: ${Object.entries(gs.agentHardware).map(([k,v]) => `${k}=${v}`).join(", ")}`);
+          const instanceIds = Object.keys(gs.instances);
+          const teamSummary = instanceIds
+            .map((id) => `${id} (${gs.instances[id].nickname}, hw=${gs.instances[id].hardware})`)
+            .join(", ");
+          dbg("info", "game", `Game state updated: ${instanceIds.length} instance(s) hired`);
+          sendDebug(ws, "info", "game", `Team: ${teamSummary || "(empty)"}`);
 
           // Cross-device sync: last-write-wins by timestamp. Older writes are
           // rejected and the authoritative state is pushed back so the stale
@@ -2754,7 +2858,7 @@ wss.on("connection", (ws, request) => {
           const { agentId: dungeonAgentId, skillType, difficulty } = msg;
           const gs = clientGameState.get(ws);
 
-          if (!gs?.hiredAgents.includes(dungeonAgentId)) {
+          if (!gs?.instances[dungeonAgentId]) {
             send(ws, { type: "dungeon_error", agentId: dungeonAgentId, error: "Agent is not hired." } as any);
             break;
           }
@@ -2973,17 +3077,19 @@ wss.on("connection", (ws, request) => {
 
         // ─── Client identification ──────────────────────────────────────
         case "client_info": {
-          const info = msg as { type: "client_info"; hostname: string; platform: string; clientId: string };
+          const info = msg as { type: "client_info"; clientId: string; nickname: string; deviceName: string; platform: string };
           const existing = connectedClients.get(ws);
           connectedClients.set(ws, {
             clientId: info.clientId,
-            hostname: info.hostname,
+            nickname: info.nickname,
+            deviceName: info.deviceName,
             platform: info.platform,
             connectedAt: existing?.connectedAt ?? new Date().toISOString(),
             remoteAddress: existing?.remoteAddress ?? "unknown",
             ws,
           });
-          dbg("info", "clients", `Client identified: ${info.hostname} (${info.platform}) [${info.clientId.slice(0, 8)}]`);
+          const label = info.nickname || info.deviceName || "unknown";
+          dbg("info", "clients", `Client identified: ${label} (${info.platform}) [${info.clientId.slice(0, 8)}]`);
           broadcastClientsList();
           break;
         }
@@ -3026,7 +3132,8 @@ wss.on("connection", (ws, request) => {
   ws.on("close", () => {
     const session = clientSessions.get(ws);
     const clientInfo = connectedClients.get(ws);
-    dbg("info", "ws", `Client disconnected: ${clientInfo?.hostname ?? "unknown"} (${clientInfo?.platform ?? "?"}). Session was: ${session ?? "none"}`);
+    const disconnectLabel = clientInfo?.nickname || clientInfo?.deviceName || "unknown";
+    dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Session was: ${session ?? "none"}`);
     // Clean up task queue and running agents for this client
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);

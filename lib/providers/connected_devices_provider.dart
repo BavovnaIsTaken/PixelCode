@@ -28,6 +28,14 @@ class ConnectedDevicesNotifier extends Notifier<List<ConnectedClient>> {
 
   /// The client ID of this device (for "this device" highlighting).
   String get ownClientId => ref.read(wsServiceProvider).clientId;
+
+  /// Clients that share a machine with the server (loopback connections).
+  List<ConnectedClient> get hostMachineDevices =>
+      state.where((c) => c.isHostMachine).toList();
+
+  /// Clients connecting from other machines.
+  List<ConnectedClient> get remoteDevices =>
+      state.where((c) => !c.isHostMachine).toList();
 }
 
 final connectedDevicesProvider =

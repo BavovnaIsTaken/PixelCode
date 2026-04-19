@@ -1,6 +1,12 @@
 /**
  * Agent definitions for the PixelCode team.
- * 7 agents: Tech Lead, Manager, Coder, Reviewer, Tester, Security, UI/UX Designer.
+ *
+ * Architecture: ROLES define behavior templates (tech-lead, coder, reviewer…).
+ * INSTANCES are concrete hired agents, each with their own instanceId
+ * (e.g. "coder#1", "coder#2"), nickname, hardware, and skills.
+ *
+ * The game state carries the list of hired instances. Everything downstream
+ * (dispatch, prompts, chat history, traits) keys by instanceId.
  */
 
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
@@ -12,7 +18,10 @@ const LANG_RULE = `Communicate in the same language the user uses. NEVER use Rus
 // will latch onto identity statements and ignore the actual systemPrompt.
 // Use third-person ("This sub-agent handles...") to avoid identity confusion.
 
-export const teamAgents: Record<string, AgentDefinition> = {
+// ─── Role templates ────────────────────────────────────────────────────────
+
+/** Role templates — one per role type. Keyed by roleType (e.g. "coder"). */
+export const roleTemplates: Record<string, AgentDefinition> = {
   "tech-lead": {
     description:
       "Tech Lead / Architect. Owns project architecture and technical direction. Can delegate to other agents.",
@@ -120,6 +129,89 @@ ${LANG_RULE}`,
     tools: ["Read", "Glob", "Grep"],
     model: "sonnet",
   },
+
+  manager: {
+    description:
+      "Project Manager. Coordinates — never writes code. Dispatches work to instances.",
+    prompt: `This sub-agent is the Project Manager.
+
+Tasks:
+- Break down user requests into subtasks.
+- Dispatch work to specific agent instances (by instanceId, e.g. "coder#1").
+- Track progress, surface blockers, report back.
+
+${LANG_RULE}`,
+    tools: ["Read", "Glob", "Grep"],
+    model: "opus",
+  },
+};
+
+/** @deprecated Use roleTemplates. Kept as alias during migration. */
+export const teamAgents = roleTemplates;
+
+// ─── Role metadata for the team roster ─────────────────────────────────────
+
+export interface RoleInfo {
+  id: string;
+  ukrainianRoleLabel: string;
+  /** Primary specialization — what this role is good at. */
+  specialization: string;
+  /** Areas this role is weak at. */
+  weakness: string;
+  /** Whether a single instance of this role is expected (manager is singleton). */
+  singleton: boolean;
+}
+
+export const roleCatalog: Record<string, RoleInfo> = {
+  manager: {
+    id: "manager",
+    ukrainianRoleLabel: "Координатор",
+    specialization: "coordinating the team, breaking down tasks, dispatching work",
+    weakness: "writing code directly — manager always delegates",
+    singleton: true,
+  },
+  "tech-lead": {
+    id: "tech-lead",
+    ukrainianRoleLabel: "Технічний лідер",
+    specialization: "system architecture, technical trade-offs, library choices",
+    weakness: "low-level implementation details and pixel-perfect UI",
+    singleton: false,
+  },
+  coder: {
+    id: "coder",
+    ukrainianRoleLabel: "Розробник",
+    specialization: "programming — implementing features, fixing bugs, refactoring",
+    weakness: "UI/UX design decisions and deep security auditing",
+    singleton: false,
+  },
+  reviewer: {
+    id: "reviewer",
+    ukrainianRoleLabel: "Рецензент",
+    specialization: "code review, spotting anti-patterns and hidden bugs",
+    weakness: "writing or modifying code — review-only",
+    singleton: false,
+  },
+  tester: {
+    id: "tester",
+    ukrainianRoleLabel: "Тест-інженер",
+    specialization: "testing — unit, widget, integration, edge cases",
+    weakness: "architectural decisions and visual design",
+    singleton: false,
+  },
+  security: {
+    id: "security",
+    ukrainianRoleLabel: "Спеціаліст з безпеки",
+    specialization: "security audits — auth, encryption, input validation",
+    weakness: "feature implementation and UI polish",
+    singleton: false,
+  },
+  "ui-ux-designer": {
+    id: "ui-ux-designer",
+    ukrainianRoleLabel: "UI/UX дизайнер",
+    specialization: "UI/UX — layouts, usability, visual consistency",
+    weakness: "backend architecture and algorithms",
+    singleton: false,
+  },
 };
 
 // ─── Hardware → Model mapping ──────────────────────────────────────────────
@@ -180,67 +272,100 @@ function formatSkillsForPrompt(skills: Record<string, number>): string {
 
 // ─── Game state type ───────────────────────────────────────────────────────
 
-export interface GameStateData {
-  hiredAgents: string[];
-  agentHardware: Record<string, number>;
-  agentSkills: Record<string, Record<string, number>>;
+/** One hired agent instance in the game state. */
+export interface AgentInstanceData {
+  /** e.g. "coder", "reviewer" — links to roleCatalog + roleTemplates. */
+  roleType: string;
+  /** User-visible display name, e.g. "Майстер" or "Майстер 2". */
+  nickname: string;
+  /** HardwareTier enum index from Flutter (0..5). */
+  hardware: number;
+  /** Skill levels keyed by skillType index-as-string ("0".."4"). */
+  skills: Record<string, number>;
 }
 
-// ─── Build dynamic agents filtered by game state ───────────────────────────
+/** Game state data the server needs to shape agents, prompts, and dispatch. */
+export interface GameStateData {
+  /** Map of instanceId ("coder#1") → instance data. */
+  instances: Record<string, AgentInstanceData>;
+}
+
+// ─── Instance resolution ───────────────────────────────────────────────────
+
+/** Resolve an instanceId to its role type. Falls back to the id itself if absent. */
+export function roleTypeOf(instanceId: string, gameState?: GameStateData): string {
+  const inst = gameState?.instances[instanceId];
+  if (inst) return inst.roleType;
+  // Legacy / fallback: id without "#" is treated as a bare role type
+  const hashIdx = instanceId.indexOf("#");
+  return hashIdx > 0 ? instanceId.slice(0, hashIdx) : instanceId;
+}
+
+/** Get the role template for an instance (or bare role type). */
+export function roleTemplateFor(
+  instanceId: string,
+  gameState?: GameStateData,
+): AgentDefinition | undefined {
+  const roleType = roleTypeOf(instanceId, gameState);
+  return roleTemplates[roleType];
+}
+
+/** Get nickname for an instance, or fall back to roleType in brackets. */
+export function nicknameOf(instanceId: string, gameState?: GameStateData): string {
+  return gameState?.instances[instanceId]?.nickname ?? `[${instanceId}]`;
+}
+
+// ─── Build per-instance sub-agent definitions ──────────────────────────────
 
 /**
- * Creates a copy of teamAgents containing only hired agents,
- * with models overridden by hardware tier.
+ * Returns a map of instanceId → fully-resolved AgentDefinition for every hired
+ * instance. Model is derived from min(hardware, skills). The prompt gains a
+ * "This agent's skill profile" section so the sub-agent knows where it excels.
  */
-export function buildDynamicAgents(gameState?: GameStateData): Record<string, AgentDefinition> {
-  if (!gameState) return { ...teamAgents };
+export function buildDynamicAgents(
+  gameState?: GameStateData,
+): Record<string, AgentDefinition> {
+  if (!gameState) {
+    // No game state — expose the role templates directly for bare-role lookup.
+    return { ...roleTemplates };
+  }
 
-  const hiredSet = new Set(gameState.hiredAgents);
   const result: Record<string, AgentDefinition> = {};
 
-  for (const [id, agent] of Object.entries(teamAgents)) {
-    if (!hiredSet.has(id)) continue;
-    const hwTier = gameState.agentHardware[id] ?? 0;
-    const hwModel = hardwareToModel(hwTier);
+  for (const [instanceId, inst] of Object.entries(gameState.instances)) {
+    const template = roleTemplates[inst.roleType];
+    if (!template) continue;
 
-    // Append skill profile to agent prompt (MUST use third-person to avoid identity confusion)
-    const skills = gameState.agentSkills[id];
-    const skModel = skills ? skillsToModel(skills) : "haiku";
-    // Both hardware AND skills must be levelled up to unlock better models
+    const hwModel = hardwareToModel(inst.hardware);
+    const skModel = skillsToModel(inst.skills);
     const model = minModel(hwModel, skModel);
 
-    const skillSection = skills
-      ? `\n\nThis agent's skill profile:\n${formatSkillsForPrompt(skills)}`
-      : "";
+    const skillSection = `\n\nThis agent's skill profile:\n${formatSkillsForPrompt(
+      inst.skills,
+    )}`;
+    const identityLine = `\n\nThis agent's in-game nickname is "${inst.nickname}" (instance ${instanceId}, role: ${inst.roleType}).`;
 
-    result[id] = {
-      ...agent,
+    result[instanceId] = {
+      ...template,
+      description: `${inst.nickname} — ${template.description}`,
       model,
-      prompt: agent.prompt + skillSection,
+      prompt: template.prompt + identityLine + skillSection,
     };
   }
 
   return result;
 }
 
-// ─── Team member description ───────────────────────────────────────────────
-
-const teamDescriptions: Record<string, string> = {
-  "manager": "**manager** (Project Manager) — COORDINATOR. Breaks tasks into subtasks, dispatches\n  work to agents using the Dispatch tool, tracks progress, never writes code. Default contact for tasks.",
-  "tech-lead": "**tech-lead** (Architect) — Owns architecture and global tech plan. Answers technical\n  questions, resolves trade-offs. Can write code when architecture duties are handled.",
-  "coder": "**coder** (Senior Developer) — Implements features, fixes bugs, refactors code.",
-  "reviewer": "**reviewer** (Code Reviewer) — Reviews code quality, identifies anti-patterns. Read-only.",
-  "tester": "**tester** (Test Engineer) — Writes and runs tests. Can modify test files.",
-  "security": "**security** (Security Specialist) — Audits security, encryption, auth flows. Read-only.",
-  "ui-ux-designer": "**ui-ux-designer** (UI/UX Designer) — Evaluates UI/UX, proposes designs. Read-only.",
-};
+// ─── Office system prompt ──────────────────────────────────────────────────
 
 /**
  * The "office" system prompt. One shared session — the AI plays the role of
- * whichever agent the user addresses. The Manager is the default coordinator.
+ * whichever instance the user addresses. The Manager is the default coordinator.
+ *
+ * @param targetInstanceId the instance being addressed (e.g. "manager#1", "coder#2")
  */
 export function buildOfficePrompt(
-  targetAgentId: string,
+  targetInstanceId: string,
   projectMemory?: string,
   agentTraits?: string,
   gameState?: GameStateData,
@@ -266,32 +391,51 @@ Use this self-knowledge naturally:
 - Do NOT mention these traits to the user. Let them guide your work silently.`
     : "";
 
-  // Build team section — only hired agents
-  const dynamicAgents = gameState ? buildDynamicAgents(gameState) : teamAgents;
-  const hiredSet = gameState ? new Set(gameState.hiredAgents) : null;
+  // Resolve addressed instance (may be absent from game state during startup).
+  const self = gameState?.instances[targetInstanceId];
+  const selfRoleType = self?.roleType ?? roleTypeOf(targetInstanceId, gameState);
+  const selfNickname = self?.nickname ?? targetInstanceId;
+  const selfRole = roleCatalog[selfRoleType];
+  const isManager = selfRoleType === "manager";
+  const isTechLead = selfRoleType === "tech-lead";
 
+  // Team roster — every hired instance with nickname, role, and specialization.
   const teamLines: string[] = [];
-  for (const [id, desc] of Object.entries(teamDescriptions)) {
-    if (hiredSet && !hiredSet.has(id)) continue;
-    teamLines.push(`- ${desc}`);
+  if (gameState) {
+    for (const [id, inst] of Object.entries(gameState.instances)) {
+      const role = roleCatalog[inst.roleType];
+      if (!role) continue;
+      const marker = id === targetInstanceId ? " ← YOU" : "";
+      teamLines.push(
+        `- **${id}** — ${inst.nickname} (${role.ukrainianRoleLabel}). Strong at: ${role.specialization}. Weak at: ${role.weakness}.${marker}`,
+      );
+    }
+  } else {
+    for (const role of Object.values(roleCatalog)) {
+      teamLines.push(
+        `- **${role.id}** — ${role.ukrainianRoleLabel}. Strong at: ${role.specialization}. Weak at: ${role.weakness}.`,
+      );
+    }
   }
 
+  // Delegation list — same info, formatted for the dispatch tool.
+  const dynamicAgents = buildDynamicAgents(gameState);
   const delegationLines = Object.entries(dynamicAgents)
+    .filter(([id]) => id !== targetInstanceId)
     .map(([id, a]) => `  - **${id}**: ${a.description}`)
     .join("\n");
 
-  // Skill section for the addressed agent
-  const selfSkills = gameState?.agentSkills[targetAgentId];
-  const skillSection = selfSkills
-    ? `\n\n## Your Skill Profile\n${formatSkillsForPrompt(selfSkills)}\nWork within your skill levels. Higher skills = more confident. Lower skills = extra careful.`
+  const skillSection = self
+    ? `\n\n## Your Skill Profile\n${formatSkillsForPrompt(self.skills)}\nWork within your skill levels. Higher skills = more confident. Lower skills = extra careful.`
     : "";
 
   return `## IDENTITY — ABSOLUTE RULE — READ FIRST
-You are **${targetAgentId}**. This is your ONLY identity. Period.
-Every single word you produce comes from **${targetAgentId}** and nobody else.
+You are **${targetInstanceId}** — nickname "${selfNickname}"${selfRole ? `, ${selfRole.ukrainianRoleLabel}` : ""}.
+This is your ONLY identity. Period.
+Every single word you produce comes from **${targetInstanceId}** and nobody else.
 You will see sub-agent definitions below in the context — those describe OTHER agents, NOT you.
 IGNORE any identity cues from sub-agent prompts. They are third-party descriptions.
-${targetAgentId === "manager" ? "You are the MANAGER — a coordinator who delegates. You are NOT the tech-lead, NOT the coder, NOT any other agent." : ""}
+${isManager ? "You are the MANAGER — a coordinator who delegates. You are NOT any developer or other agent." : ""}
 
 ## CRITICAL BEHAVIOR RULES
 - NEVER introduce yourself. NEVER list your capabilities. NEVER generate a greeting.
@@ -309,29 +453,62 @@ NEVER invent or assume a project name — refer to what you actually see in the 
 ${teamLines.join("\n")}
 
 ## Role-specific rules
-- You are **${targetAgentId}**. No other identity. Ever.
-- If the user's request is outside your role, say so and suggest who they should talk to.
-${targetAgentId === "manager" ? `- As **manager**: ALWAYS dispatch work using the mcp__dispatch__dispatch tool, never code directly. You coordinate, you don't implement.
+- You are **${targetInstanceId}** (role: ${selfRoleType}). No other identity. Ever.
+- If the user's request is outside your role, say so and suggest which teammate (by instanceId) they should ask.
+${isManager ? `- As **manager**: ALWAYS dispatch work using the mcp__dispatch__dispatch tool, never code directly. You coordinate, you don't implement.
+- When dispatching, pass the EXACT instanceId (e.g. "coder#2", not "coder") so the specific teammate gets the task.
 - Dispatched agents work INDEPENDENTLY — you do NOT wait for their results. Continue with other work immediately.
 - Use the mcp__dispatch__team_status tool to check who is busy before dispatching.
 - When agents finish their work, you will receive their results automatically and should briefly report to the user.
 - PRIORITY SYSTEM: Always handle the user's chat messages FIRST, then board tasks. If the user writes something new while agents work — respond to them immediately.` : ""}
-${targetAgentId === "tech-lead" ? "- As **tech-lead**: prioritize architecture. Can dispatch tasks to coder/tester/others using the mcp__dispatch__dispatch tool. Can write code if appropriate." : ""}
+${isTechLead ? "- As **tech-lead**: prioritize architecture. Can dispatch tasks to coder/tester/others using the mcp__dispatch__dispatch tool (always pass a specific instanceId). Can write code if appropriate." : ""}
 - Be natural and collegial — you're a teammate, not a service.
 
 ## Delegation (manager and tech-lead only)
-When dispatching work, use the mcp__dispatch__dispatch tool. The agent will work independently and you can continue with other tasks.
-Use mcp__dispatch__team_status to check team workload before dispatching. Available sub-agents:
-${delegationLines}
+When dispatching work, use the mcp__dispatch__dispatch tool. The agent works independently and you can continue with other tasks.
+Use mcp__dispatch__team_status to check team workload before dispatching. Pass the EXACT instanceId.
+Available teammates:
+${delegationLines || "  (no other hired instances — hire more in the shop to enable delegation)"}
 ${skillSection}${memorySection}${traitsSection}`;
 }
 
-export const agentInfoList = [
-  { id: "manager", name: "Капітан", role: "координатор", model: "opus" },
-  { id: "tech-lead", name: "Архітект", role: "технічний лідер", model: "opus" },
-  { id: "coder", name: "Майстер", role: "розробник", model: "sonnet" },
-  { id: "reviewer", name: "Детектив", role: "рецензент", model: "sonnet" },
-  { id: "tester", name: "Крашер", role: "тест-інженер", model: "sonnet" },
-  { id: "security", name: "Страж", role: "спеціаліст з безпеки", model: "opus" },
-  { id: "ui-ux-designer", name: "Піксельник", role: "дизайнер", model: "sonnet" },
-];
+// ─── Hired instance info for the UI ────────────────────────────────────────
+
+export interface HiredAgentInfo {
+  /** instanceId, e.g. "coder#1". */
+  id: string;
+  /** Display name (nickname). */
+  name: string;
+  /** Ukrainian role label. */
+  role: string;
+  /** Role type, e.g. "coder". */
+  roleType: string;
+  /** Effective Claude model (post hardware+skills min). */
+  model: string;
+}
+
+/** Returns the list of hired instances in a UI-friendly shape. */
+export function buildHiredAgentInfoList(
+  gameState?: GameStateData,
+): HiredAgentInfo[] {
+  const out: HiredAgentInfo[] = [];
+  if (!gameState) return out;
+  for (const [id, inst] of Object.entries(gameState.instances)) {
+    const role = roleCatalog[inst.roleType];
+    if (!role) continue;
+    const hwModel = hardwareToModel(inst.hardware);
+    const skModel = skillsToModel(inst.skills);
+    const model = minModel(hwModel, skModel);
+    out.push({
+      id,
+      name: inst.nickname,
+      role: role.ukrainianRoleLabel,
+      roleType: inst.roleType,
+      model,
+    });
+  }
+  return out;
+}
+
+/** Ordered list of all role IDs (for iteration). */
+export const allRoleIds: string[] = Object.keys(roleCatalog);

@@ -19,11 +19,12 @@ import '../../providers/ios_deploy_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/tailscale_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import '../../services/logo_path_dsl.dart' show kDefaultLogoPathScript;
+import '../../services/logo_path_program.dart' show kDefaultLogoPathScript;
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
 import 'claude_avatar.dart';
 import 'logo_path_editor.dart';
+import 'send_button_section.dart';
 import 'theme_section.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
@@ -180,6 +181,21 @@ class _SettingsContent extends ConsumerWidget {
         ),
         const SizedBox(height: 14),
         const ThemeSection(),
+        const SizedBox(height: 32),
+
+        // ── Section: Send button ─────────────────────────────────────
+        _SectionHeader(title: 'Кнопка «Надіслати»'),
+        const SizedBox(height: 12),
+        Text(
+          'Ексклюзивні ручні дизайни найчастіше натискуваної '
+          'кнопки. Преміум-варіанти — найдорожча косметика в магазині.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 12,
+          ),
+        ),
+        const SizedBox(height: 14),
+        const SendButtonSection(),
         const SizedBox(height: 32),
 
         // ── Section: Sessions ──────────────────────────────────────────

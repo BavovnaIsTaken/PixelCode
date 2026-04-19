@@ -1,6 +1,6 @@
 /// Shop panel — hiring, skills, office upgrades, and donations.
 ///
-/// Accessed via the "Крамниця" toggle in the title bar.
+/// Accessed via the "Ринок" toggle in the title bar.
 library;
 
 import 'package:flutter/material.dart';
@@ -214,67 +214,209 @@ class _HiringTab extends ConsumerWidget {
               '${game.hiredCount}/${game.officeLevel.maxAgents} місць',
         ),
         const SizedBox(height: 8),
-        for (final entry in agentCatalog)
-          _AgentHireCard(
-            entry: entry,
-            agentData: game.agents[entry.agentId],
-            canHire: notifier.canHire(entry.agentId),
+        for (final role in roleCatalog)
+          _RoleHireCard(
+            role: role,
+            instances: game.instancesOfRole(role.roleType),
+            canHire: notifier.canHire(role.roleType),
             canHireMore: game.canHireMore,
-            onHire: () => notifier.hireAgent(entry.agentId),
-            onFire: () => notifier.fireAgent(entry.agentId),
+            onHire: () => notifier.hireAgent(role.roleType),
+            onFire: (instanceId) => notifier.fireAgent(instanceId),
           ),
       ],
     );
   }
 }
 
-class _AgentHireCard extends StatelessWidget {
-  final AgentCatalogEntry entry;
-  final AgentGameData? agentData;
+/// Card for a single role — shows summary, passive, and a list of every
+/// hired instance of that role with per-instance actions.
+class _RoleHireCard extends StatelessWidget {
+  final RoleCatalogEntry role;
+  final List<AgentGameData> instances;
   final bool canHire;
   final bool canHireMore;
   final VoidCallback onHire;
-  final VoidCallback onFire;
+  final ValueChanged<String> onFire;
 
-  const _AgentHireCard({
-    required this.entry,
-    required this.agentData,
+  const _RoleHireCard({
+    required this.role,
+    required this.instances,
     required this.canHire,
     required this.canHireMore,
     required this.onHire,
     required this.onFire,
   });
 
+  bool get _hasAny => instances.isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
-    final isHired = agentData?.isHired ?? false;
-    final isStarter = entry.startsHired;
+    final countLabel = role.singleton
+        ? (_hasAny ? 'є' : 'немає')
+        : '${instances.length}';
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: isHired
+          color: _hasAny
               ? _green.withValues(alpha: 0.2)
               : Colors.white.withValues(alpha: 0.06),
         ),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Status indicator
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isHired ? _green : Colors.white.withValues(alpha: 0.15),
+          // Header: role name + count
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hasAny
+                      ? _green
+                      : Colors.white.withValues(alpha: 0.15),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                role.role,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _accent.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  countLabel,
+                  style: TextStyle(
+                    color: _accent.withValues(alpha: 0.8),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              // Hire-another button
+              _ActionButton(
+                label: role.hireCost > 0
+                    ? '+ Найняти · ${_formatNumber(role.hireCost)}₲'
+                    : '+ Найняти',
+                color: canHire ? _accent : Colors.white.withValues(alpha: 0.15),
+                onTap: canHire ? onHire : null,
+                subtitle: !canHireMore
+                    ? 'Немає місць'
+                    : (role.singleton && _hasAny ? 'Лише один' : null),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Specialization / weakness blurbs
+          Text(
+            '💪 ${role.specialization}',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.45),
+              fontSize: 10,
             ),
           ),
-          const SizedBox(width: 10),
-          // Agent info
+          Text(
+            '⚠️  ${role.weakness}',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.3),
+              fontSize: 10,
+            ),
+          ),
+          // Passive ability badge
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: _accent.withValues(alpha: 0.07),
+                borderRadius: BorderRadius.circular(5),
+                border:
+                    Border.all(color: _accent.withValues(alpha: 0.15)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(role.passive.icon, style: const TextStyle(fontSize: 10)),
+                  const SizedBox(width: 4),
+                  Text(
+                    role.passive.name,
+                    style: TextStyle(
+                      color: _accent.withValues(alpha: 0.8),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Per-instance rows
+          if (instances.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                children: [
+                  for (final inst in instances)
+                    _InstanceRow(
+                      instance: inst,
+                      role: role,
+                      canFire: !role.singleton || instances.length > 1,
+                      onFire: () => onFire(inst.instanceId),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single instance row inside a [_RoleHireCard].
+class _InstanceRow extends StatelessWidget {
+  final AgentGameData instance;
+  final RoleCatalogEntry role;
+  final bool canFire;
+  final VoidCallback onFire;
+
+  const _InstanceRow({
+    required this.instance,
+    required this.role,
+    required this.canFire,
+    required this.onFire,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Row(
+        children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -282,133 +424,69 @@ class _AgentHireCard extends StatelessWidget {
                 Row(
                   children: [
                     Text(
-                      entry.name,
-                      style: TextStyle(
-                        color: isHired
-                            ? Colors.white
-                            : Colors.white.withValues(alpha: 0.5),
+                      instance.nickname,
+                      style: const TextStyle(
+                        color: Colors.white,
                         fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                     const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: _accent.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        entry.role,
-                        style: TextStyle(
-                          color: _accent.withValues(alpha: 0.7),
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                        ),
+                    Text(
+                      instance.instanceId,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.25),
+                        fontSize: 9,
+                        fontFamily: 'monospace',
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  entry.description,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.3),
-                    fontSize: 9,
-                  ),
+                Row(
+                  children: [
+                    _MiniStat(
+                      icon: instance.hardware.shortLabel,
+                      label: instance.hardware.label,
+                    ),
+                    const SizedBox(width: 8),
+                    _MiniStat(
+                      icon: '⭐',
+                      label: 'Рівень ${instance.skillLevel}',
+                    ),
+                    const SizedBox(width: 8),
+                    _MiniStat(
+                      icon: '💰',
+                      label: '${role.salary}₲/задача',
+                    ),
+                  ],
                 ),
-                // Passive ability badge
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: _accent.withValues(alpha: 0.07),
-                      borderRadius: BorderRadius.circular(5),
-                      border: Border.all(
-                        color: _accent.withValues(alpha: 0.15),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          entry.passive.icon,
-                          style: const TextStyle(fontSize: 10),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          entry.passive.name,
-                          style: TextStyle(
-                            color: _accent.withValues(alpha: 0.8),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                if (isHired && agentData != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Row(
-                      children: [
-                        _MiniStat(
-                          icon: agentData!.hardware.shortLabel,
-                          label: agentData!.hardware.label,
-                        ),
-                        const SizedBox(width: 8),
-                        _MiniStat(
-                          icon: '⭐',
-                          label: 'Рівень ${agentData!.skillLevel}',
-                        ),
-                        const SizedBox(width: 8),
-                        _MiniStat(
-                          icon: '💰',
-                          label: '${entry.salary}₲/задача',
-                        ),
-                      ],
-                    ),
-                  ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          // Action button
-          if (isHired)
-            isStarter
-                ? Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: _green.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text(
-                      'Основа',
-                      style: TextStyle(
-                        color: _green,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  )
-                : _ActionButton(
-                    label: 'Звільнити',
-                    color: _red,
-                    onTap: onFire,
-                  )
-          else
+          if (canFire)
             _ActionButton(
-              label: entry.hireCost > 0
-                  ? 'Найняти · ${_formatNumber(entry.hireCost)}₲'
-                  : 'Найняти',
-              color: canHire ? _accent : Colors.white.withValues(alpha: 0.15),
-              onTap: canHire ? onHire : null,
-              subtitle: !canHireMore ? 'Немає місць' : null,
+              label: 'Звільнити',
+              color: _red,
+              onTap: onFire,
+            )
+          else
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _green.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'Основа',
+                style: TextStyle(
+                  color: _green,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
         ],
       ),
@@ -457,9 +535,8 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
   Widget build(BuildContext context) {
     final game = ref.watch(gameEconomyProvider);
     final notifier = ref.read(gameEconomyProvider.notifier);
-    final hiredAgents = game.agents.entries
-        .where((e) => e.value.isHired)
-        .toList();
+    // Every entry in game.agents is a hired instance (presence = hired).
+    final hiredAgents = game.agents.entries.toList();
 
     // Auto-select first if none selected
     if (_selectedAgentId == null && hiredAgents.isNotEmpty) {
@@ -525,7 +602,7 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
   }
 }
 
-class _AgentChip extends StatelessWidget {
+class _AgentChip extends ConsumerWidget {
   final String agentId;
   final bool isSelected;
   final VoidCallback onTap;
@@ -537,8 +614,14 @@ class _AgentChip extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final catalog = catalogFor(agentId);
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Prefer the instance's current nickname; fall back to the role's base
+    // name if the instance is not (yet) in state.
+    final instance =
+        ref.watch(gameEconomyProvider.select((g) => g.agents[agentId]));
+    final label = instance?.nickname ??
+        roleCatalogFor(roleTypeFromInstanceId(agentId))?.baseName ??
+        agentId;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -555,7 +638,7 @@ class _AgentChip extends StatelessWidget {
           ),
         ),
         child: Text(
-          catalog?.name ?? agentId,
+          label,
           style: TextStyle(
             color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
             fontSize: 10,
@@ -1895,7 +1978,7 @@ class _DonationTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        _SectionHeader(icon: Icons.diamond_outlined, title: 'Крамниця гримень'),
+        _SectionHeader(icon: Icons.diamond_outlined, title: 'Ринок гримень'),
         const SizedBox(height: 4),
         Text(
           'Підтримай розвиток студії!',

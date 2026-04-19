@@ -4,6 +4,8 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/logo_path_program.dart' show validateLogoPathScript;
+
 // ─── Keys ───────────────────────────────────────────────────────────────────
 
 const _keyShowArkanoidButton = 'settings_show_arkanoid_button';
@@ -14,7 +16,6 @@ const _keyGlitchSpeed = 'settings_glitch_speed';
 const _keyGlitchBandHeight = 'settings_glitch_band_height';
 const _keyGlitchShift = 'settings_glitch_shift';
 const _keyGlitchChroma = 'settings_glitch_chroma';
-const _keyNickname = 'settings_nickname';
 const _keyLaunchCount = 'settings_launch_count';
 const _keyLogoPathScript = 'settings_logo_path_script';
 
@@ -40,7 +41,6 @@ class AppSettings {
   /// Chromatic aberration strength (0.0–1.0). 0 = off.
   final double glitchChroma;
 
-  final String nickname;
   final int launchCount;
 
   /// Custom DSL script for logo path animation, or null to use the built-in
@@ -56,7 +56,6 @@ class AppSettings {
     this.glitchBandHeight = 3,
     this.glitchShift = 0.5,
     this.glitchChroma = 0.5,
-    this.nickname = '',
     this.launchCount = 0,
     this.logoPathScript,
   });
@@ -70,7 +69,6 @@ class AppSettings {
     int? glitchBandHeight,
     double? glitchShift,
     double? glitchChroma,
-    String? nickname,
     int? launchCount,
     Object? logoPathScript = _sentinel,
   }) =>
@@ -83,7 +81,6 @@ class AppSettings {
         glitchBandHeight: glitchBandHeight ?? this.glitchBandHeight,
         glitchShift: glitchShift ?? this.glitchShift,
         glitchChroma: glitchChroma ?? this.glitchChroma,
-        nickname: nickname ?? this.nickname,
         launchCount: launchCount ?? this.launchCount,
         logoPathScript: identical(logoPathScript, _sentinel)
             ? this.logoPathScript
@@ -93,6 +90,13 @@ class AppSettings {
 
 // Sentinel for nullable copyWith
 const _sentinel = Object();
+
+/// Discards persisted scripts that don't parse under the current DSL
+/// (e.g. a legacy `Point(x,y)` formula from an older build).
+String? _loadValidScript(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  return validateLogoPathScript(raw) == null ? raw : null;
+}
 
 // ─── SharedPreferences instance ─────────────────────────────────────────────
 
@@ -115,9 +119,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
       glitchBandHeight: prefs.getInt(_keyGlitchBandHeight) ?? 3,
       glitchShift: prefs.getDouble(_keyGlitchShift) ?? 0.5,
       glitchChroma: prefs.getDouble(_keyGlitchChroma) ?? 0.5,
-      nickname: prefs.getString(_keyNickname) ?? '',
       launchCount: prefs.getInt(_keyLaunchCount) ?? 0,
-      logoPathScript: prefs.getString(_keyLogoPathScript),
+      logoPathScript: _loadValidScript(prefs.getString(_keyLogoPathScript)),
     );
   }
 
@@ -174,12 +177,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setDouble(_keyGlitchChroma, value);
     state = state.copyWith(glitchChroma: value);
-  }
-
-  Future<void> setNickname(String value) async {
-    final prefs = ref.read(sharedPrefsProvider);
-    await prefs.setString(_keyNickname, value);
-    state = state.copyWith(nickname: value);
   }
 
   Future<void> setLogoPathScript(String? value) async {
