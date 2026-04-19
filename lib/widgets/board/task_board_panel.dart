@@ -8,8 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/task_board.dart';
+import '../../models/work_log_entry.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/task_board_provider.dart';
+import '../../providers/task_progress_provider.dart';
 
 // ─── Sticky note colors ─────────────────────────────────────────────────────
 
@@ -50,6 +52,8 @@ class TaskBoardPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Activates the simulation timer for auto-advancing tasks.
+    ref.watch(taskProgressProvider);
     final board = ref.watch(taskBoardProvider);
     final isNarrow = MediaQuery.sizeOf(context).width < 768;
 
@@ -721,8 +725,9 @@ class _MobileStickyNote extends ConsumerWidget {
     final priority = _priorityIndicators[task.priority]!;
     final agents = ref.watch(agentsProvider);
 
+    final workLog = ref.watch(workLogProvider)[task.id] ?? [];
     return GestureDetector(
-      onTap: () => _showTaskDetailSheet(context, ref, task, agents),
+      onTap: () => _showTaskDetailSheet(context, ref, task, agents, workLog),
       child: _buildCard(colors, priority, agents),
     );
   }
@@ -883,6 +888,7 @@ void _showTaskDetailSheet(
   WidgetRef ref,
   TaskCard task,
   Map<String, AgentState> agents,
+  List<WorkLogEntry> workLog,
 ) {
   showModalBottomSheet(
     context: context,
@@ -894,6 +900,7 @@ void _showTaskDetailSheet(
     builder: (ctx) => _TaskDetailContent(
       task: task,
       agents: agents,
+      workLog: workLog,
       ref: ref,
     ),
   );
@@ -902,11 +909,13 @@ void _showTaskDetailSheet(
 class _TaskDetailContent extends StatelessWidget {
   final TaskCard task;
   final Map<String, AgentState> agents;
+  final List<WorkLogEntry> workLog;
   final WidgetRef ref;
 
   const _TaskDetailContent({
     required this.task,
     required this.agents,
+    required this.workLog,
     required this.ref,
   });
 
@@ -1062,6 +1071,14 @@ class _TaskDetailContent extends StatelessWidget {
                     ),
                 ],
               ),
+            ),
+          ],
+          // Work history
+          if (workLog.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _DetailRow(
+              label: 'Історія',
+              child: _WorkHistoryList(workLog: workLog, agents: agents),
             ),
           ],
           const SizedBox(height: 20),
@@ -1257,6 +1274,71 @@ class _AgentChipLarge extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─── Work History List ───────────────────────────────────────────────────────
+
+class _WorkHistoryList extends StatelessWidget {
+  final List<WorkLogEntry> workLog;
+  final Map<String, AgentState> agents;
+
+  const _WorkHistoryList({required this.workLog, required this.agents});
+
+  String _fmt(int seconds) {
+    if (seconds < 60) return '$seconds с';
+    return '${seconds ~/ 60}хв ${seconds % 60}с';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Group by agentId, summing total duration.
+    final totals = <String, int>{};
+    final firstSeen = <String, DateTime>{};
+    for (final e in workLog) {
+      totals[e.agentId] = (totals[e.agentId] ?? 0) + e.durationSeconds;
+      firstSeen.putIfAbsent(e.agentId, () => e.startedAt);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final entry in totals.entries)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF00C0D1).withValues(alpha: 0.7),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    agents[entry.key]?.info.name ?? entry.key,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                Text(
+                  _fmt(entry.value),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    fontSize: 11,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -1522,12 +1604,12 @@ void _showAddTaskDialog(
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
                 children: [
                   for (final p in TaskPriority.values)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: GestureDetector(
+                    GestureDetector(
                         onTap: () =>
                             setDialogState(() => selectedPriority = p),
                         child: Container(
@@ -1555,7 +1637,6 @@ void _showAddTaskDialog(
                             ),
                           ),
                         ),
-                      ),
                     ),
                 ],
               ),

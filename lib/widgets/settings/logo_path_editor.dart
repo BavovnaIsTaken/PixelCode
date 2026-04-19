@@ -653,36 +653,36 @@ class _MoveBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _BlockLabel('Рухати'),
-        const SizedBox(width: 8),
         _DirectionDropdown(
           value: cmd.dir,
           onChanged: (d) => onChange(cmd.copyWith(dir: d)),
         ),
-        const SizedBox(width: 8),
         _SegmentedToggle(
           leftLabel: 'на',
           rightLabel: 'до краю',
           leftSelected: !cmd.untilEdge,
           onTap: (left) {
             if (left) {
-              onChange(cmd.copyWith(amount: cmd.amount ?? 100, untilEdge: false));
+              onChange(
+                  cmd.copyWith(amount: cmd.amount ?? 100, untilEdge: false));
             } else {
               onChange(cmd.copyWith(untilEdge: true));
             }
           },
         ),
-        if (!cmd.untilEdge) ...[
-          const SizedBox(width: 8),
+        if (!cmd.untilEdge)
           _NumberField(
             value: cmd.amount ?? 100,
             onChanged: (v) => onChange(cmd.copyWith(amount: v)),
             suffix: 'px',
             width: 72,
           ),
-        ],
       ],
     );
   }
@@ -696,10 +696,12 @@ class _WaitBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _BlockLabel('Пауза'),
-        const SizedBox(width: 8),
         _NumberField(
           value: cmd.seconds,
           onChanged: (v) => onChange(WaitCommand(v)),
@@ -720,10 +722,12 @@ class _RepeatHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _BlockLabel('Повторити'),
-        const SizedBox(width: 8),
         _NumberField(
           value: cmd.count.toDouble(),
           onChanged: (v) => onChange(RepeatCommand(

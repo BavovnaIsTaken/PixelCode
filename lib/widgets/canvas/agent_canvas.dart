@@ -17,6 +17,8 @@ import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import '../../providers/theme_provider.dart';
+import 'build_picker_rail.dart';
 import 'character_sprites.dart';
 import 'office_game_state.dart';
 import 'pixel_office_painter.dart';
@@ -42,14 +44,27 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   int _tick = 0;
   double _tickAccum = 0;
 
+  /// When false, the canvas hides the amber selection halo around the
+  /// currently selected agent. Tapping empty space clears it; tapping a
+  /// character restores it. The underlying [selectedAgentProvider] stays put
+  /// so chat context and name overlays remain addressable.
+  bool _selectionVisible = true;
+
   // Build Mode state
   bool _buildMode = false;
+  BuildCategory? _buildCategory;
   RoomType? _selectedRoomType;
+
+  /// When set, the ghost previews a whole preset bundle (multiple rooms) and
+  /// [_selectedRoomType] is null. Mutually exclusive with [_selectedRoomType].
+  OfficePreset? _selectedPreset;
+
   int? _ghostCol;
   int? _ghostRow;
 
   // Track last synced level/rooms to avoid rebuilding tile map every frame
   OfficeLevel? _lastLevel;
+  int _lastExpansions = -1;
   List<PlacedRoom>? _lastRooms;
   List<FurniturePlacement>? _lastFurniture;
 
@@ -135,17 +150,20 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final commEvents = ref.watch(commGraphProvider);
     final gameEconomy = ref.watch(gameEconomyProvider);
 
-    // Rebuild tile map when office level, rooms, or furniture change
+    // Rebuild tile map when office level, expansions, rooms, or furniture change
     final level = gameEconomy.officeLevel;
+    final expansions = gameEconomy.officeExpansions;
     final rooms = gameEconomy.placedRooms;
     final furniture = gameEconomy.placedFurniture;
     if (!identical(rooms, _lastRooms) ||
         !identical(furniture, _lastFurniture) ||
-        level != _lastLevel) {
+        level != _lastLevel ||
+        expansions != _lastExpansions) {
       _lastLevel = level;
+      _lastExpansions = expansions;
       _lastRooms = rooms;
       _lastFurniture = furniture;
-      _gameState.rebuildLayout(level, rooms, furniture);
+      _gameState.rebuildLayout(level, expansions, rooms, furniture);
     }
 
     // Sync agent states and hired status into game engine
@@ -236,131 +254,228 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
     final officeLevel = gameEconomy.officeLevel;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return Stack(
-          children: [
-            InteractiveViewer(
-              transformationController: _transformController,
-              minScale: 1.0,
-              maxScale: 3.0,
-              child: MouseRegion(
-                onHover: (event) {
-                  _onCanvasHover(event.localPosition, constraints);
-                  _updateBuildGhost(event.localPosition, constraints);
-                },
-                onExit: (_) {
-                  setState(() => _hoveredAgentId = null);
-                },
-                child: GestureDetector(
-                  onTapDown: (d) =>
-                      _onCanvasTap(d.localPosition, constraints),
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: CustomPaint(
-                          painter: PixelOfficePainter(
-                            gameState: _gameState,
-                            sprites: _sprites,
-                            selectedAgentId:
-                                ref.watch(selectedAgentProvider),
-                            hoveredAgentId: _hoveredAgentId,
-                            tick: _tick,
-                            officeLevel: officeLevel,
-                            placedFurniture:
-                                gameEconomy.placedFurniture,
-                            placedRooms: gameEconomy.placedRooms,
-                            editMode:
-                                ref.watch(furnitureEditModeProvider),
-                            selectedFurnitureId:
-                                ref.watch(selectedFurnitureIdProvider),
-                            buildMode: _buildMode,
-                            ghostRoomType: _selectedRoomType,
-                            ghostRoomCol: _ghostCol,
-                            ghostRoomRow: _ghostRow,
-                            ghostIsValid: _ghostIsValid(
-                                gameEconomy.placedRooms),
+    final editMode = ref.watch(furnitureEditModeProvider);
+    final trayOpen = _buildMode && _buildCategory != null;
+    final railSpace = _buildMode ? BuildPickerRail.kRailWidth : 0.0;
+    final traySpace = trayOpen ? BuildPickerRail.kTrayHeight : 0.0;
+
+    return Stack(
+      children: [
+        // Canvas — shrinks when build-mode panels are open so the office
+        // fits the remaining rectangle instead of being covered over.
+        Positioned(
+          left: 0,
+          top: 0,
+          right: railSpace,
+          bottom: traySpace,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return Stack(
+                children: [
+                  InteractiveViewer(
+                    transformationController: _transformController,
+                    minScale: 1.0,
+                    maxScale: 3.0,
+                    child: MouseRegion(
+                      onHover: (event) {
+                        _onCanvasHover(event.localPosition, constraints);
+                        _updateBuildGhost(event.localPosition, constraints);
+                      },
+                      onExit: (_) {
+                        setState(() => _hoveredAgentId = null);
+                      },
+                      child: GestureDetector(
+                        onTapDown: (d) =>
+                            _onCanvasTap(d.localPosition, constraints),
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: CustomPaint(
+                                painter: PixelOfficePainter(
+                                  gameState: _gameState,
+                                  sprites: _sprites,
+                                  selectedAgentId: _selectionVisible
+                                      ? ref.watch(selectedAgentProvider)
+                                      : null,
+                                  hoveredAgentId: _hoveredAgentId,
+                                  tick: _tick,
+                                  officeLevel: officeLevel,
+                                  placedFurniture:
+                                      gameEconomy.placedFurniture,
+                                  placedRooms: gameEconomy.placedRooms,
+                                  editMode: editMode,
+                                  selectedFurnitureId:
+                                      ref.watch(selectedFurnitureIdProvider),
+                                  buildMode: _buildMode,
+                                  ghostRoomType:
+                                      editMode ? null : _selectedRoomType,
+                                  ghostPreset:
+                                      editMode ? null : _selectedPreset,
+                                  ghostRoomCol: _ghostCol,
+                                  ghostRoomRow: _ghostRow,
+                                  ghostIsValid: _selectedPreset != null
+                                      ? _presetGhostIsValid(
+                                          gameEconomy.placedRooms)
+                                      : _ghostIsValid(
+                                          gameEconomy.placedRooms),
+                                ),
+                              ),
+                            ),
+                            ..._buildNameOverlays(agents, constraints),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_isZoomed)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: GestureDetector(
+                        onTap: _resetZoom,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xCC1A1A2E),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.1),
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.zoom_out_map_rounded,
+                            size: 16,
+                            color: Colors.white.withValues(alpha: 0.5),
                           ),
                         ),
                       ),
-                      ..._buildNameOverlays(agents, constraints),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            if (_isZoomed)
-              Positioned(
-                right: 8,
-                bottom: _buildMode ? 120 : 8,
-                child: GestureDetector(
-                  onTap: _resetZoom,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xCC1A1A2E),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
                     ),
-                    child: Icon(
-                      Icons.zoom_out_map_rounded,
-                      size: 16,
-                      color: Colors.white.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ),
-              ),
-            // Build Mode toggle button (only for non-garage offices)
-            if (gameEconomy.officeLevel != OfficeLevel.garage && !_buildMode)
-              Positioned(
-                right: 8,
-                top: 8,
-                child: GestureDetector(
+                ],
+              );
+            },
+          ),
+        ),
+
+        // Build-mode bookmark tab (collapsed state) — anchored to the right
+        // edge so it never covers the canvas content.
+        if (!_buildMode)
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            child: Center(
+              child: Builder(builder: (context) {
+                final surface =
+                    ref.watch(activeThemeColorsProvider).surface;
+                return GestureDetector(
                   onTap: () => setState(() {
                     _buildMode = true;
+                    _buildCategory = BuildCategory.compact;
                     _selectedRoomType = null;
+                    _selectedPreset = null;
                     _ghostCol = null;
                     _ghostRow = null;
                   }),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 5),
+                        horizontal: 10, vertical: 14),
                     decoration: BoxDecoration(
-                      color: const Color(0xCC1A1A2E),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: const Color(0xFF44FF88)
-                            .withValues(alpha: 0.3),
+                      color: surface,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(10),
+                        bottomLeft: Radius.circular(10),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.add_home_outlined,
-                            size: 14,
-                            color: const Color(0xFF44FF88)
-                                .withValues(alpha: 0.8)),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Будувати',
-                          style: TextStyle(
-                            color: const Color(0xFF44FF88)
-                                .withValues(alpha: 0.8),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x40000000),
+                          blurRadius: 24,
+                          spreadRadius: 0,
+                          offset: Offset.zero,
                         ),
                       ],
                     ),
+                    child: const Icon(
+                      Icons.add_home_outlined,
+                      size: 18,
+                      color: Color(0xFF00C0D1),
+                    ),
                   ),
-                ),
-              ),
-            if (_buildMode) _buildBuildModePanel(gameEconomy),
-          ],
-        );
-      },
+                );
+              }),
+            ),
+          ),
+
+        // Build rail + tray: Positioned.fill but the internal widgets only
+        // occupy the right strip + bottom strip, so the canvas above sees the
+        // reduced area and they never overlap.
+        if (_buildMode)
+          Positioned.fill(
+            child: BuildPickerRail(
+              economy: gameEconomy,
+              selectedRoomType: _selectedRoomType,
+              selectedPreset: _selectedPreset,
+              activeCategory: _buildCategory,
+              tick: _tick,
+              isEditMode: editMode,
+              showConfirmHint: _ghostCol != null &&
+                  (_selectedRoomType != null ||
+                      _selectedPreset != null),
+              onCategoryTap: (cat) => setState(() {
+                _buildCategory = cat;
+                // Switching category exits edit mode — the user is picking
+                // new things to place, not modifying existing ones.
+                if (editMode) {
+                  ref.read(furnitureEditModeProvider.notifier).state = false;
+                }
+              }),
+              onSelectRoom: (rt) => setState(() {
+                _selectedRoomType =
+                    _selectedRoomType == rt ? null : rt;
+                _selectedPreset = null;
+                _ghostCol = null;
+                _ghostRow = null;
+                if (editMode) {
+                  ref.read(furnitureEditModeProvider.notifier).state = false;
+                }
+              }),
+              onSelectPreset: (preset) => setState(() {
+                _selectedPreset =
+                    _selectedPreset?.id == preset.id ? null : preset;
+                _selectedRoomType = null;
+                _ghostCol = null;
+                _ghostRow = null;
+                if (editMode) {
+                  ref.read(furnitureEditModeProvider.notifier).state = false;
+                }
+              }),
+              onToggleEdit: () {
+                final next = !ref.read(furnitureEditModeProvider);
+                ref.read(furnitureEditModeProvider.notifier).state = next;
+                if (next) {
+                  setState(() {
+                    // Can't place and edit at the same time — clear the
+                    // current ghost selection when entering edit mode.
+                    _selectedRoomType = null;
+                    _selectedPreset = null;
+                    _ghostCol = null;
+                    _ghostRow = null;
+                  });
+                }
+              },
+              onExit: () => setState(() {
+                _buildMode = false;
+                _buildCategory = null;
+                _selectedRoomType = null;
+                _selectedPreset = null;
+                _ghostCol = null;
+                _ghostRow = null;
+                if (editMode) {
+                  ref.read(furnitureEditModeProvider.notifier).state = false;
+                }
+              }),
+            ),
+          ),
+      ],
     );
   }
 
@@ -418,15 +533,21 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   void _onCanvasTap(Offset pos, BoxConstraints constraints) {
-    // Build mode: place rooms
+    final isEditMode = ref.read(furnitureEditModeProvider);
+
+    // Build mode: edit mode removes placed rooms/furniture; otherwise place.
     if (_buildMode) {
-      _handleBuildModeTap(
-          pos, constraints, ref.read(gameEconomyProvider).placedRooms);
+      if (isEditMode) {
+        _handleEditModeTap(pos, constraints);
+      } else {
+        _handleBuildModeTap(
+            pos, constraints, ref.read(gameEconomyProvider).placedRooms);
+      }
       return;
     }
 
-    // Furniture edit mode: place or remove furniture on grid
-    final isEditMode = ref.read(furnitureEditModeProvider);
+    // Furniture edit mode (outside build mode, from Shop panel toggle):
+    // place or remove furniture on grid.
     if (isEditMode) {
       _handleFurnitureTap(pos, constraints);
       return;
@@ -438,11 +559,56 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       final ch = _gameState.characters[hit];
       if (ch != null && ch.isHired) {
         ref.read(selectedAgentProvider.notifier).state = hit;
+        if (!_selectionVisible) setState(() => _selectionVisible = true);
         return;
       }
     }
     // Check plant clicks (easter egg)
-    _hitTestPlant(pos, constraints);
+    if (_hitTestPlant(pos, constraints)) return;
+    // Empty tap: clear the on-canvas selection halo. Provider state is kept
+    // so the chat panel still knows who was last focused.
+    if (_selectionVisible) setState(() => _selectionVisible = false);
+  }
+
+  /// Edit mode in Build Mode: tap a placed room to refund+remove it; tap a
+  /// placed furniture item to remove it. Rooms take priority over furniture
+  /// when both occupy the tile (furniture visually sits inside a room).
+  void _handleEditModeTap(Offset screenPos, BoxConstraints constraints) {
+    final world = _screenToWorld(screenPos, constraints);
+    final col = (world.dx / kTileSize).floor();
+    final row = (world.dy / kTileSize).floor();
+    if (col < 1 ||
+        col >= _gameState.gridCols - 1 ||
+        row < 1 ||
+        row >= _gameState.gridRows - 1) {
+      return;
+    }
+
+    final game = ref.read(gameEconomyProvider);
+    final notifier = ref.read(gameEconomyProvider.notifier);
+
+    for (int i = 0; i < game.placedFurniture.length; i++) {
+      final p = game.placedFurniture[i];
+      final item = furnitureById(p.itemId);
+      if (item == null) continue;
+      if (col >= p.col &&
+          col < p.col + item.widthTiles &&
+          row >= p.row &&
+          row < p.row + item.heightTiles) {
+        notifier.removePlacedFurniture(i);
+        return;
+      }
+    }
+
+    for (final room in game.placedRooms) {
+      if (col >= room.col &&
+          col < room.col + room.type.widthTiles &&
+          row >= room.row &&
+          row < room.row + room.type.heightTiles) {
+        notifier.removeRoom(room.id);
+        return;
+      }
+    }
   }
 
   void _handleFurnitureTap(Offset screenPos, BoxConstraints constraints) {
@@ -542,20 +708,59 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final world = _screenToWorld(screenPos, constraints);
     final col = (world.dx / kTileSize).floor();
     final row = (world.dy / kTileSize).floor();
-    setState(() {
-      _ghostCol = col;
-      _ghostRow = row;
-    });
+
+    // Two-step placement: the first tap positions the ghost (preview only),
+    // the second tap on the same tile commits. Tapping a different tile
+    // moves the ghost without placing.
+    final isRepeatTap = _ghostCol == col && _ghostRow == row;
+    if (!isRepeatTap) {
+      setState(() {
+        _ghostCol = col;
+        _ghostRow = row;
+      });
+      return;
+    }
+
+    final notifier = ref.read(gameEconomyProvider.notifier);
+
+    final preset = _selectedPreset;
+    if (preset != null) {
+      if (!_presetGhostIsValid(rooms)) return;
+      notifier.applyPreset(
+        preset: preset,
+        col: col,
+        row: row,
+        blockedTiles: _gameState.blockedTiles,
+      );
+      setState(() {
+        _ghostCol = null;
+        _ghostRow = null;
+      });
+      return;
+    }
 
     final rt = _selectedRoomType;
     if (rt == null) return;
     if (!_ghostIsValid(rooms)) return;
 
-    ref.read(gameEconomyProvider.notifier).placeRoom(rt, col, row);
+    notifier.placeRoom(rt, col, row);
     setState(() {
       _ghostCol = null;
       _ghostRow = null;
     });
+  }
+
+  bool _presetGhostIsValid(List<PlacedRoom> rooms) {
+    final preset = _selectedPreset;
+    final gc = _ghostCol;
+    final gr = _ghostRow;
+    if (preset == null || gc == null || gr == null) return false;
+    return ref.read(gameEconomyProvider.notifier).canApplyPreset(
+          preset: preset,
+          col: gc,
+          row: gr,
+          blockedTiles: _gameState.blockedTiles,
+        );
   }
 
   void _updateBuildGhost(Offset screenPos, BoxConstraints constraints) {
@@ -571,131 +776,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     }
   }
 
-  Widget _buildBuildModePanel(GameState gameEconomy) {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xE6101018),
-          border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
-        ),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(
-                  'Режим будівництва',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.7),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () => setState(() {
-                    _buildMode = false;
-                    _selectedRoomType = null;
-                    _ghostCol = null;
-                    _ghostRow = null;
-                  }),
-                  child: Icon(Icons.close,
-                      size: 16,
-                      color: Colors.white.withValues(alpha: 0.4)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final rt in RoomType.values)
-                    _buildRoomChip(rt, gameEconomy),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
-  Widget _buildRoomChip(RoomType rt, GameState economy) {
-    final isSelected = _selectedRoomType == rt;
-    final canAfford = economy.grymni >= rt.cost;
-    final limitHit =
-        economy.placedRooms.where((r) => r.type == rt).length >=
-            rt.maxPerOffice;
-    final available = canAfford && !limitHit;
-
-    return GestureDetector(
-      onTap: available
-          ? () => setState(() {
-                _selectedRoomType = isSelected ? null : rt;
-                _ghostCol = null;
-                _ghostRow = null;
-              })
-          : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        margin: const EdgeInsets.only(right: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFF44FF88).withValues(alpha: 0.15)
-              : Colors.white.withValues(alpha: available ? 0.05 : 0.02),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFF44FF88).withValues(alpha: 0.6)
-                : Colors.white
-                    .withValues(alpha: available ? 0.1 : 0.04),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(rt.icon,
-                style: TextStyle(
-                    fontSize: 18,
-                    color: available ? null : Colors.grey)),
-            const SizedBox(height: 2),
-            Text(
-              rt.nameUk,
-              style: TextStyle(
-                color: available
-                    ? Colors.white.withValues(alpha: 0.85)
-                    : Colors.white.withValues(alpha: 0.3),
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            Text(
-              limitHit ? 'Макс.' : '₲${rt.cost}',
-              style: TextStyle(
-                color: canAfford && !limitHit
-                    ? const Color(0xFF44FF88)
-                    : Colors.white.withValues(alpha: 0.3),
-                fontSize: 9,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _hitTestPlant(Offset screenPos, BoxConstraints constraints) {
+  bool _hitTestPlant(Offset screenPos, BoxConstraints constraints) {
     final cw = _gameState.canvasWidth;
     final ch = _gameState.canvasHeight;
     final scaleX = constraints.maxWidth / cw;
@@ -707,17 +789,22 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final worldX = (screenPos.dx - offsetX) / scale;
     final worldY = (screenPos.dy - offsetY) / scale;
 
-    final plantPositions = _gameState.plantPositions;
-    for (int i = 0; i < plantPositions.length; i++) {
-      final pos = plantPositions[i];
-      final px = pos.$1 * kTileSize;
-      final py = pos.$2 * kTileSize - kTileSize; // plant is 2 tiles tall
+    for (final placement in _gameState.placedFurniture) {
+      if (!placement.itemId.startsWith('plant_')) continue;
+      final isLarge = placement.itemId == 'plant_large';
+      final px = placement.col * kTileSize;
+      // Large plant sprite extends one tile above its footprint.
+      final py = isLarge
+          ? placement.row * kTileSize - kTileSize
+          : placement.row * kTileSize;
+      final height = isLarge ? kTileSize * 2 : kTileSize;
       if (worldX >= px && worldX <= px + kTileSize &&
-          worldY >= py && worldY <= py + kTileSize * 2) {
-        _gameState.activatePlant(i);
-        return;
+          worldY >= py && worldY <= py + height) {
+        _gameState.activatePlant(placement.col, placement.row);
+        return true;
       }
     }
+    return false;
   }
 
   List<Widget> _buildNameOverlays(
@@ -737,7 +824,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     // One label per hired character instance (multiple coders → multiple
     // labels) so the overlay reflects the real roster, not the fixed station
     // list.
-    final selectedId = ref.watch(selectedAgentProvider);
+    final selectedId =
+        _selectionVisible ? ref.watch(selectedAgentProvider) : null;
     for (final ch in _gameState.characters.values) {
       if (!ch.isHired) continue;
 
@@ -774,8 +862,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           left: screenX - 40,
           top: screenY,
           child: GestureDetector(
-            onTap: () =>
-                ref.read(selectedAgentProvider.notifier).state = instanceId,
+            onTap: () {
+              ref.read(selectedAgentProvider.notifier).state = instanceId;
+              if (!_selectionVisible) {
+                setState(() => _selectionVisible = true);
+              }
+            },
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
               onEnter: (_) => _scheduleOverlayHover(instanceId),

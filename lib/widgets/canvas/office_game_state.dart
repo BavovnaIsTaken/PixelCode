@@ -77,12 +77,6 @@ const double kCoffeeSkateChance = 0.05;
 const double kPlantAnimDuration = 3.0;
 const double kPlantBounceSpeed = 8.0;
 
-// Plant positions (corners)
-const kPlantPositions = <(int, int)>[
-  (2, 1), (17, 1),
-  (2, 11), (17, 11),
-];
-
 // Chat interaction
 const double kChatMinDuration = 4.0;
 const double kChatMaxDuration = 9.0;
@@ -303,7 +297,8 @@ class OfficeCat {
 // ─── Plant easter egg state ────────────────────────────────────────────────
 
 class PlantEasterEgg {
-  final Map<int, double> activeTimers = {};
+  /// Active bounce timers keyed by placement tile `"col,row"`.
+  final Map<String, double> activeTimers = {};
 }
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
@@ -389,13 +384,14 @@ List<TilePos> _findPath(
 // ─── Office game state ──────────────────────────────────────────────────────
 
 class OfficeGameState {
-  OfficeLevel _level;
+  int _gridCols;
+  int _gridRows;
   List<PlacedRoom> _placedRooms;
   List<FurniturePlacement> _placedFurniture;
   double _chatScanAccum = 0;
 
-  int get gridCols => _level.gridCols;
-  int get gridRows => _level.gridRows;
+  int get gridCols => _gridCols;
+  int get gridRows => _gridRows;
   double get canvasWidth => gridCols * kTileSize;
   double get canvasHeight => gridRows * kTileSize;
 
@@ -411,16 +407,6 @@ class OfficeGameState {
   List<DeskStation> _extraStations = [];
   List<DeskStation> get allStations => [...kStations, ..._extraStations];
 
-  /// Plant positions at the four inner corners of the current grid.
-  /// Scales with office level — garage has them at (2,1)/(17,1)/(2,11)/(17,11);
-  /// larger tiers push them to their actual corners.
-  List<(int, int)> get plantPositions => [
-        (2, 1),
-        (gridCols - 3, 1),
-        (2, gridRows - 3),
-        (gridCols - 3, gridRows - 3),
-      ];
-
   // ── Passive room effects (recomputed on rebuildLayout) ──
   double _speedBonus = 1.0;         // server room: 1.1×
   double _seatRestMultiplier = 1.0; // break room: 1.5× seat rest timer
@@ -428,9 +414,11 @@ class OfficeGameState {
 
   OfficeGameState({
     OfficeLevel level = OfficeLevel.garage,
+    int expansions = 0,
     List<PlacedRoom> placedRooms = const [],
     List<FurniturePlacement> placedFurniture = const [],
-  })  : _level = level,
+  })  : _gridCols = level.effectiveCols(expansions),
+        _gridRows = level.effectiveRows(expansions),
         _placedRooms = placedRooms,
         _placedFurniture = placedFurniture {
     _buildAll();
@@ -462,15 +450,17 @@ class OfficeGameState {
         : null;
   }
 
-  /// Rebuild layout after an office upgrade or Build Mode change.
-  /// Characters are kept in place — those outside the new bounds will
-  /// pathfind to valid tiles on their next update tick.
+  /// Rebuild layout after an office upgrade, expansion purchase, or Build
+  /// Mode change. Characters are kept in place — those outside the new
+  /// bounds will pathfind to valid tiles on their next update tick.
   void rebuildLayout(
     OfficeLevel newLevel,
+    int newExpansions,
     List<PlacedRoom> newRooms, [
     List<FurniturePlacement> newFurniture = const [],
   ]) {
-    _level = newLevel;
+    _gridCols = newLevel.effectiveCols(newExpansions);
+    _gridRows = newLevel.effectiveRows(newExpansions);
     _placedRooms = newRooms;
     _placedFurniture = newFurniture;
     _buildAll();
@@ -519,11 +509,6 @@ class OfficeGameState {
     blockedTiles.add('$kCoffeeMachineCol,$kCoffeeMachineRow');
     blockedTiles.add('$kCoffeeMachineCol2,$kCoffeeMachineRow');
     blockedTiles.add('$kSnackTableCol,$kSnackTableRow');
-
-    // Plants are physical objects — agents should walk around them.
-    for (final pos in kPlantPositions) {
-      blockedTiles.add('${pos.$1},${pos.$2}');
-    }
 
     // Placed furniture items (if they block the path) occupy their footprint.
     for (final placement in _placedFurniture) {
@@ -603,6 +588,17 @@ class OfficeGameState {
     }
   }
 
+  /// True when both the desk and seat tiles of [station] fit inside the inner
+  /// (non-wall) area of the current grid. Used to gate canonical station
+  /// usage on small offices — if the desk doesn't fit, the character spawns
+  /// on a walkable tile instead.
+  bool _stationFitsGrid(DeskStation station) {
+    bool fits(int c, int r) =>
+        c >= 1 && r >= 1 && c < gridCols - 1 && r < gridRows - 1;
+    return fits(station.deskCol, station.deskRow) &&
+        fits(station.seatCol, station.seatRow);
+  }
+
   /// Sync the hired roster from the game economy into the render characters.
   ///
   /// [hiredIds] carries every hired instanceId (e.g. "coder#1", "coder#2"). This
@@ -630,11 +626,18 @@ class OfficeGameState {
       if (characters.containsKey(id)) continue;
       final roleType = roleTypeFromInstanceId(id);
       final isSeatOwner = seatOwner[roleType] == id;
-      final station = isSeatOwner
+      // Pick the canonical seat ONLY if it actually fits the current grid.
+      // Small offices (garage) can't host all canonical desks, so those
+      // characters fall through to a random walkable tile.
+      final canonical = isSeatOwner
           ? kStations.firstWhere(
               (s) => s.agentId == roleType,
               orElse: () => kStations.first,
             )
+          : null;
+      final station = (canonical != null &&
+              _stationFitsGrid(canonical))
+          ? canonical
           : null;
 
       // Seatless hires spawn on a random walkable tile so they don't stack.
@@ -669,10 +672,15 @@ class OfficeGameState {
       ch.isHired = true;
       final shouldOwnSeat = seatOwner[ch.roleType] == ch.instanceId;
       if (shouldOwnSeat && (ch.seat == null || ch.seat!.isExtra)) {
-        ch.seat = kStations.firstWhere(
+        final canonical = kStations.firstWhere(
           (s) => s.agentId == ch.roleType,
           orElse: () => kStations.first,
         );
+        // Only claim the canonical desk if it fits — otherwise leave seat
+        // null and fall through to the extras loop below.
+        if (_stationFitsGrid(canonical)) {
+          ch.seat = canonical;
+        }
       } else if (!shouldOwnSeat && ch.seat != null && !ch.seat!.isExtra) {
         ch.seat = null;
       }
@@ -1395,7 +1403,7 @@ class OfficeGameState {
   // ─── Plant easter egg ────────────────────────────────────────────────────
 
   void _updatePlants(double dt) {
-    final expired = <int>[];
+    final expired = <String>[];
     for (final entry in plantEasterEgg.activeTimers.entries) {
       plantEasterEgg.activeTimers[entry.key] = entry.value - dt;
       if (entry.value - dt <= 0) expired.add(entry.key);
@@ -1405,9 +1413,13 @@ class OfficeGameState {
     }
   }
 
-  void activatePlant(int index) {
-    plantEasterEgg.activeTimers[index] = kPlantAnimDuration;
+  /// Trigger the bounce animation for a plant at tile (col, row).
+  void activatePlant(int col, int row) {
+    plantEasterEgg.activeTimers['$col,$row'] = kPlantAnimDuration;
   }
+
+  List<FurniturePlacement> get placedFurniture =>
+      List.unmodifiable(_placedFurniture);
 
   // ─── Coffee machine ─────────────────────────────────────────────────────
 

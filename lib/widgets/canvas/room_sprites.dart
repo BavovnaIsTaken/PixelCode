@@ -10,7 +10,13 @@ import '../../models/game_economy.dart';
 import '../../models/resource_pack.dart';
 import 'office_game_state.dart';
 
-void drawRoom(Canvas canvas, PlacedRoom room, RoomTheme theme, int tick) {
+void drawRoom(
+  Canvas canvas,
+  PlacedRoom room,
+  RoomTheme theme,
+  int tick, {
+  bool showWorkstationFurniture = true,
+}) {
   final x = room.col * kTileSize;
   final y = room.row * kTileSize;
   final w = room.type.widthTiles * kTileSize;
@@ -33,7 +39,7 @@ void drawRoom(Canvas canvas, PlacedRoom room, RoomTheme theme, int tick) {
 
   switch (room.type) {
     case RoomType.workstation:
-      _drawWorkstation(canvas, x, y);
+      _drawWorkstation(canvas, x, y, withFurniture: showWorkstationFurniture);
     case RoomType.breakRoom:
       _drawBreakRoom(canvas, x, y);
     case RoomType.meetingRoom:
@@ -55,11 +61,52 @@ void drawRoom(Canvas canvas, PlacedRoom room, RoomTheme theme, int tick) {
 
 // ─── Workstation (2×2) ──────────────────────────────────────────────────────
 
-void _drawWorkstation(Canvas canvas, double x, double y) {
+void _drawWorkstation(
+  Canvas canvas,
+  double x,
+  double y, {
+  bool withFurniture = true,
+}) {
   final p = Paint()..style = PaintingStyle.fill;
+
+  // Carpet tint.
   p.color = const Color(0xFF2A3A5C).withValues(alpha: 0.35);
   canvas.drawRect(
       Rect.fromLTWH(x + 1, y + 1, kTileSize * 2 - 2, kTileSize * 2 - 2), p);
+
+  if (!withFurniture) return;
+
+  // Desk along the top tile (2 tiles wide).
+  final deskLeft = x + 3;
+  final deskTop = y + kTileSize * 0.45;
+  final deskW = kTileSize * 2 - 6;
+  const deskH = 7.0;
+  p.color = const Color(0xFF6B4F2A);
+  canvas.drawRect(Rect.fromLTWH(deskLeft, deskTop, deskW, deskH), p);
+  p.color = const Color(0xFF8B6A3A);
+  canvas.drawRect(Rect.fromLTWH(deskLeft + 1, deskTop + 1, deskW - 2, 1), p);
+
+  // Monitor on the desk.
+  final monW = 9.0;
+  final monH = 6.0;
+  final monX = deskLeft + (deskW - monW) / 2;
+  final monY = deskTop - monH + 1;
+  p.color = const Color(0xFF111418);
+  canvas.drawRect(Rect.fromLTWH(monX, monY, monW, monH), p);
+  p.color = const Color(0xFF4AE0B5);
+  canvas.drawRect(Rect.fromLTWH(monX + 1, monY + 1, monW - 2, monH - 3), p);
+  p.color = const Color(0xFF1E1E24);
+  canvas.drawRect(Rect.fromLTWH(monX + monW / 2 - 1, monY + monH, 2, 1), p);
+
+  // Chair below the desk.
+  final chairW = 8.0;
+  final chairH = 7.0;
+  final chairX = x + kTileSize - chairW / 2;
+  final chairY = deskTop + deskH + 3;
+  p.color = const Color(0xFF2A2A3C);
+  canvas.drawRect(Rect.fromLTWH(chairX, chairY, chairW, chairH), p);
+  p.color = const Color(0xFF3C3C52);
+  canvas.drawRect(Rect.fromLTWH(chairX + 1, chairY + 1, chairW - 2, 2), p);
 }
 
 // ─── Break room (2×2) ───────────────────────────────────────────────────────

@@ -55,6 +55,11 @@ class PixelOfficePainter extends CustomPainter {
   final int? ghostRoomRow;
   final bool ghostIsValid;
 
+  /// When a preset is selected in Build Mode, this is its slot list anchored
+  /// at [ghostRoomCol]/[ghostRoomRow]. Mutually exclusive with
+  /// [ghostRoomType]. [ghostIsValid] applies to whichever is set.
+  final OfficePreset? ghostPreset;
+
   PixelOfficePainter({
     required this.gameState,
     this.sprites,
@@ -72,11 +77,22 @@ class PixelOfficePainter extends CustomPainter {
     this.ghostRoomCol,
     this.ghostRoomRow,
     this.ghostIsValid = true,
+    this.ghostPreset,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
 
   RoomTheme get _theme => roomThemeForLevel(officeLevel);
+
+  /// True when (col, row) is inside the inner playable area of the current
+  /// grid. Used to skip rendering canonical props that were sized for a
+  /// larger office than the one currently in play.
+  bool _fitsInGrid(int col, int row) {
+    return col >= 1 &&
+        row >= 1 &&
+        col < gameState.gridCols - 1 &&
+        row < gameState.gridRows - 1;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -169,6 +185,12 @@ class PixelOfficePainter extends CustomPainter {
     // Canonical stations show up when any instance of that role is hired.
     // Extra (workstation) stations show up when any character is seated there.
     for (final station in gameState.allStations) {
+      // Skip stations whose desk OR seat falls outside the current grid —
+      // keeps props from drifting into the void for small offices.
+      if (!_fitsInGrid(station.deskCol, station.deskRow) ||
+          !_fitsInGrid(station.seatCol, station.seatRow)) {
+        continue;
+      }
       GameCharacter? seated;
       GameCharacter? anyHired;
       for (final c in gameState.characters.values) {
@@ -188,16 +210,17 @@ class PixelOfficePainter extends CustomPainter {
       _addStationFurniture(drawables, station, ch.isActive, ch);
     }
 
-    // Coffee machine & snack table
-    _addCoffeeMachine(drawables);
-    _addSnackTable(drawables);
-
-    // Decorative plants in corners (not in garage)
-    if (officeLevel != OfficeLevel.garage) {
-      _addPlants(drawables);
+    // Coffee machine & snack table — only when their canonical tile fits the
+    // current grid. Garage is too small to host them.
+    if (_fitsInGrid(kCoffeeMachineCol2, kCoffeeMachineRow)) {
+      _addCoffeeMachine(drawables);
+    }
+    if (_fitsInGrid(kSnackTableCol, kSnackTableRow)) {
+      _addSnackTable(drawables);
     }
 
-    // Placed furniture items
+    // Placed furniture items (plants are now purchasable furniture — no
+    // auto-placed decorative corner plants).
     _addPlacedFurniture(drawables);
 
     // Characters (only hired)
@@ -309,75 +332,6 @@ class PixelOfficePainter extends CustomPainter {
           Rect.fromLTWH(cx, cy, kTileSize, kTileSize),
           _pixelPaint,
         );
-      }));
-    }
-  }
-
-  void _addPlants(List<_Drawable> drawables) {
-    final plantImg = sprites?.furniture('PLANT');
-    if (!_hasImages || plantImg == null) return;
-    final plantTimers = gameState.plantEasterEgg.activeTimers;
-
-    final plantPositions = gameState.plantPositions;
-    for (int i = 0; i < plantPositions.length; i++) {
-      final pos = plantPositions[i];
-      final px = pos.$1 * kTileSize.toDouble();
-      final basePy = pos.$2 * kTileSize - kTileSize;
-      final zY = (pos.$2 + 1) * kTileSize.toDouble();
-
-      final timer = plantTimers[i];
-      final bouncing = timer != null && timer > 0;
-
-      drawables.add(_Drawable(zY, (c) {
-        double py = basePy;
-        double scaleX = 1.0;
-        double scaleY = 1.0;
-
-        if (bouncing) {
-          final phase = (kPlantAnimDuration - timer) * kPlantBounceSpeed;
-          // Smooth fade-out envelope so animation settles before timer expires
-          final envelope = (timer / kPlantAnimDuration).clamp(0.0, 1.0);
-          // Bounce: squash/stretch + hop
-          final bounce = math.sin(phase) * 2.0 * envelope;
-          final squash = math.sin(phase * 2) * 0.08 * envelope;
-          py = basePy - bounce.abs();
-          scaleX = 1.0 + squash;
-          scaleY = 1.0 - squash;
-        }
-
-        if (bouncing) {
-          final cx = px + kTileSize / 2;
-          final cy = basePy + kSpriteH.toDouble();
-          c.save();
-          c.translate(cx, cy);
-          c.scale(scaleX, scaleY);
-          c.translate(-cx, -cy);
-        }
-
-        c.drawImageRect(
-          plantImg,
-          Rect.fromLTWH(
-            0, 0, plantImg.width.toDouble(), plantImg.height.toDouble()),
-          Rect.fromLTWH(px, py, kTileSize, kSpriteH.toDouble()),
-          _pixelPaint,
-        );
-
-        if (bouncing) c.restore();
-
-        // Sparkle particles when bouncing
-        if (bouncing) {
-          final sparkPaint = Paint()..style = PaintingStyle.fill;
-          final t = (kPlantAnimDuration - timer) / kPlantAnimDuration;
-          for (int s = 0; s < 4; s++) {
-            final angle = t * 6.28 + s * 1.57;
-            final radius = 6.0 + t * 8.0;
-            final sx = px + kTileSize / 2 + math.cos(angle) * radius;
-            final sy = basePy + kTileSize / 2 + math.sin(angle) * radius;
-            final alpha = (1.0 - t).clamp(0.0, 1.0);
-            sparkPaint.color = const Color(0xFF44FF88).withValues(alpha: alpha * 0.7);
-            c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1.5, height: 1.5), sparkPaint);
-          }
-        }
       }));
     }
   }
@@ -782,6 +736,11 @@ class PixelOfficePainter extends CustomPainter {
       final item = furnitureById(placement.itemId);
       if (item == null) continue;
 
+      if (item.id == 'plant_small' || item.id == 'plant_large') {
+        _addPlantSprite(drawables, placement, isLarge: item.id == 'plant_large');
+        continue;
+      }
+
       final baseX = placement.col * kTileSize;
       final baseY = placement.row * kTileSize;
       final w = item.widthTiles * kTileSize;
@@ -824,11 +783,115 @@ class PixelOfficePainter extends CustomPainter {
     }
   }
 
+  // ─── Plant sprite (purchasable decoration with bounce easter egg) ────
+
+  void _addPlantSprite(
+    List<_Drawable> drawables,
+    FurniturePlacement placement, {
+    required bool isLarge,
+  }) {
+    final col = placement.col;
+    final row = placement.row;
+    final baseX = col * kTileSize.toDouble();
+    // Large plant sprite (16×32) extends one tile up from its footprint.
+    // Small plant sits within the footprint tile.
+    final baseY = isLarge
+        ? row * kTileSize - kTileSize.toDouble()
+        : row * kTileSize.toDouble();
+    final zY = (row + 1) * kTileSize.toDouble();
+    final timer = gameState.plantEasterEgg.activeTimers['$col,$row'];
+    final bouncing = timer != null && timer > 0;
+    final plantImg = sprites?.furniture('PLANT');
+
+    drawables.add(_Drawable(zY, (c) {
+      double py = baseY;
+      double scaleX = 1.0;
+      double scaleY = 1.0;
+
+      if (bouncing) {
+        final phase = (kPlantAnimDuration - timer) * kPlantBounceSpeed;
+        final envelope = (timer / kPlantAnimDuration).clamp(0.0, 1.0);
+        final bounce = math.sin(phase) * 2.0 * envelope;
+        final squash = math.sin(phase * 2) * 0.08 * envelope;
+        py = baseY - bounce.abs();
+        scaleX = 1.0 + squash;
+        scaleY = 1.0 - squash;
+
+        final cx = baseX + kTileSize / 2;
+        final cy = baseY + (isLarge ? kSpriteH.toDouble() : kTileSize);
+        c.save();
+        c.translate(cx, cy);
+        c.scale(scaleX, scaleY);
+        c.translate(-cx, -cy);
+      }
+
+      if (_hasImages && plantImg != null) {
+        if (isLarge) {
+          c.drawImageRect(
+            plantImg,
+            Rect.fromLTWH(
+                0, 0, plantImg.width.toDouble(), plantImg.height.toDouble()),
+            Rect.fromLTWH(baseX, py, kTileSize, kSpriteH.toDouble()),
+            _pixelPaint,
+          );
+        } else {
+          // Small plant: draw only the bottom half of the sprite (pot/base)
+          // at the footprint tile, so it reads as a desk-top plant.
+          final srcTop = plantImg.height / 2.0;
+          c.drawImageRect(
+            plantImg,
+            Rect.fromLTWH(
+                0, srcTop, plantImg.width.toDouble(), plantImg.height - srcTop),
+            Rect.fromLTWH(baseX, py, kTileSize, kTileSize),
+            _pixelPaint,
+          );
+        }
+      } else {
+        // Fallback: colored pot + foliage blob.
+        final p = Paint()..style = PaintingStyle.fill;
+        final potY = py + (isLarge ? kSpriteH - 8 : kTileSize - 6);
+        p.color = const Color(0xFF6B4226);
+        c.drawRect(Rect.fromLTWH(baseX + 4, potY, 8, 6), p);
+        p.color = const Color(0xFF44AA55);
+        final leafH = isLarge ? 20.0 : 8.0;
+        c.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(baseX + 2, potY - leafH, 12, leafH),
+            const Radius.circular(3),
+          ),
+          p,
+        );
+      }
+
+      if (bouncing) {
+        c.restore();
+
+        // Sparkles
+        final sparkPaint = Paint()..style = PaintingStyle.fill;
+        final t = (kPlantAnimDuration - timer) / kPlantAnimDuration;
+        final centerY = baseY + (isLarge ? kSpriteH / 2 : kTileSize / 2);
+        for (int s = 0; s < 4; s++) {
+          final angle = t * 6.28 + s * 1.57;
+          final radius = 6.0 + t * 8.0;
+          final sx = baseX + kTileSize / 2 + math.cos(angle) * radius;
+          final sy = centerY + math.sin(angle) * radius;
+          final alpha = (1.0 - t).clamp(0.0, 1.0);
+          sparkPaint.color =
+              const Color(0xFF44FF88).withValues(alpha: alpha * 0.7);
+          c.drawRect(
+              Rect.fromCenter(
+                  center: Offset(sx, sy), width: 1.5, height: 1.5),
+              sparkPaint);
+        }
+      }
+    }));
+  }
+
   // ─── Edit mode overlay ────────────────────────────────────────────────
 
   void _drawPlacedRooms(Canvas canvas) {
     for (final room in placedRooms) {
-      drawRoom(canvas, room, _theme, tick);
+      drawRoom(canvas, room, _theme, tick, showWorkstationFurniture: false);
     }
   }
 
@@ -865,28 +928,163 @@ class PixelOfficePainter extends CustomPainter {
           Offset((gCols - 1) * kTileSize, r * kTileSize), p);
     }
 
-    // Ghost room preview
-    final gt = ghostRoomType;
+    // Ghost room preview (single room OR preset bundle)
     final gc = ghostRoomCol;
     final gr = ghostRoomRow;
-    if (gt != null && gc != null && gr != null) {
-      final color =
+    if (gc != null && gr != null) {
+      final ghostColor =
           ghostIsValid ? const Color(0xFF44FF88) : const Color(0xFFFF4444);
-      final rx = gc * kTileSize;
-      final ry = gr * kTileSize;
-      final rw = gt.widthTiles * kTileSize;
-      final rh = gt.heightTiles * kTileSize;
-      canvas.drawRect(
-          Rect.fromLTWH(rx, ry, rw, rh),
-          Paint()
-            ..color = color.withValues(alpha: 0.25)
-            ..style = PaintingStyle.fill);
-      canvas.drawRect(
-          Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1),
-          Paint()
-            ..color = color.withValues(alpha: 0.8)
+
+      // Overall ghost footprint (for corridor routing). For a single room
+      // it's the room's own rect; for a preset it's the bounding box of all
+      // slots.
+      int footLeft = gc, footTop = gr, footRight = gc, footBottom = gr;
+      final gpForFoot = ghostPreset;
+      final gtForFoot = ghostRoomType;
+      if (gpForFoot != null) {
+        footLeft = gc;
+        footTop = gr;
+        footRight = gc + gpForFoot.widthTiles;
+        footBottom = gr + gpForFoot.heightTiles;
+      } else if (gtForFoot != null) {
+        footRight = gc + gtForFoot.widthTiles;
+        footBottom = gr + gtForFoot.heightTiles;
+      }
+
+      // Corridor preview: connect the ghost footprint to the nearest existing
+      // room with an L-shaped 1-tile strip. Skip if no rooms yet or ghost
+      // overlaps (handled as invalid).
+      if (ghostIsValid &&
+          placedRooms.isNotEmpty &&
+          (gpForFoot != null || gtForFoot != null)) {
+        final gcx = (footLeft + footRight) / 2.0;
+        final gcy = (footTop + footBottom) / 2.0;
+        PlacedRoom? nearest;
+        double nearestDist = double.infinity;
+        for (final room in placedRooms) {
+          final rcx =
+              room.col + room.type.widthTiles / 2.0;
+          final rcy =
+              room.row + room.type.heightTiles / 2.0;
+          final d = (rcx - gcx).abs() + (rcy - gcy).abs();
+          if (d < nearestDist) {
+            nearestDist = d;
+            nearest = room;
+          }
+        }
+        if (nearest != null) {
+          final nrLeft = nearest.col;
+          final nrTop = nearest.row;
+          final nrRight = nearest.col + nearest.type.widthTiles;
+          final nrBottom = nearest.row + nearest.type.heightTiles;
+
+          // Pick corridor midline at a tile that lies within the vertical
+          // overlap (or nearest edge) and horizontal overlap of both rects.
+          final yMid = ((math.max(footTop, nrTop) +
+                      math.min(footBottom, nrBottom) -
+                      1) /
+                  2)
+              .floor();
+          final xMid = ((math.max(footLeft, nrLeft) +
+                      math.min(footRight, nrRight) -
+                      1) /
+                  2)
+              .floor();
+
+          // Horizontal segment at yMid between the two rects' x-extents.
+          int hx1, hx2;
+          if (footRight <= nrLeft) {
+            hx1 = footRight;
+            hx2 = nrLeft;
+          } else if (nrRight <= footLeft) {
+            hx1 = nrRight;
+            hx2 = footLeft;
+          } else {
+            hx1 = hx2 = 0; // already horizontally overlapping
+          }
+
+          // Vertical segment at xMid between the two rects' y-extents.
+          int vy1, vy2;
+          if (footBottom <= nrTop) {
+            vy1 = footBottom;
+            vy2 = nrTop;
+          } else if (nrBottom <= footTop) {
+            vy1 = nrBottom;
+            vy2 = footTop;
+          } else {
+            vy1 = vy2 = 0;
+          }
+
+          final corridorFill = Paint()
+            ..color = const Color(0xFFFFD700).withValues(alpha: 0.18)
+            ..style = PaintingStyle.fill;
+          final corridorStroke = Paint()
+            ..color = const Color(0xFFFFD700).withValues(alpha: 0.55)
             ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5);
+            ..strokeWidth = 0.8;
+
+          if (hx2 > hx1) {
+            final safeY = yMid
+                .clamp(1, gameState.gridRows - 2)
+                .toInt();
+            final rect = Rect.fromLTWH(
+              hx1 * kTileSize,
+              safeY * kTileSize,
+              (hx2 - hx1) * kTileSize,
+              kTileSize,
+            );
+            canvas.drawRect(rect, corridorFill);
+            canvas.drawRect(rect, corridorStroke);
+          }
+          if (vy2 > vy1) {
+            final safeX = xMid
+                .clamp(1, gameState.gridCols - 2)
+                .toInt();
+            final rect = Rect.fromLTWH(
+              safeX * kTileSize,
+              vy1 * kTileSize,
+              kTileSize,
+              (vy2 - vy1) * kTileSize,
+            );
+            canvas.drawRect(rect, corridorFill);
+            canvas.drawRect(rect, corridorStroke);
+          }
+        }
+      }
+
+      void drawGhostRect(double rx, double ry, double rw, double rh) {
+        canvas.drawRect(
+            Rect.fromLTWH(rx, ry, rw, rh),
+            Paint()
+              ..color = ghostColor.withValues(alpha: 0.25)
+              ..style = PaintingStyle.fill);
+        canvas.drawRect(
+            Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1),
+            Paint()
+              ..color = ghostColor.withValues(alpha: 0.8)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+      }
+
+      final gp = ghostPreset;
+      final gt = ghostRoomType;
+      if (gp != null) {
+        for (final slot in gp.rooms) {
+          drawGhostRect(
+            (gc + slot.colOffset) * kTileSize,
+            (gr + slot.rowOffset) * kTileSize,
+            slot.type.widthTiles * kTileSize,
+            slot.type.heightTiles * kTileSize,
+          );
+        }
+      } else if (gt != null) {
+        drawGhostRect(
+          gc * kTileSize,
+          gr * kTileSize,
+          gt.widthTiles * kTileSize,
+          gt.heightTiles * kTileSize,
+        );
+      }
     }
 
     // Existing room outlines
