@@ -12,8 +12,8 @@ import 'package:image_picker/image_picker.dart';
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../providers/agent_provider.dart';
-import '../../providers/game_economy_provider.dart';
 import '../../services/clipboard_service.dart';
+import 'send_button.dart';
 
 /// Parses numbered choice options from agent text.
 /// Returns a list of choice labels only when the numbered list is at the very
@@ -36,16 +36,29 @@ List<String>? _extractChoices(String text) {
   return matches.map((m) => m.group(2)!.trim()).toList();
 }
 
-String _agentNickname(String id) => switch (id) {
-      'manager' => 'Капітан',
-      'tech-lead' => 'Архітект',
-      'coder' => 'Майстер',
-      'reviewer' => 'Детектив',
-      'tester' => 'Крашер',
-      'security' => 'Страж',
-      'ui-ux-designer' => 'Піксельник',
-      _ => id,
-    };
+/// Extract roleType prefix from an instanceId ("coder#1" → "coder").
+String _roleTypeOf(String id) {
+  final hash = id.indexOf('#');
+  return hash > 0 ? id.substring(0, hash) : id;
+}
+
+/// Display nickname for an instance — looked up from [agentsProvider] when
+/// possible (custom-set nicknames win), falling back to the role's default.
+String _agentNickname(WidgetRef ref, String id) {
+  final agents = ref.read(agentsProvider);
+  final info = agents[id]?.info;
+  if (info != null && info.name.isNotEmpty) return info.name;
+  return switch (_roleTypeOf(id)) {
+    'manager' => 'Капітан',
+    'tech-lead' => 'Архітект',
+    'coder' => 'Майстер',
+    'reviewer' => 'Детектив',
+    'tester' => 'Крашер',
+    'security' => 'Страж',
+    'ui-ux-designer' => 'Піксельник',
+    _ => id,
+  };
+}
 
 class ChatPanel extends ConsumerStatefulWidget {
   const ChatPanel({super.key});
@@ -438,7 +451,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                           final agentEntry = agentList[index];
                           final agentId = agentEntry.key;
                           final agentState = agentEntry.value;
-                          final nickname = _agentNickname(agentId);
+                          final nickname = _agentNickname(ref, agentId);
 
                           return Material(
                             color: Colors.transparent,
@@ -538,7 +551,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     );
   }
 
-  LinearGradient _getAgentGradient(String agentId) => switch (agentId) {
+  LinearGradient _getAgentGradient(String agentId) =>
+      switch (_roleTypeOf(agentId)) {
         'manager' => const LinearGradient(
             colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
           ),
@@ -565,7 +579,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
       };
 
-  Color _getAgentColor(String agentId) => switch (agentId) {
+  Color _getAgentColor(String agentId) => switch (_roleTypeOf(agentId)) {
         'manager' => const Color(0xFF00C0D1),
         'tech-lead' => const Color(0xFFFF6B6B),
         'coder' => const Color(0xFF4ECDC4),
@@ -576,7 +590,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         _ => const Color(0xFF95A5A6),
       };
 
-  IconData _getAgentIcon(String agentId) => switch (agentId) {
+  IconData _getAgentIcon(String agentId) => switch (_roleTypeOf(agentId)) {
         'manager' => Icons.sentiment_very_satisfied,
         'tech-lead' => Icons.architecture,
         'coder' => Icons.code,
@@ -693,7 +707,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                       const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
                       const SizedBox(width: 8),
                       Text(
-                        _agentNickname(ref.watch(selectedAgentProvider)),
+                        _agentNickname(ref, ref.watch(selectedAgentProvider)),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,
@@ -835,13 +849,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   Widget _buildInput() {
+    final c = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1F),
+        color: c.surface,
         border: Border(
-          top: BorderSide(
-            color: Colors.white.withValues(alpha: 0.06),
-          ),
+          top: BorderSide(color: c.divider),
         ),
       ),
       child: Column(
@@ -991,12 +1004,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 Expanded(
                   child: Container(
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0E0E11),
+                      color: c.background,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: _focusNode.hasFocus
-                            ? const Color(0xFF00C0D1)
-                            : Colors.white.withValues(alpha: 0.1),
+                            ? c.accent
+                            : c.border,
                         width: 1,
                       ),
                     ),
@@ -1026,7 +1039,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                             style: const TextStyle(color: Colors.white, fontSize: 14),
                             decoration: InputDecoration(
                               hintText:
-                                  'Повідомлення ${_agentNickname(ref.watch(selectedAgentProvider))}...',
+                                  'Повідомлення ${_agentNickname(ref, ref.watch(selectedAgentProvider))}...',
                               hintStyle: TextStyle(
                                 color: Colors.white.withValues(alpha: 0.25),
                               ),
@@ -1045,8 +1058,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Fixed-size filled send button
-                _SendButton(onPressed: _send),
+                // Fixed-size filled send button — rendered variant chosen
+                // by the active send-button cosmetic.
+                SendButton(onPressed: _send),
               ],
             ),
           ),
@@ -1183,42 +1197,6 @@ class _InputIconButton extends StatelessWidget {
             size: 18,
             color: Colors.white.withValues(alpha: 0.4),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Send Button ──────────────────────────────────────────────────────────────
-
-class _SendButton extends StatelessWidget {
-  const _SendButton({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onPressed,
-      child: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: const Color(0xFF00C0D1),
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF00C0D1).withValues(alpha: 0.35),
-              blurRadius: 8,
-              spreadRadius: 0,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: const Icon(
-          Icons.send_rounded,
-          color: Colors.black,
-          size: 20,
         ),
       ),
     );

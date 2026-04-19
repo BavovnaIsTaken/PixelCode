@@ -8,25 +8,43 @@ import 'task_board.dart';
 
 // ─── Agent Info ──────────────────────────────────────────────────────────────
 
+/// Identity of an agent known to the UI.
+///
+/// In the instance-based model [id] is typically an instanceId
+/// (e.g. `"coder#1"`), but may fall back to a bare role type during startup
+/// before game state is synced. [roleType] carries the underlying role.
 class AgentInfo {
   final String id;
   final String name;
   final String role;
   final String model;
+  final String roleType;
 
   const AgentInfo({
     required this.id,
     required this.name,
     required this.role,
     required this.model,
+    required this.roleType,
   });
 
-  factory AgentInfo.fromJson(Map<String, dynamic> json) => AgentInfo(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        role: json['role'] as String,
-        model: json['model'] as String,
-      );
+  factory AgentInfo.fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String;
+    // Derive roleType from the id prefix if the server didn't send it
+    // explicitly (legacy payloads). `coder#1` → `coder`; bare `coder` → `coder`.
+    String derivedRoleType = json['roleType'] as String? ?? '';
+    if (derivedRoleType.isEmpty) {
+      final hash = id.indexOf('#');
+      derivedRoleType = hash > 0 ? id.substring(0, hash) : id;
+    }
+    return AgentInfo(
+      id: id,
+      name: json['name'] as String,
+      role: json['role'] as String,
+      model: json['model'] as String,
+      roleType: derivedRoleType,
+    );
+  }
 }
 
 // ─── Agent Status ────────────────────────────────────────────────────────────
@@ -401,11 +419,13 @@ class RemoteCharPosition {
   final int row;
   final String state;
   final String dir;
+  final bool onSkateboard;
   const RemoteCharPosition({
     required this.col,
     required this.row,
     required this.state,
     required this.dir,
+    this.onSkateboard = false,
   });
   factory RemoteCharPosition.fromJson(Map<String, dynamic> json) =>
       RemoteCharPosition(
@@ -413,6 +433,7 @@ class RemoteCharPosition {
         row: json['row'] as int? ?? 0,
         state: json['state'] as String? ?? 'idle',
         dir: json['dir'] as String? ?? 'down',
+        onSkateboard: json['onSkateboard'] as bool? ?? false,
       );
 }
 
@@ -581,27 +602,44 @@ class ServerInfoMessage implements ServerMessage {
 
 class ConnectedClient {
   final String clientId;
-  final String hostname;
+  final String nickname;
+  final String deviceName;
   final String platform; // "macos", "ios", "android", "web", "unknown"
   final DateTime connectedAt;
-  final bool isLocal;
+  final bool isHostMachine;
 
   const ConnectedClient({
     required this.clientId,
-    required this.hostname,
+    required this.nickname,
+    required this.deviceName,
     required this.platform,
     required this.connectedAt,
-    required this.isLocal,
+    required this.isHostMachine,
   });
+
+  /// Primary display label — nickname if set, else deviceName, else a platform fallback.
+  String get displayName {
+    if (nickname.isNotEmpty) return nickname;
+    if (deviceName.isNotEmpty) return deviceName;
+    return switch (platform) {
+      'ios' => 'iPhone',
+      'android' => 'Android',
+      'macos' => 'Mac',
+      'linux' => 'Linux',
+      'windows' => 'Windows',
+      _ => 'Device',
+    };
+  }
 
   factory ConnectedClient.fromJson(Map<String, dynamic> json) =>
       ConnectedClient(
         clientId: json['clientId'] as String? ?? '',
-        hostname: json['hostname'] as String? ?? 'unknown',
+        nickname: json['nickname'] as String? ?? '',
+        deviceName: json['deviceName'] as String? ?? '',
         platform: json['platform'] as String? ?? 'unknown',
         connectedAt: DateTime.tryParse(json['connectedAt'] as String? ?? '') ??
             DateTime.now(),
-        isLocal: json['isLocal'] as bool? ?? false,
+        isHostMachine: json['isHostMachine'] as bool? ?? false,
       );
 }
 

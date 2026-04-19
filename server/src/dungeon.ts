@@ -251,7 +251,7 @@ export async function runDungeon(
   const challenge = getChallenge(skillType, difficulty);
 
   // Use hardware-tier model for the agent (NOT skill-capped — dungeon is training)
-  const hwTier = gameState?.agentHardware[agentId] ?? 0;
+  const hwTier = gameState?.instances[agentId]?.hardware ?? 0;
   const agentModel = hardwareToModel(hwTier);
 
   // ── Step 1: Run the agent on the challenge ─────────────────────────────

@@ -12,6 +12,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/agent_message.dart';
+import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
@@ -38,8 +39,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   final TransformationController _transformController =
       TransformationController();
   Duration _lastElapsed = Duration.zero;
-  int _tick = 0; // for monitor flicker & bubble animation
+  int _tick = 0;
   double _tickAccum = 0;
+
+  // Build Mode state
+  bool _buildMode = false;
+  RoomType? _selectedRoomType;
+  int? _ghostCol;
+  int? _ghostRow;
+
+  // Track last synced level/rooms to avoid rebuilding tile map every frame
+  OfficeLevel? _lastLevel;
+  List<PlacedRoom>? _lastRooms;
+  List<FurniturePlacement>? _lastFurniture;
 
   StreamSubscription<ServerMessage>? _msgSub;
   Timer? _posSyncTimer;
@@ -73,7 +85,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     if (msg is PositionsSyncMessage) {
       _gameState.applyRemotePositions({
         for (final e in msg.positions.entries)
-          e.key: (col: e.value.col, row: e.value.row, state: e.value.state, dir: e.value.dir),
+          e.key: (
+            col: e.value.col,
+            row: e.value.row,
+            state: e.value.state,
+            dir: e.value.dir,
+            onSkateboard: e.value.onSkateboard,
+          ),
       });
     }
   }
@@ -117,6 +135,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final commEvents = ref.watch(commGraphProvider);
     final gameEconomy = ref.watch(gameEconomyProvider);
 
+    // Rebuild tile map when office level, rooms, or furniture change
+    final level = gameEconomy.officeLevel;
+    final rooms = gameEconomy.placedRooms;
+    final furniture = gameEconomy.placedFurniture;
+    if (!identical(rooms, _lastRooms) ||
+        !identical(furniture, _lastFurniture) ||
+        level != _lastLevel) {
+      _lastLevel = level;
+      _lastRooms = rooms;
+      _lastFurniture = furniture;
+      _gameState.rebuildLayout(level, rooms, furniture);
+    }
+
     // Sync agent states and hired status into game engine
     _gameState.syncAgents(agents);
     final hardwareMap = {
@@ -128,17 +159,16 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final activeAgents =
         agents.entries.where((e) => e.value.isActive).toList();
 
+    final c = context.appColors;
     return Container(
-      color: const Color(0xFF0E0E11),
+      color: c.background,
       child: Column(
         children: [
           _buildHeader(agents),
           if (activeAgents.isNotEmpty)
             _ActiveAgentsStrip(agents: activeAgents, tick: _tick),
           Expanded(
-            child: agents.isEmpty
-                ? _buildWaiting()
-                : _buildOffice(agents, gameEconomy),
+            child: _buildOffice(agents, gameEconomy),
           ),
           if (metrics.isNotEmpty) _TeamMetricsBar(metrics: metrics),
           if (commEvents.isNotEmpty) _CommGraphPanel(events: commEvents),
@@ -204,29 +234,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     );
   }
 
-  Widget _buildWaiting() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.hourglass_empty_rounded,
-            size: 40,
-            color: Colors.white.withValues(alpha: 0.1),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Очікування підключення до сервера...',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.2),
-              fontSize: 13,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
     final officeLevel = gameEconomy.officeLevel;
     return LayoutBuilder(
@@ -238,8 +245,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               minScale: 1.0,
               maxScale: 3.0,
               child: MouseRegion(
-                onHover: (event) =>
-                    _onCanvasHover(event.localPosition, constraints),
+                onHover: (event) {
+                  _onCanvasHover(event.localPosition, constraints);
+                  _updateBuildGhost(event.localPosition, constraints);
+                },
                 onExit: (_) {
                   setState(() => _hoveredAgentId = null);
                 },
@@ -260,10 +269,17 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                             officeLevel: officeLevel,
                             placedFurniture:
                                 gameEconomy.placedFurniture,
+                            placedRooms: gameEconomy.placedRooms,
                             editMode:
                                 ref.watch(furnitureEditModeProvider),
                             selectedFurnitureId:
                                 ref.watch(selectedFurnitureIdProvider),
+                            buildMode: _buildMode,
+                            ghostRoomType: _selectedRoomType,
+                            ghostRoomCol: _ghostCol,
+                            ghostRoomRow: _ghostRow,
+                            ghostIsValid: _ghostIsValid(
+                                gameEconomy.placedRooms),
                           ),
                         ),
                       ),
@@ -276,7 +292,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             if (_isZoomed)
               Positioned(
                 right: 8,
-                bottom: 8,
+                bottom: _buildMode ? 120 : 8,
                 child: GestureDetector(
                   onTap: _resetZoom,
                   child: Container(
@@ -296,6 +312,52 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                   ),
                 ),
               ),
+            // Build Mode toggle button (only for non-garage offices)
+            if (gameEconomy.officeLevel != OfficeLevel.garage && !_buildMode)
+              Positioned(
+                right: 8,
+                top: 8,
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _buildMode = true;
+                    _selectedRoomType = null;
+                    _ghostCol = null;
+                    _ghostRow = null;
+                  }),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xCC1A1A2E),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: const Color(0xFF44FF88)
+                            .withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.add_home_outlined,
+                            size: 14,
+                            color: const Color(0xFF44FF88)
+                                .withValues(alpha: 0.8)),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Будувати',
+                          style: TextStyle(
+                            color: const Color(0xFF44FF88)
+                                .withValues(alpha: 0.8),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (_buildMode) _buildBuildModePanel(gameEconomy),
           ],
         );
       },
@@ -311,11 +373,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   /// Convert screen position to world position and hit-test characters.
   String? _hitTestCharacter(Offset screenPos, BoxConstraints constraints) {
-    final scaleX = constraints.maxWidth / kCanvasWidth;
-    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final cw = _gameState.canvasWidth;
+    final ch = _gameState.canvasHeight;
+    final scaleX = constraints.maxWidth / cw;
+    final scaleY = constraints.maxHeight / ch;
     final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
-    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+    final offsetX = (constraints.maxWidth - cw * scale) / 2;
+    final offsetY = (constraints.maxHeight - ch * scale) / 2;
 
     final worldX = (screenPos.dx - offsetX) / scale;
     final worldY = (screenPos.dy - offsetY) / scale;
@@ -334,7 +398,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
       if (worldX >= left && worldX <= right &&
           worldY >= top && worldY <= bottom) {
-        return ch.agentId;
+        return ch.instanceId;
       }
     }
     return null;
@@ -354,6 +418,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   void _onCanvasTap(Offset pos, BoxConstraints constraints) {
+    // Build mode: place rooms
+    if (_buildMode) {
+      _handleBuildModeTap(
+          pos, constraints, ref.read(gameEconomyProvider).placedRooms);
+      return;
+    }
+
     // Furniture edit mode: place or remove furniture on grid
     final isEditMode = ref.read(furnitureEditModeProvider);
     if (isEditMode) {
@@ -363,7 +434,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
     final hit = _hitTestCharacter(pos, constraints);
     if (hit != null) {
-      // Only allow selecting hired agents
+      // [hit] is already an instanceId — select that specific agent directly.
       final ch = _gameState.characters[hit];
       if (ch != null && ch.isHired) {
         ref.read(selectedAgentProvider.notifier).state = hit;
@@ -375,11 +446,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   void _handleFurnitureTap(Offset screenPos, BoxConstraints constraints) {
-    final scaleX = constraints.maxWidth / kCanvasWidth;
-    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final cw = _gameState.canvasWidth;
+    final ch = _gameState.canvasHeight;
+    final scaleX = constraints.maxWidth / cw;
+    final scaleY = constraints.maxHeight / ch;
     final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
-    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+    final offsetX = (constraints.maxWidth - cw * scale) / 2;
+    final offsetY = (constraints.maxHeight - ch * scale) / 2;
 
     final worldX = (screenPos.dx - offsetX) / scale;
     final worldY = (screenPos.dy - offsetY) / scale;
@@ -388,7 +461,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final row = (worldY / kTileSize).floor();
 
     // Must be on floor (not wall)
-    if (col < 1 || col >= kGridCols - 1 || row < 1 || row >= kGridRows - 1) {
+    if (col < 1 || col >= _gameState.gridCols - 1 || row < 1 || row >= _gameState.gridRows - 1) {
       return;
     }
 
@@ -424,18 +497,219 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     ref.read(gameEconomyProvider.notifier).placeFurniture(selectedId, col, row);
   }
 
+  // ─── Build Mode ────────────────────────────────────────────────────────────
+
+  Offset _screenToWorld(Offset screenPos, BoxConstraints constraints) {
+    final cw = _gameState.canvasWidth;
+    final ch = _gameState.canvasHeight;
+    final scale = math.min(
+        constraints.maxWidth / cw, constraints.maxHeight / ch);
+    final ox = (constraints.maxWidth - cw * scale) / 2;
+    final oy = (constraints.maxHeight - ch * scale) / 2;
+    return Offset(
+        (screenPos.dx - ox) / scale, (screenPos.dy - oy) / scale);
+  }
+
+  bool _ghostIsValid(List<PlacedRoom> rooms) {
+    final rt = _selectedRoomType;
+    final gc = _ghostCol;
+    final gr = _ghostRow;
+    if (rt == null || gc == null || gr == null) return false;
+    final gCols = _gameState.gridCols;
+    final gRows = _gameState.gridRows;
+    // Must be fully inside inner grid
+    if (gc < 1 || gr < 1) return false;
+    if (gc + rt.widthTiles > gCols - 1) return false;
+    if (gr + rt.heightTiles > gRows - 1) return false;
+    // No overlap with blocked tiles
+    final blocked = _gameState.blockedTiles;
+    for (int dc = 0; dc < rt.widthTiles; dc++) {
+      for (int dr = 0; dr < rt.heightTiles; dr++) {
+        if (blocked.contains('${gc + dc},${gr + dr}')) return false;
+      }
+    }
+    // No overlap with existing rooms
+    for (final r in rooms) {
+      final ox = gc < r.col + r.type.widthTiles && gc + rt.widthTiles > r.col;
+      final oy = gr < r.row + r.type.heightTiles && gr + rt.heightTiles > r.row;
+      if (ox && oy) return false;
+    }
+    return true;
+  }
+
+  void _handleBuildModeTap(Offset screenPos, BoxConstraints constraints,
+      List<PlacedRoom> rooms) {
+    final world = _screenToWorld(screenPos, constraints);
+    final col = (world.dx / kTileSize).floor();
+    final row = (world.dy / kTileSize).floor();
+    setState(() {
+      _ghostCol = col;
+      _ghostRow = row;
+    });
+
+    final rt = _selectedRoomType;
+    if (rt == null) return;
+    if (!_ghostIsValid(rooms)) return;
+
+    ref.read(gameEconomyProvider.notifier).placeRoom(rt, col, row);
+    setState(() {
+      _ghostCol = null;
+      _ghostRow = null;
+    });
+  }
+
+  void _updateBuildGhost(Offset screenPos, BoxConstraints constraints) {
+    if (!_buildMode) return;
+    final world = _screenToWorld(screenPos, constraints);
+    final col = (world.dx / kTileSize).floor();
+    final row = (world.dy / kTileSize).floor();
+    if (col != _ghostCol || row != _ghostRow) {
+      setState(() {
+        _ghostCol = col;
+        _ghostRow = row;
+      });
+    }
+  }
+
+  Widget _buildBuildModePanel(GameState gameEconomy) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xE6101018),
+          border: Border(
+              top: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+        ),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Режим будівництва',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => setState(() {
+                    _buildMode = false;
+                    _selectedRoomType = null;
+                    _ghostCol = null;
+                    _ghostRow = null;
+                  }),
+                  child: Icon(Icons.close,
+                      size: 16,
+                      color: Colors.white.withValues(alpha: 0.4)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final rt in RoomType.values)
+                    _buildRoomChip(rt, gameEconomy),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRoomChip(RoomType rt, GameState economy) {
+    final isSelected = _selectedRoomType == rt;
+    final canAfford = economy.grymni >= rt.cost;
+    final limitHit =
+        economy.placedRooms.where((r) => r.type == rt).length >=
+            rt.maxPerOffice;
+    final available = canAfford && !limitHit;
+
+    return GestureDetector(
+      onTap: available
+          ? () => setState(() {
+                _selectedRoomType = isSelected ? null : rt;
+                _ghostCol = null;
+                _ghostRow = null;
+              })
+          : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.only(right: 8),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF44FF88).withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: available ? 0.05 : 0.02),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected
+                ? const Color(0xFF44FF88).withValues(alpha: 0.6)
+                : Colors.white
+                    .withValues(alpha: available ? 0.1 : 0.04),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(rt.icon,
+                style: TextStyle(
+                    fontSize: 18,
+                    color: available ? null : Colors.grey)),
+            const SizedBox(height: 2),
+            Text(
+              rt.nameUk,
+              style: TextStyle(
+                color: available
+                    ? Colors.white.withValues(alpha: 0.85)
+                    : Colors.white.withValues(alpha: 0.3),
+                fontSize: 10,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            Text(
+              limitHit ? 'Макс.' : '₲${rt.cost}',
+              style: TextStyle(
+                color: canAfford && !limitHit
+                    ? const Color(0xFF44FF88)
+                    : Colors.white.withValues(alpha: 0.3),
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _hitTestPlant(Offset screenPos, BoxConstraints constraints) {
-    final scaleX = constraints.maxWidth / kCanvasWidth;
-    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final cw = _gameState.canvasWidth;
+    final ch = _gameState.canvasHeight;
+    final scaleX = constraints.maxWidth / cw;
+    final scaleY = constraints.maxHeight / ch;
     final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
-    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+    final offsetX = (constraints.maxWidth - cw * scale) / 2;
+    final offsetY = (constraints.maxHeight - ch * scale) / 2;
 
     final worldX = (screenPos.dx - offsetX) / scale;
     final worldY = (screenPos.dy - offsetY) / scale;
 
-    for (int i = 0; i < kPlantPositions.length; i++) {
-      final pos = kPlantPositions[i];
+    final plantPositions = _gameState.plantPositions;
+    for (int i = 0; i < plantPositions.length; i++) {
+      final pos = plantPositions[i];
       final px = pos.$1 * kTileSize;
       final py = pos.$2 * kTileSize - kTileSize; // plant is 2 tiles tall
       if (worldX >= px && worldX <= px + kTileSize &&
@@ -450,25 +724,30 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     Map<String, AgentState> agents,
     BoxConstraints constraints,
   ) {
-    final scaleX = constraints.maxWidth / kCanvasWidth;
-    final scaleY = constraints.maxHeight / kCanvasHeight;
+    final cw = _gameState.canvasWidth;
+    final ch = _gameState.canvasHeight;
+    final scaleX = constraints.maxWidth / cw;
+    final scaleY = constraints.maxHeight / ch;
     final scale = scaleX < scaleY ? scaleX : scaleY;
-    final offsetX = (constraints.maxWidth - kCanvasWidth * scale) / 2;
-    final offsetY = (constraints.maxHeight - kCanvasHeight * scale) / 2;
+    final offsetX = (constraints.maxWidth - cw * scale) / 2;
+    final offsetY = (constraints.maxHeight - ch * scale) / 2;
 
     final widgets = <Widget>[];
 
-    for (final station in kStations) {
-      final ch = _gameState.characters[station.agentId];
-      if (ch == null || !ch.isHired) continue;
+    // One label per hired character instance (multiple coders → multiple
+    // labels) so the overlay reflects the real roster, not the fixed station
+    // list.
+    final selectedId = ref.watch(selectedAgentProvider);
+    for (final ch in _gameState.characters.values) {
+      if (!ch.isHired) continue;
 
-      final agentState = agents[station.agentId];
+      final instanceId = ch.instanceId;
+      final agentState = agents[instanceId];
       final isActive =
           agentState != null && agentState.status != AgentStatus.idle;
-      final isSelected =
-          ref.watch(selectedAgentProvider) == station.agentId;
-      final isHovered = _hoveredAgentId == station.agentId;
-      final color = agentAccentColor(station.agentId);
+      final isSelected = selectedId == instanceId;
+      final isHovered = _hoveredAgentId == instanceId;
+      final color = agentAccentColor(ch.roleType);
 
       // Label follows the character, anchored below
       final labelX = ch.x;
@@ -479,7 +758,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       final screenX = offsetX + labelX * scale;
       final screenY = offsetY + labelY * scale;
 
-      final (nick, role) = _agentNickAndRole(station.agentId);
+      // Prefer the actual AgentInfo nickname (respects renames) and fall back
+      // to the catalog-based defaults.
+      final info = agentState?.info;
+      final nick = info?.name ??
+          (_agentNickAndRole(ch.roleType).$1);
+      final role = info?.role ??
+          (_agentNickAndRole(ch.roleType).$2);
 
       final highlighted = isSelected || isHovered;
       const borderColor = Color(0xFFFFC107); // amber for both hover & select
@@ -489,14 +774,14 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           left: screenX - 40,
           top: screenY,
           child: GestureDetector(
-            onTap: () => ref.read(selectedAgentProvider.notifier).state =
-                station.agentId,
+            onTap: () =>
+                ref.read(selectedAgentProvider.notifier).state = instanceId,
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
-              onEnter: (_) => _scheduleOverlayHover(station.agentId),
-              onHover: (_) => _scheduleOverlayHover(station.agentId),
+              onEnter: (_) => _scheduleOverlayHover(instanceId),
+              onHover: (_) => _scheduleOverlayHover(instanceId),
               onExit: (_) {
-                if (_hoveredAgentId == station.agentId) {
+                if (_hoveredAgentId == instanceId) {
                   setState(() => _hoveredAgentId = null);
                 }
               },
@@ -676,12 +961,13 @@ class _ActiveAgentsStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.appColors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF131316),
+        color: c.surfaceDim,
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: c.divider),
         ),
       ),
       child: Column(
@@ -841,12 +1127,13 @@ class _CommGraphPanelState extends State<_CommGraphPanel> {
     final sorted = edges.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
+    final c = context.appColors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF131316),
+        color: c.surfaceDim,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          top: BorderSide(color: c.divider),
         ),
       ),
       child: Column(
@@ -1032,12 +1319,13 @@ class _TeamMetricsBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.appColors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A1F),
+        color: c.surface,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          top: BorderSide(color: c.divider),
         ),
       ),
       child: Column(
@@ -1211,11 +1499,12 @@ class _ActivityLogPanelState extends State<_ActivityLogPanel> {
   Widget build(BuildContext context) {
     final count = widget.events.length;
 
+    final c = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF131316),
+        color: c.surfaceDim,
         border: Border(
-          top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          top: BorderSide(color: c.divider),
         ),
       ),
       child: Column(

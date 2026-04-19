@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/app_theme.dart';
+import '../models/game_economy.dart';
+import '../models/send_button_style.dart';
 import 'game_economy_provider.dart';
 
 /// The currently active [AppThemeDefinition] (looked up from game state).
@@ -23,6 +25,13 @@ final activeThemeColorsProvider = Provider<ThemeColors>((ref) {
   final themeState = ref.watch(gameEconomyProvider).themeState;
   final customization = themeState.customizations[themeDef.id];
   return resolveThemeColors(themeDef, customization);
+});
+
+/// The currently equipped send-button cosmetic variant (falls back to
+/// [SendButtonVariant.classic] when nothing is equipped).
+final activeSendButtonVariantProvider = Provider<SendButtonVariant>((ref) {
+  final equipped = ref.watch(gameEconomyProvider).equippedCosmetics;
+  return sendButtonVariantForId(equipped[CosmeticType.sendButtonStyle.index]);
 });
 
 /// A complete [ThemeData] built from the active theme, ready for MaterialApp.

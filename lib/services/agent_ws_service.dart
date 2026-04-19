@@ -9,6 +9,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../models/agent_message.dart';
+import '../utils/device_identity.dart';
 
 class AgentWsService {
   WebSocket? _ws;
@@ -23,19 +24,19 @@ class AgentWsService {
   /// Stable client ID (generated once per app instance).
   late final String clientId = _generateClientId();
 
+  /// Identity sent in the `client_info` handshake. Updated from the outside
+  /// via [setIdentity] whenever nickname/deviceName change; re-sent on every
+  /// (re)connect.
+  String _nickname = '';
+  String _deviceName = sanitizeDeviceName(
+    Platform.localHostname,
+    currentPlatformName(),
+  );
+
   static String _generateClientId() {
     final rng = Random.secure();
     final bytes = List.generate(16, (_) => rng.nextInt(256));
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  static String get _platformName {
-    if (Platform.isMacOS) return 'macos';
-    if (Platform.isIOS) return 'ios';
-    if (Platform.isAndroid) return 'android';
-    if (Platform.isLinux) return 'linux';
-    if (Platform.isWindows) return 'windows';
-    return 'unknown';
   }
 
   /// Last received server_info (buffered so late subscribers can read it).
@@ -297,18 +298,19 @@ class AgentWsService {
 
   // ─── Game economy ────────────────────────────────────────────────────────
 
+  /// Send the current game state to the server.
+  ///
+  /// [instances] keys the hired agents by their instanceId (e.g. "coder#1").
+  /// Each value carries roleType, nickname, hardware tier index, and skill
+  /// levels — matches the server's `GameStateData` contract.
   void setGameState({
-    required List<String> hiredAgents,
-    required Map<String, int> agentHardware,
-    required Map<String, Map<String, int>> agentSkills,
+    required Map<String, Map<String, dynamic>> instances,
     String? fullState,
     int? stateUpdatedAt,
   }) {
     _send({
       'type': 'set_game_state',
-      'hiredAgents': hiredAgents,
-      'agentHardware': agentHardware,
-      'agentSkills': agentSkills,
+      'instances': instances,
       'fullState': ?fullState,
       'stateUpdatedAt': ?stateUpdatedAt,
     });
@@ -431,12 +433,27 @@ class AgentWsService {
 
   // ─── Client identification ───────────────────────────────────────────────
 
+  /// Set the identity sent in the `client_info` handshake. Safe to call at any
+  /// time: if already connected, the server is notified immediately; otherwise
+  /// the new values are used on the next (re)connect.
+  void setIdentity({required String nickname, String? deviceName}) {
+    final platform = currentPlatformName();
+    final resolvedDeviceName = deviceName != null
+        ? sanitizeDeviceName(deviceName, platform)
+        : _deviceName;
+    final changed = nickname != _nickname || resolvedDeviceName != _deviceName;
+    _nickname = nickname;
+    _deviceName = resolvedDeviceName;
+    if (changed && _isConnected) _sendClientInfo();
+  }
+
   void _sendClientInfo() {
     _send({
       'type': 'client_info',
-      'hostname': Platform.localHostname,
-      'platform': _platformName,
       'clientId': clientId,
+      'nickname': _nickname,
+      'deviceName': _deviceName,
+      'platform': currentPlatformName(),
     });
   }
 

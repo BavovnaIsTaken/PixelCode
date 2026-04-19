@@ -683,6 +683,8 @@ class _MobileSessionPicker extends ConsumerWidget {
     final profile = await showSessionFormDialog(context);
     if (profile != null) {
       await ref.read(sessionProvider.notifier).addProfile(profile);
+      await ref.read(sessionProvider.notifier).setActive(profile.id);
+      await ref.read(wsServiceProvider).connect(url: profile.wsUrl);
     }
   }
 

@@ -14,7 +14,7 @@ import '../../providers/game_economy_provider.dart';
 import '../../widgets/deploy/device_deploy_popover.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import '../../services/logo_path_dsl.dart';
+import '../../services/logo_path_program.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
 import '../../widgets/canvas/agent_canvas.dart';
@@ -454,7 +454,33 @@ class _HubScreenState extends ConsumerState<HubScreen>
       child: Focus(
         canRequestFocus: false,
         skipTraversal: true,
-        child: Column(
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            _buildDesktopBody(isConnected),
+            // View toggle rendered as a "notch" that droops from the title
+            // bar into the content. Skipped when disconnected — there's only
+            // the Office tab available, so a switcher would be pointless.
+            if (isConnected)
+              Positioned(
+                top: 46, // 48px title bar − 2px so the notch visually merges
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: _NotchViewToggle(
+                    viewIndex: _viewIndex,
+                    onChanged: (i) => setState(() => _viewIndex = i),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDesktopBody(bool isConnected) {
+    return Column(
           children: [
             // Title bar
             _buildTitleBar(isConnected),
@@ -540,9 +566,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
               SizedBox(height: _debugHeight, child: const DebugConsole()),
             ],
           ],
-        ),
-      ),
-    );
+        );
   }
 
   Widget _buildMobileLayout(bool isConnected) {
@@ -702,7 +726,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
       (Icons.chat_outlined, 'Чат'),
       (Icons.grid_view_rounded, 'Офіс'),
       if (isConnected) (Icons.dashboard_outlined, 'Дошка'),
-      if (isConnected) (Icons.storefront_outlined, 'Крамниця'),
+      if (isConnected) (Icons.storefront_outlined, 'Ринок'),
     ];
 
     final tc = context.appColors;
@@ -820,18 +844,9 @@ class _HubScreenState extends ConsumerState<HubScreen>
           // Currency display (server-dependent)
           if (isConnected)
             _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
-          if (isConnected)
-            const SizedBox(width: 12),
-          // View toggle: Canvas / Board / Shop
-          _ViewToggle(
-            viewIndex: _viewIndex,
-            onChanged: (i) => setState(() => _viewIndex = i),
-            showServerTabs: isConnected,
-          ),
-          if (isConnected)
-            const SizedBox(width: 8)
-          else
-            const SizedBox(width: 8),
+          // The Office / Board / Shop switcher is rendered as a notch that
+          // droops below the title bar — see _buildDesktopLayout's Stack.
+          const SizedBox(width: 8),
           // Games quick-launch (visible when pinned from inside the game)
           if (ref.watch(settingsProvider).showArkanoidButton)
             Padding(
@@ -911,7 +926,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
   Widget _buildIconTrail() {
     if (_iconPath.length < 2) return const SizedBox.shrink();
     const iconSize = 24.0;
-    const trailStep = 14.0;
+    final script = ref.read(settingsProvider).logoPathScript;
+    final trailStep = (script == null || script.isEmpty)
+        ? kDefaultTrailStep
+        : resolveLogoPathStamp(script);
 
     final raw = _iconMoveCtrl.value.clamp(0.0, 1.0);
     final segments = _iconPath.length - 1;
@@ -1136,57 +1154,70 @@ class _DeviceDeployButtonState extends State<_DeviceDeployButton> {
   }
 }
 
-class _ViewToggle extends StatelessWidget {
+/// View switcher rendered as a "notch" drooping from the bottom of the title
+/// bar — shares the title bar's fill colour, has rounded bottom corners, and
+/// casts a soft shadow to separate itself from the content below.
+class _NotchViewToggle extends StatelessWidget {
   final int viewIndex;
   final ValueChanged<int> onChanged;
-  final bool showServerTabs;
 
-  const _ViewToggle({
+  const _NotchViewToggle({
     required this.viewIndex,
     required this.onChanged,
-    this.showServerTabs = true,
   });
 
-  static const _allItems = <(IconData, String)>[
+  static const _items = <(IconData, String)>[
     (Icons.grid_view_rounded, 'Офіс'),
     (Icons.dashboard_outlined, 'Дошка'),
-    (Icons.storefront_outlined, 'Крамниця'),
+    (Icons.storefront_outlined, 'Ринок'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final items = showServerTabs
-        ? _allItems
-        : [_allItems[0]]; // Only Office without server
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (int i = 0; i < items.length; i++)
-            _toggleItem(
-              icon: items[i].$1,
-              label: items[i].$2,
-              isActive: viewIndex == i,
-              onTap: viewIndex == i ? null : () => onChanged(i),
-              isFirst: i == 0,
-              isLast: i == items.length - 1,
+    final tc = context.appColors;
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        // Top flush with the title bar, bottom droops into content.
+        decoration: BoxDecoration(
+          color: tc.surface,
+          borderRadius: const BorderRadius.vertical(
+            bottom: Radius.circular(14),
+          ),
+          border: Border(
+            left: BorderSide(color: tc.divider),
+            right: BorderSide(color: tc.divider),
+            bottom: BorderSide(color: tc.divider),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
-        ],
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (int i = 0; i < _items.length; i++)
+              _notchItem(
+                icon: _items[i].$1,
+                label: _items[i].$2,
+                isActive: viewIndex == i,
+                onTap: viewIndex == i ? null : () => onChanged(i),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _toggleItem({
+  Widget _notchItem({
     required IconData icon,
     required String label,
     required bool isActive,
-    required bool isFirst,
-    required bool isLast,
     VoidCallback? onTap,
   }) {
     const accent = Color(0xFF00C0D1);
@@ -1196,31 +1227,29 @@ class _ViewToggle extends StatelessWidget {
         cursor: isActive ? SystemMouseCursors.basic : SystemMouseCursors.click,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: isActive
                 ? accent.withValues(alpha: 0.15)
                 : Colors.transparent,
-            borderRadius: BorderRadius.horizontal(
-              left: isFirst ? const Radius.circular(5) : Radius.zero,
-              right: isLast ? const Radius.circular(5) : Radius.zero,
-            ),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
                 icon,
-                size: 13,
-                color: isActive ? accent : Colors.white.withValues(alpha: 0.3),
+                size: 14,
+                color: isActive ? accent : Colors.white.withValues(alpha: 0.4),
               ),
-              const SizedBox(width: 4),
+              const SizedBox(width: 5),
               Text(
                 label,
                 style: TextStyle(
                   color: isActive
                       ? accent
-                      : Colors.white.withValues(alpha: 0.3),
+                      : Colors.white.withValues(alpha: 0.4),
                   fontSize: 11,
                   fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
                 ),

@@ -9,9 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/agent_message.dart';
 import '../models/agent_trait.dart';
+import '../models/game_economy.dart';
 import '../services/agent_ws_service.dart';
 import '../services/chat_persistence_service.dart';
 import '../services/server_process_service.dart';
+import 'game_economy_provider.dart';
 import 'settings_provider.dart';
 
 // ─── Server Process ─────────────────────────────────────────────────────────
@@ -26,6 +28,14 @@ final wsServiceProvider = Provider<AgentWsService>((ref) {
   final service = AgentWsService();
   ref.onDispose(() => service.dispose());
   return service;
+});
+
+/// Side-effect provider: pushes the user's current nickname into the ws service
+/// whenever it changes. The ws service re-sends `client_info` on every reconnect,
+/// so mounting this provider once (at app root) is enough to keep identity in sync.
+final clientIdentityProvider = Provider<void>((ref) {
+  final nickname = ref.watch(gameEconomyProvider.select((g) => g.nickname));
+  ref.read(wsServiceProvider).setIdentity(nickname: nickname);
 });
 
 // ─── Connection Status ───────────────────────────────────────────────────────
@@ -97,7 +107,18 @@ final tunnelUrlProvider = Provider<String?>((ref) {
 
 // ─── Selected agent ──────────────────────────────────────────────────────
 
-final selectedAgentProvider = StateProvider<String>((ref) => 'manager');
+/// The instanceId currently focused in the chat UI.
+///
+/// Default picks the first hired manager instance so the user always starts
+/// pointed at their coordinator. Falls back to `'manager#1'` for the very
+/// first launch before any state is seeded.
+final selectedAgentProvider = StateProvider<String>((ref) {
+  final agents = ref.watch(gameEconomyProvider.select((g) => g.agents));
+  for (final a in agents.values) {
+    if (a.roleType == 'manager') return a.instanceId;
+  }
+  return 'manager#1';
+});
 
 // ─── Bypass permissions toggle ───────────────────────────────────────────
 
@@ -413,18 +434,41 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
   @override
   Map<String, AgentState> build() {
     final ws = ref.watch(wsServiceProvider);
+
+    // Derive the hired roster from the local game state — it's the source of
+    // truth for who's on the team. Server messages then layer status on top.
+    final gameAgents = ref.watch(gameEconomyProvider.select((g) => g.agents));
+
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() => _sub?.cancel());
-    return {};
+
+    final initial = <String, AgentState>{};
+    for (final a in gameAgents.values) {
+      final role = roleCatalogFor(a.roleType);
+      initial[a.instanceId] = AgentState(
+        info: AgentInfo(
+          id: a.instanceId,
+          name: a.nickname,
+          role: role?.role ?? a.roleType,
+          model: 'auto',
+          roleType: a.roleType,
+        ),
+      );
+    }
+    return initial;
   }
 
   void _onMessage(ServerMessage msg) {
     switch (msg) {
       case InitMessage(:final agents):
-        state = {
-          for (final a in agents) a.id: AgentState(info: a),
-        };
+        // Server-side init is informational now — only adopt entries that
+        // aren't already in state (game state drives the roster).
+        final merged = {...state};
+        for (final a in agents) {
+          merged.putIfAbsent(a.id, () => AgentState(info: a));
+        }
+        state = merged;
 
       case AgentStatusMessage(:final agentId, :final status, :final tools):
         final current = state[agentId];
@@ -529,14 +573,30 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
   }
 
   String _resolveAgentId(String raw) {
-    // Try exact match first
+    // Exact instanceId match wins.
     if (state.containsKey(raw)) return raw;
-    // Try fuzzy match
+
+    // If [raw] looks like a bare roleType, return the first hired instance of
+    // that role. Handles server messages that use roleType (e.g. SDK sub-agent
+    // launches) rather than a concrete instanceId.
+    for (final entry in state.entries) {
+      if (entry.value.info.roleType == raw) return entry.key;
+    }
+
+    // Fuzzy fallback: substring match on keys.
     final lower = raw.toLowerCase();
     for (final key in state.keys) {
-      if (lower.contains(key) || key.contains(lower)) return key;
+      final keyLower = key.toLowerCase();
+      if (lower.contains(keyLower) || keyLower.contains(lower)) {
+        return key;
+      }
     }
-    return 'tech-lead';
+
+    // Last resort — first tech-lead instance, or just [raw].
+    for (final entry in state.entries) {
+      if (entry.value.info.roleType == 'tech-lead') return entry.key;
+    }
+    return raw;
   }
 
   AgentStatus _toolNameToStatus(String toolName) => switch (toolName) {

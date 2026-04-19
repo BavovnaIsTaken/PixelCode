@@ -1,7 +1,7 @@
 /// "Party counter" — RPG-style connected devices indicator for the title bar.
 ///
 /// Shows a pixel-person icon + device count. Clicking opens a popover with
-/// device details (hostname, platform, duration, role).
+/// devices grouped into "This device" (server host machine) and "Other devices".
 library;
 
 import 'dart:async';
@@ -113,10 +113,10 @@ class _PartyCounterState extends ConsumerState<PartyCounter>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Pixel person icon
-                  _PixelPersonIcon(
+                  Icon(
+                    Icons.cable,
+                    size: 14,
                     color: isMultiplayer ? activeColor : dimColor,
-                    size: 12,
                   ),
                   // Count (only when 2+)
                   if (showCount) ...[
@@ -141,56 +141,6 @@ class _PartyCounterState extends ConsumerState<PartyCounter>
       ),
     );
   }
-}
-
-// ─── Pixel person icon (12x12 hand-drawn) ────────────────────────────────────
-
-class _PixelPersonIcon extends StatelessWidget {
-  const _PixelPersonIcon({required this.color, required this.size});
-
-  final Color color;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: CustomPaint(
-        size: Size(size, size),
-        painter: _PixelPersonPainter(color: color),
-      ),
-    );
-  }
-}
-
-class _PixelPersonPainter extends CustomPainter {
-  _PixelPersonPainter({required this.color});
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = color;
-    final px = size.width / 8; // 8x8 grid
-
-    // Head (2x2 centered)
-    canvas.drawRect(Rect.fromLTWH(3 * px, 0, 2 * px, 2 * px), p);
-    // Neck
-    canvas.drawRect(Rect.fromLTWH(3.5 * px, 2 * px, px, px), p);
-    // Shoulders + body (4 wide)
-    canvas.drawRect(Rect.fromLTWH(2 * px, 3 * px, 4 * px, px), p);
-    // Torso (2 wide centered)
-    canvas.drawRect(Rect.fromLTWH(3 * px, 4 * px, 2 * px, 2 * px), p);
-    // Arms
-    canvas.drawRect(Rect.fromLTWH(1 * px, 3 * px, px, 2 * px), p);
-    canvas.drawRect(Rect.fromLTWH(6 * px, 3 * px, px, 2 * px), p);
-    // Legs
-    canvas.drawRect(Rect.fromLTWH(3 * px, 6 * px, px, 2 * px), p);
-    canvas.drawRect(Rect.fromLTWH(4 * px, 6 * px, px, 2 * px), p);
-  }
-
-  @override
-  bool shouldRepaint(_PixelPersonPainter old) => old.color != color;
 }
 
 // ─── Devices popover ─────────────────────────────────────────────────────────
@@ -234,8 +184,18 @@ class _DevicesPopoverState extends ConsumerState<_DevicesPopover>
   @override
   Widget build(BuildContext context) {
     final clients = ref.watch(connectedDevicesProvider);
-    final ownId = ref.read(connectedDevicesProvider.notifier).ownClientId;
+    final notifier = ref.read(connectedDevicesProvider.notifier);
+    final ownId = notifier.ownClientId;
+    final serverInfo = ref.watch(serverInfoProvider);
     final tc = context.appColors;
+
+    final hostMachineDevices = clients.where((c) => c.isHostMachine).toList();
+    final remoteDevices = clients.where((c) => !c.isHostMachine).toList()
+      ..sort((a, b) {
+        if (a.clientId == ownId) return -1;
+        if (b.clientId == ownId) return 1;
+        return 0;
+      });
 
     return Stack(
       children: [
@@ -265,7 +225,7 @@ class _DevicesPopoverState extends ConsumerState<_DevicesPopover>
             child: Material(
               color: Colors.transparent,
               child: Container(
-                width: 280,
+                width: 300,
                 decoration: BoxDecoration(
                   color: tc.surface,
                   borderRadius: BorderRadius.circular(8),
@@ -308,12 +268,39 @@ class _DevicesPopoverState extends ConsumerState<_DevicesPopover>
                       ),
                     ),
                     Container(height: 1, color: tc.divider),
-                    // Client rows
-                    for (final client in clients)
-                      _ClientRow(
-                        client: client,
-                        isOwn: client.clientId == ownId,
+                    // Host machine section
+                    if (hostMachineDevices.isNotEmpty ||
+                        serverInfo != null) ...[
+                      _SectionHeader(
+                        label: 'Цей пристрій (сервер)',
+                        colors: tc,
                       ),
+                      if (hostMachineDevices.isEmpty && serverInfo != null)
+                        _ServerOnlyRow(
+                          deviceName: serverInfo.hostname,
+                          colors: tc,
+                        )
+                      else
+                        for (final client in hostMachineDevices)
+                          _ClientRow(
+                            client: client,
+                            isOwn: client.clientId == ownId,
+                            showServerBadge: true,
+                          ),
+                    ],
+                    // Remote devices section
+                    if (remoteDevices.isNotEmpty) ...[
+                      _SectionHeader(
+                        label: 'Інші пристрої',
+                        colors: tc,
+                      ),
+                      for (final client in remoteDevices)
+                        _ClientRow(
+                          client: client,
+                          isOwn: client.clientId == ownId,
+                          showServerBadge: false,
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -325,13 +312,84 @@ class _DevicesPopoverState extends ConsumerState<_DevicesPopover>
   }
 }
 
+// ─── Section header ──────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.label, required this.colors});
+
+  final String label;
+  final ThemeColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          color: colors.textLow,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          fontFamily: 'monospace',
+          letterSpacing: 0.8,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Server-only row (host machine runs server but no loopback client) ───────
+
+class _ServerOnlyRow extends StatelessWidget {
+  const _ServerOnlyRow({required this.deviceName, required this.colors});
+
+  final String deviceName;
+  final ThemeColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Row(
+        children: [
+          Icon(Icons.dns_outlined, size: 14, color: colors.textLow),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              deviceName.isEmpty ? 'Сервер' : deviceName,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: colors.textMedium, fontSize: 12),
+            ),
+          ),
+          Text(
+            'сервер',
+            style: TextStyle(
+              color: colors.textLow,
+              fontSize: 10,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ─── Single client row ───────────────────────────────────────────────────────
 
 class _ClientRow extends StatelessWidget {
-  const _ClientRow({required this.client, required this.isOwn});
+  const _ClientRow({
+    required this.client,
+    required this.isOwn,
+    required this.showServerBadge,
+  });
 
   final ConnectedClient client;
   final bool isOwn;
+
+  /// If true, this row is in the "host machine" section and gets a
+  /// "сервер + клієнт" badge instead of the usual platform label.
+  final bool showServerBadge;
 
   IconData get _platformIcon => switch (client.platform) {
         'macos' || 'linux' || 'windows' => Icons.desktop_mac_outlined,
@@ -341,16 +399,13 @@ class _ClientRow extends StatelessWidget {
         _ => Icons.devices_other,
       };
 
-  String get _roleLabel => client.isLocal ? 'host' : 'remote';
-
   String get _durationLabel {
     final diff = DateTime.now().difference(client.connectedAt);
     if (diff.inSeconds < 60) return 'щойно';
     if (diff.inMinutes < 60) return '${diff.inMinutes}хв';
     final h = diff.inHours;
     final m = diff.inMinutes % 60;
-    // ignore: unnecessary_brace_in_string_interps
-    if (m == 0) return '${h}год';
+    if (m == 0) return '$hгод';
     return '$hгод $mхв';
   }
 
@@ -358,6 +413,11 @@ class _ClientRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final tc = context.appColors;
     const accent = Color(0xFF4ADE80);
+
+    final primary = client.displayName;
+    final showSubtitle =
+        client.nickname.isNotEmpty && client.deviceName.isNotEmpty &&
+            client.nickname != client.deviceName;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -370,39 +430,53 @@ class _ClientRow extends StatelessWidget {
         ),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Platform icon
           Icon(
             _platformIcon,
             size: 14,
             color: isOwn ? tc.textHigh : tc.textLow,
           ),
           const SizedBox(width: 8),
-          // Hostname
           Expanded(
-            child: Text(
-              client.hostname,
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
-              style: TextStyle(
-                color: isOwn ? tc.textHigh : tc.textMedium,
-                fontSize: 12,
-                fontWeight: isOwn ? FontWeight.w600 : FontWeight.normal,
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  primary,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: isOwn ? tc.textHigh : tc.textMedium,
+                    fontSize: 12,
+                    fontWeight: isOwn ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+                if (showSubtitle)
+                  Text(
+                    client.deviceName,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: tc.textLow,
+                      fontSize: 10,
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(width: 6),
-          // Role badge
-          Text(
-            _roleLabel,
-            style: TextStyle(
-              color: tc.textLow,
-              fontSize: 10,
-              fontFamily: 'monospace',
+          if (showServerBadge)
+            Text(
+              'сервер + клієнт',
+              style: TextStyle(
+                color: accent.withValues(alpha: 0.9),
+                fontSize: 10,
+                fontFamily: 'monospace',
+              ),
             ),
-          ),
           const SizedBox(width: 8),
-          // Duration
           Text(
             _durationLabel,
             style: TextStyle(

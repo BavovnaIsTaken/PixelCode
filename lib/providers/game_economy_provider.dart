@@ -21,6 +21,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
   Timer? _saveTimer;
   Timer? _passiveIncomeTimer;
 
+  /// Agents currently running work, tracked locally from ws messages so
+  /// passive income can decide when to pay out without reading agentsProvider
+  /// (which would create a provider cycle).
+  final Set<String> _activeAgentIds = {};
+
   @override
   GameState build() {
     final prefs = ref.read(sharedPrefsProvider);
@@ -81,39 +86,69 @@ class GameEconomyNotifier extends Notifier<GameState> {
     });
   }
 
-  /// Send current game state to the server so it knows which agents
-  /// are hired, their hardware (→ model), and skill levels (→ prompt).
+  /// Send current game state to the server.
+  ///
+  /// Serializes every hired instance into the `instances` map the server
+  /// expects (instanceId → { roleType, nickname, hardware, skills }).
   void _syncToServer() {
     final gs = state;
-    final hiredAgents = gs.hiredAgentIds;
-    final agentHardware = <String, int>{};
-    final agentSkills = <String, Map<String, int>>{};
+    final instances = <String, Map<String, dynamic>>{};
 
     for (final entry in gs.agents.entries) {
-      if (!entry.value.isHired) continue;
-      agentHardware[entry.key] = entry.value.hardware.index;
-      agentSkills[entry.key] = {
-        for (final s in entry.value.skills.entries)
-          s.key.index.toString(): s.value,
+      final a = entry.value;
+      instances[entry.key] = {
+        'roleType': a.roleType,
+        'nickname': a.nickname,
+        'hardware': a.hardware.index,
+        'skills': {
+          for (final s in a.skills.entries) s.key.index.toString(): s.value,
+        },
       };
     }
 
     ref.read(wsServiceProvider).setGameState(
-      hiredAgents: hiredAgents,
-      agentHardware: agentHardware,
-      agentSkills: agentSkills,
-      fullState: gs.encode(),
-      stateUpdatedAt: gs.updatedAt,
-    );
+          instances: instances,
+          fullState: gs.encode(),
+          stateUpdatedAt: gs.updatedAt,
+        );
   }
 
   void _onMessage(ServerMessage msg) {
+    _trackActivity(msg);
     if (msg is ResultMessage) {
       _onTaskCompleted(msg);
     } else if (msg is GameStateSyncMessage) {
       _onGameStateSync(msg);
     } else if (msg is DungeonCompleteMessage) {
       _onDungeonComplete(msg);
+    }
+  }
+
+  /// Mirror the subset of AgentsNotifier's active/idle logic needed to decide
+  /// whether passive income should be paid, without crossing provider
+  /// boundaries.
+  void _trackActivity(ServerMessage msg) {
+    switch (msg) {
+      case AgentStatusMessage(:final agentId, :final status):
+        if (status == AgentStatus.idle) {
+          _activeAgentIds.remove(agentId);
+        } else {
+          _activeAgentIds.add(agentId);
+        }
+      case SubagentStartMessage(:final agentId):
+        _activeAgentIds.add(agentId);
+      case TaskDispatchedMessage(:final agentId):
+        _activeAgentIds.add(agentId);
+      case ToolUseMessage(:final agentId):
+        _activeAgentIds.add(agentId);
+      case SubagentStopMessage(:final agentId):
+        _activeAgentIds.remove(agentId);
+      case SubagentResultMessage(:final agentId):
+        _activeAgentIds.remove(agentId);
+      case ResultMessage():
+        _activeAgentIds.remove('manager');
+      default:
+        break;
     }
   }
 
@@ -154,9 +189,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   void _passiveIncome() {
-    final agents = ref.read(agentsProvider);
-    final hasActiveAgents = agents.values.any((a) => a.isActive);
-    if (!hasActiveAgents) return;
+    if (_activeAgentIds.isEmpty) return;
 
     // 10₲ per minute while agents are working
     state = state.copyWith(
@@ -169,22 +202,36 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
   // ─── Hiring ────────────────────────────────────────────────────────────
 
-  bool canHire(String agentId) {
-    final agent = state.agents[agentId];
-    if (agent == null || agent.isHired) return false;
+  /// Whether a NEW instance of [roleType] can currently be hired.
+  ///
+  /// Checks: role exists in catalog, office has free room, singleton roles
+  /// aren't already filled, and the player can afford it.
+  bool canHire(String roleType) {
+    final role = roleCatalogFor(roleType);
+    if (role == null) return false;
     if (!state.canHireMore) return false;
-    final catalog = catalogFor(agentId);
-    if (catalog == null) return false;
-    return state.grymni >= catalog.hireCost;
+    if (role.singleton && state.roleCount(roleType) >= 1) return false;
+    return state.grymni >= role.hireCost;
   }
 
-  void hireAgent(String agentId) {
-    if (!canHire(agentId)) return;
-    final catalog = catalogFor(agentId)!;
-    final cost = catalog.hireCost;
+  /// Hire a new instance of [roleType]. Auto-generates instanceId + nickname.
+  /// Returns the new instanceId on success, or null if hiring isn't allowed.
+  String? hireAgent(String roleType) {
+    if (!canHire(roleType)) return null;
+    final role = roleCatalogFor(roleType)!;
+    final cost = role.hireCost;
+
+    final instanceId = nextInstanceId(roleType, state.agents.keys);
+    final ordinal = state.roleCount(roleType) + 1;
 
     final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[agentId] = updated[agentId]!.copyWith(isHired: true);
+    updated[instanceId] = AgentGameData(
+      instanceId: instanceId,
+      roleType: roleType,
+      nickname: defaultNicknameFor(role, ordinal),
+      hardware: HardwareTier.oldLaptop,
+      skills: {for (final s in SkillType.values) s: 1},
+    );
 
     state = state.copyWith(
       grymni: state.grymni - cost,
@@ -193,31 +240,51 @@ class GameEconomyNotifier extends Notifier<GameState> {
     );
     _scheduleSave();
     _syncToServer();
+    return instanceId;
   }
 
-  void fireAgent(String agentId) {
-    final agent = state.agents[agentId];
-    if (agent == null || !agent.isHired) return;
-    // Can't fire starter agents
-    final catalog = catalogFor(agentId);
-    if (catalog != null && catalog.startsHired) return;
+  /// Fire a specific instance by instanceId. Refunds 50% of the role's hire cost.
+  void fireAgent(String instanceId) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return;
 
-    final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[agentId] = updated[agentId]!.copyWith(isHired: false);
+    final role = roleCatalogFor(agent.roleType);
+    // Keep at least one manager around so the team can still coordinate.
+    if (role != null && role.singleton && state.roleCount(agent.roleType) <= 1) {
+      return;
+    }
 
-    // Refund 50% of hire cost
-    final refund = (catalog?.hireCost ?? 0) ~/ 2;
+    final updated = Map<String, AgentGameData>.from(state.agents)
+      ..remove(instanceId);
+
+    final refund = (role?.hireCost ?? 0) ~/ 2;
 
     state = state.copyWith(
       grymni: state.grymni + refund,
       agents: updated,
     );
 
-    // If the fired agent was selected, switch to manager
-    if (ref.read(selectedAgentProvider) == agentId) {
-      ref.read(selectedAgentProvider.notifier).state = 'manager';
+    // If the fired instance was selected, switch back to a manager instance.
+    if (ref.read(selectedAgentProvider) == instanceId) {
+      final managers = state.instancesOfRole('manager');
+      ref.read(selectedAgentProvider.notifier).state =
+          managers.isNotEmpty ? managers.first.instanceId : 'manager';
     }
 
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  /// Rename an instance's nickname. Free within the game (no currency cost).
+  void renameInstance(String instanceId, String newNickname) {
+    final agent = state.agents[instanceId];
+    final trimmed = newNickname.trim();
+    if (agent == null || trimmed.isEmpty || trimmed == agent.nickname) return;
+
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = agent.copyWith(nickname: trimmed);
+
+    state = state.copyWith(agents: updated);
     _scheduleSave();
     _syncToServer();
   }
@@ -225,9 +292,9 @@ class GameEconomyNotifier extends Notifier<GameState> {
   // ─── Skills ────────────────────────────────────────────────────────────
 
   /// Returns true if the agent has BOTH enough XP (from dungeons) AND grymni to level up.
-  bool canUpgradeSkill(String agentId, SkillType skill) {
-    final agent = state.agents[agentId];
-    if (agent == null || !agent.isHired) return false;
+  bool canUpgradeSkill(String instanceId, SkillType skill) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return false;
     final currentLevel = agent.skills[skill] ?? 1;
     if (currentLevel >= 10) return false;
     final hasGrymni = state.grymni >= skill.upgradeCost(currentLevel);
@@ -237,9 +304,9 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   /// True when the XP gate is already met but grymni is insufficient.
-  bool hasXpButNotGrymni(String agentId, SkillType skill) {
-    final agent = state.agents[agentId];
-    if (agent == null || !agent.isHired) return false;
+  bool hasXpButNotGrymni(String instanceId, SkillType skill) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return false;
     final currentLevel = agent.skills[skill] ?? 1;
     if (currentLevel >= 10) return false;
     final currentXp = agent.skillXp[skill] ?? 0;
@@ -247,9 +314,9 @@ class GameEconomyNotifier extends Notifier<GameState> {
         state.grymni < skill.upgradeCost(currentLevel);
   }
 
-  void upgradeSkill(String agentId, SkillType skill) {
-    if (!canUpgradeSkill(agentId, skill)) return;
-    final agent = state.agents[agentId]!;
+  void upgradeSkill(String instanceId, SkillType skill) {
+    if (!canUpgradeSkill(instanceId, skill)) return;
+    final agent = state.agents[instanceId]!;
     final currentLevel = agent.skills[skill] ?? 1;
     final cost = skill.upgradeCost(currentLevel);
     final threshold = agent.xpForNextLevel(skill);
@@ -263,7 +330,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
     newXp[skill] = (currentXp - threshold).clamp(0, 999);
 
     final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[agentId] = agent.copyWith(skills: newSkills, skillXp: newXp);
+    updated[instanceId] = agent.copyWith(skills: newSkills, skillXp: newXp);
 
     state = state.copyWith(
       grymni: state.grymni - cost,
@@ -289,10 +356,10 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _syncToServer();
   }
 
-  /// Send a dungeon challenge to the server for the given agent + skill.
-  void startDungeon(String agentId, SkillType skill, int difficulty) {
+  /// Send a dungeon challenge to the server for the given agent instance + skill.
+  void startDungeon(String instanceId, SkillType skill, int difficulty) {
     ref.read(wsServiceProvider).startDungeon(
-      agentId: agentId,
+      agentId: instanceId,
       skillType: skill.index,
       difficulty: difficulty.clamp(1, 3),
     );
@@ -300,21 +367,21 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
   // ─── Hardware ──────────────────────────────────────────────────────────
 
-  bool canUpgradeHardware(String agentId) {
-    final agent = state.agents[agentId];
-    if (agent == null || !agent.isHired) return false;
+  bool canUpgradeHardware(String instanceId) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return false;
     final next = agent.hardware.nextTier;
     if (next == null) return false;
     return state.grymni >= next.cost;
   }
 
-  void upgradeHardware(String agentId) {
-    if (!canUpgradeHardware(agentId)) return;
-    final agent = state.agents[agentId]!;
+  void upgradeHardware(String instanceId) {
+    if (!canUpgradeHardware(instanceId)) return;
+    final agent = state.agents[instanceId]!;
     final next = agent.hardware.nextTier!;
 
     final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[agentId] = agent.copyWith(hardware: next);
+    updated[instanceId] = agent.copyWith(hardware: next);
 
     state = state.copyWith(
       grymni: state.grymni - next.cost,
@@ -330,12 +397,14 @@ class GameEconomyNotifier extends Notifier<GameState> {
   bool canUpgradeOffice() {
     final next = state.officeLevel.nextLevel;
     if (next == null) return false;
+    if (next.isWipComingSoon) return false;
     return state.grymni >= next.upgradeCost;
   }
 
   void upgradeOffice() {
     if (!canUpgradeOffice()) return;
     final next = state.officeLevel.nextLevel!;
+    if (next.isWipComingSoon) return;
     final cost = next.upgradeCost;
 
     state = state.copyWith(
@@ -545,6 +614,42 @@ class GameEconomyNotifier extends Notifier<GameState> {
       row: newRow,
     );
     state = state.copyWith(placedFurniture: placed);
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  // ─── Office rooms (Build Mode) ────────────────────────────────────────────
+
+  bool canPlaceRoom(RoomType type) => state.grymni >= type.cost;
+  int roomCount(RoomType type) =>
+      state.placedRooms.where((r) => r.type == type).length;
+  bool isRoomLimitReached(RoomType type) =>
+      roomCount(type) >= type.maxPerOffice;
+
+  void placeRoom(RoomType type, int col, int row) {
+    if (!canPlaceRoom(type)) return;
+    if (isRoomLimitReached(type)) return;
+    final id = 'room_${DateTime.now().microsecondsSinceEpoch}';
+    final rooms = List<PlacedRoom>.from(state.placedRooms)
+      ..add(PlacedRoom(id: id, type: type, col: col, row: row));
+    state = state.copyWith(
+      grymni: state.grymni - type.cost,
+      totalSpent: state.totalSpent + type.cost,
+      placedRooms: rooms,
+    );
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  void removeRoom(String roomId) {
+    final idx = state.placedRooms.indexWhere((r) => r.id == roomId);
+    if (idx < 0) return;
+    final room = state.placedRooms[idx];
+    final rooms = List<PlacedRoom>.from(state.placedRooms)..removeAt(idx);
+    state = state.copyWith(
+      grymni: state.grymni + room.type.cost ~/ 2,
+      placedRooms: rooms,
+    );
     _scheduleSave();
     _syncToServer();
   }

@@ -50,10 +50,10 @@ extension OfficeLevelExt on OfficeLevel {
 
   int get maxAgents => switch (this) {
         OfficeLevel.garage => 3,
-        OfficeLevel.smallOffice => 5,
-        OfficeLevel.modernOffice => 7,
-        OfficeLevel.techHub => 7,
-        OfficeLevel.campus => 7,
+        OfficeLevel.smallOffice => 6,
+        OfficeLevel.modernOffice => 12,
+        OfficeLevel.techHub => 25,
+        OfficeLevel.campus => 100,
       };
 
   double get speedModifier => switch (this) {
@@ -67,10 +67,30 @@ extension OfficeLevelExt on OfficeLevel {
   int get upgradeCost => switch (this) {
         OfficeLevel.garage => 0,
         OfficeLevel.smallOffice => 1000,
-        OfficeLevel.modernOffice => 5000,
-        OfficeLevel.techHub => 20000,
-        OfficeLevel.campus => 100000,
+        OfficeLevel.modernOffice => 8000,
+        OfficeLevel.techHub => 50000,
+        OfficeLevel.campus => 500000,
       };
+
+  int get gridCols => switch (this) {
+        OfficeLevel.garage => 20,
+        OfficeLevel.smallOffice => 26,
+        OfficeLevel.modernOffice => 34,
+        OfficeLevel.techHub => 44,
+        OfficeLevel.campus => 70,
+      };
+
+  int get gridRows => switch (this) {
+        OfficeLevel.garage => 14,
+        OfficeLevel.smallOffice => 16,
+        OfficeLevel.modernOffice => 20,
+        OfficeLevel.techHub => 26,
+        OfficeLevel.campus => 40,
+      };
+
+  /// True for tiers that are gated behind "В розробці" — visible in the
+  /// upgrade UI but not purchasable yet.
+  bool get isWipComingSoon => this == OfficeLevel.campus;
 
   OfficeLevel? get nextLevel => switch (this) {
         OfficeLevel.garage => OfficeLevel.smallOffice,
@@ -180,17 +200,32 @@ extension SkillTypeExt on SkillType {
 
 // ─── Agent game data ───────────────────────────────────────────────────────
 
+/// A single hired agent *instance*.
+///
+/// Multiple instances of the same [roleType] can coexist (e.g. two coders).
+/// Presence in [GameState.agents] implies "hired" — there is no separate flag.
 class AgentGameData {
-  final String agentId;
-  final bool isHired;
+  /// Stable unique identifier, e.g. "coder#1", "coder#2". Used as the map key
+  /// in [GameState.agents] and the address for chat/dispatch.
+  final String instanceId;
+
+  /// The role this instance belongs to (e.g. "coder", "reviewer"). Links to
+  /// [roleCatalog] for behavior templates, salary, and passives.
+  final String roleType;
+
+  /// Player-visible display name (e.g. "Майстер", "Майстер 2"). Editable.
+  final String nickname;
+
   final HardwareTier hardware;
   final Map<SkillType, int> skills;
+
   /// XP accumulated towards next level for each skill.
   final Map<SkillType, int> skillXp;
 
   const AgentGameData({
-    required this.agentId,
-    this.isHired = false,
+    required this.instanceId,
+    required this.roleType,
+    required this.nickname,
     this.hardware = HardwareTier.oldLaptop,
     this.skills = const {},
     this.skillXp = const {},
@@ -207,22 +242,24 @@ class AgentGameData {
   int xpForNextLevel(SkillType skill) => (skills[skill] ?? 1) * 100;
 
   AgentGameData copyWith({
-    bool? isHired,
+    String? nickname,
     HardwareTier? hardware,
     Map<SkillType, int>? skills,
     Map<SkillType, int>? skillXp,
   }) =>
       AgentGameData(
-        agentId: agentId,
-        isHired: isHired ?? this.isHired,
+        instanceId: instanceId,
+        roleType: roleType,
+        nickname: nickname ?? this.nickname,
         hardware: hardware ?? this.hardware,
         skills: skills ?? this.skills,
         skillXp: skillXp ?? this.skillXp,
       );
 
   Map<String, dynamic> toJson() => {
-        'agentId': agentId,
-        'isHired': isHired,
+        'instanceId': instanceId,
+        'roleType': roleType,
+        'nickname': nickname,
         'hardware': hardware.index,
         'skills': {
           for (final e in skills.entries) e.key.index.toString(): e.value,
@@ -233,8 +270,9 @@ class AgentGameData {
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
-        agentId: json['agentId'] as String,
-        isHired: json['isHired'] as bool? ?? false,
+        instanceId: json['instanceId'] as String,
+        roleType: json['roleType'] as String,
+        nickname: json['nickname'] as String? ?? '',
         hardware: HardwareTier.values[json['hardware'] as int? ?? 0],
         skills: {
           for (final e
@@ -265,138 +303,211 @@ class AgentPassive {
   });
 }
 
-// ─── Agent catalog ─────────────────────────────────────────────────────────
+// ─── Role catalog ──────────────────────────────────────────────────────────
 
-class AgentCatalogEntry {
-  final String agentId;
-  final String name;
+/// One entry per role type. Defines cost to hire a NEW instance of that role,
+/// default nickname, passive trait, and the specialization blurb.
+class RoleCatalogEntry {
+  /// Role type identifier, e.g. "coder", "manager", "reviewer".
+  final String roleType;
+
+  /// Base display name — applied to the first instance (later instances get " 2", " 3"…).
+  final String baseName;
+
+  /// Ukrainian role label (e.g. "Розробник").
   final String role;
-  final String description;
+
+  /// Specialization — what this role is good at (Ukrainian blurb for UI).
+  final String specialization;
+
+  /// Weaknesses — what this role is bad at (Ukrainian blurb for UI).
+  final String weakness;
+
+  /// Cost (₲) to hire each new instance.
   final int hireCost;
+
+  /// Salary per instance (currently informational).
   final int salary;
-  final bool startsHired;
+
+  /// Whether a single instance of this role is expected (manager is singleton).
+  final bool singleton;
+
+  /// Number of instances of this role seeded into a fresh game state.
+  /// Defaults to 0; override for starter roles (manager, coder).
+  final int defaultSeedCount;
+
   final AgentPassive passive;
 
-  const AgentCatalogEntry({
-    required this.agentId,
-    required this.name,
+  const RoleCatalogEntry({
+    required this.roleType,
+    required this.baseName,
     required this.role,
-    required this.description,
+    required this.specialization,
+    required this.weakness,
     required this.hireCost,
     required this.salary,
     required this.passive,
-    this.startsHired = false,
+    this.singleton = false,
+    this.defaultSeedCount = 0,
   });
 }
 
-const agentCatalog = <AgentCatalogEntry>[
-  AgentCatalogEntry(
-    agentId: 'manager',
-    name: 'Капітан',
+const roleCatalog = <RoleCatalogEntry>[
+  RoleCatalogEntry(
+    roleType: 'manager',
+    baseName: 'Капітан',
     role: 'Координатор',
-    description: 'Розподіляє задачі між командою. Без нього нікуди.',
+    specialization: 'Координує команду, розбиває задачі, розподіляє роботу.',
+    weakness: 'Не пише код сам — тільки делегує.',
     hireCost: 0,
     salary: 50,
-    startsHired: true,
+    singleton: true,
+    defaultSeedCount: 1,
     passive: AgentPassive(
       icon: '🧠',
       name: 'Tactical Mind',
       nameUk: 'Тактичний розум',
-      description: 'Оптимально розподіляє задачі — команда працює швидше коли він на чолі.',
+      description:
+          'Оптимально розподіляє задачі — команда працює швидше коли він на чолі.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'coder',
-    name: 'Майстер',
+  RoleCatalogEntry(
+    roleType: 'coder',
+    baseName: 'Майстер',
     role: 'Розробник',
-    description: 'Пише код, реалізує фічі та фіксить баги.',
+    specialization: 'Програмування — реалізація фіч, фікс багів, рефакторинг.',
+    weakness: 'Дизайн UI/UX та глибокий security-аудит — не його коник.',
     hireCost: 0,
     salary: 40,
-    startsHired: true,
+    defaultSeedCount: 1,
     passive: AgentPassive(
       icon: '⌨️',
       name: 'Speed Typing',
       nameUk: 'Швидкодрук',
-      description: 'Пише код з нелюдською швидкістю — менше помилок, більше фіч за раунд.',
+      description:
+          'Пише код з нелюдською швидкістю — менше помилок, більше фіч за раунд.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'tech-lead',
-    name: 'Архітект',
+  RoleCatalogEntry(
+    roleType: 'tech-lead',
+    baseName: 'Архітект',
     role: 'Технічний лідер',
-    description: 'Будівничий системи. Приймає технічні рішення та ревʼюїть архітектуру.',
+    specialization: 'Системна архітектура, тех-рішення, вибір бібліотек.',
+    weakness: 'Деталі low-level реалізації та pixel-perfect UI.',
     hireCost: 500,
     salary: 80,
     passive: AgentPassive(
       icon: '🏗️',
       name: 'System Vision',
       nameUk: 'Системне бачення',
-      description: 'Бачить повну картину проєкту — його архітектурні рішення економлять час.',
+      description:
+          'Бачить повну картину проєкту — його архітектурні рішення економлять час.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'reviewer',
-    name: 'Детектив',
+  RoleCatalogEntry(
+    roleType: 'reviewer',
+    baseName: 'Детектив',
     role: 'Рецензент',
-    description: 'Розслідує код, знаходить анти-патерни та приховані помилки.',
+    specialization: 'Ревʼю коду, пошук анти-патернів і прихованих багів.',
+    weakness: 'Не пише й не змінює код — тільки оглядає.',
     hireCost: 300,
     salary: 40,
     passive: AgentPassive(
       icon: '🔍',
       name: 'Bug Radar',
       nameUk: 'Радар багів',
-      description: 'Інтуїтивно відчуває приховані баги — знаходить проблеми ще до тестування.',
+      description:
+          'Інтуїтивно відчуває приховані баги — знаходить проблеми ще до тестування.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'tester',
-    name: 'Крашер',
+  RoleCatalogEntry(
+    roleType: 'tester',
+    baseName: 'Крашер',
     role: 'Контроль якості',
-    description: 'Ламає все що може зламатись — до того як це зробить користувач.',
+    specialization: 'Юніт-, віджет- та інтеграційні тести, edge-кейси.',
+    weakness: 'Архітектурні рішення й візуальний дизайн — поза зоною.',
     hireCost: 300,
     salary: 40,
     passive: AgentPassive(
       icon: '👆',
       name: 'Swipe Master',
       nameUk: 'Майстер свайпів',
-      description: 'Має особливий хист до тестування UI — свайпи, жести та анімації не вислизнуть.',
+      description:
+          'Має особливий хист до тестування UI — свайпи, жести та анімації не вислизнуть.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'security',
-    name: 'Страж',
+  RoleCatalogEntry(
+    roleType: 'security',
+    baseName: 'Страж',
     role: 'Безпека',
-    description: 'Невсипущий вартовий — аудить код на вразливості та проблеми безпеки.',
+    specialization: 'Аудит безпеки — автентифікація, шифрування, валідація.',
+    weakness: 'Не вміє в polish фіч та візуал.',
     hireCost: 800,
     salary: 60,
     passive: AgentPassive(
       icon: '🛡️',
       name: 'Firewall',
       nameUk: 'Фаєрвол',
-      description: 'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 в коді.',
+      description:
+          'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 в коді.',
     ),
   ),
-  AgentCatalogEntry(
-    agentId: 'ui-ux-designer',
-    name: 'Піксельник',
+  RoleCatalogEntry(
+    roleType: 'ui-ux-designer',
+    baseName: 'Піксельник',
     role: 'UI/UX',
-    description: 'Творець краси — малює інтерфейси піксель за пікселем.',
+    specialization: 'UI/UX — компоновки, юзабіліті, візуальна консистентність.',
+    weakness: 'Бекенд-архітектура й алгоритми — не профіль.',
     hireCost: 400,
     salary: 45,
     passive: AgentPassive(
       icon: '🎨',
       name: 'Pixel Perfect',
       nameUk: 'Ідеальний піксель',
-      description: 'Бачить кожен піксель — інтерфейси виходять бездоганними з першого разу.',
+      description:
+          'Бачить кожен піксель — інтерфейси виходять бездоганними з першого разу.',
     ),
   ),
 ];
 
-AgentCatalogEntry? catalogFor(String agentId) {
-  for (final entry in agentCatalog) {
-    if (entry.agentId == agentId) return entry;
+RoleCatalogEntry? roleCatalogFor(String roleType) {
+  for (final entry in roleCatalog) {
+    if (entry.roleType == roleType) return entry;
   }
   return null;
+}
+
+// ─── Instance-ID helpers ──────────────────────────────────────────────────
+
+/// Extract the role type from an instanceId like "coder#2" → "coder".
+/// Returns the input unchanged if there's no "#".
+String roleTypeFromInstanceId(String instanceId) {
+  final hash = instanceId.indexOf('#');
+  return hash > 0 ? instanceId.substring(0, hash) : instanceId;
+}
+
+/// Build the next available instanceId for [roleType] given the set of
+/// currently used IDs. Numbering is stable and compact: picks the lowest
+/// positive integer not already in use.
+String nextInstanceId(String roleType, Iterable<String> existingIds) {
+  final used = <int>{};
+  for (final id in existingIds) {
+    if (!id.startsWith('$roleType#')) continue;
+    final suffix = id.substring(roleType.length + 1);
+    final n = int.tryParse(suffix);
+    if (n != null) used.add(n);
+  }
+  var n = 1;
+  while (used.contains(n)) {
+    n++;
+  }
+  return '$roleType#$n';
+}
+
+/// Default nickname for the Nth instance of a role (1-indexed).
+/// First instance gets the bare [baseName], later ones get "baseName 2", "baseName 3"…
+String defaultNicknameFor(RoleCatalogEntry role, int ordinal) {
+  return ordinal <= 1 ? role.baseName : '${role.baseName} $ordinal';
 }
 
 // ─── Donation packages ─────────────────────────────────────────────────────
@@ -470,6 +581,7 @@ enum CosmeticType {
   nicknameDecor,
   avatarFrame,
   titleBadge,
+  sendButtonStyle,
 }
 
 extension CosmeticTypeExt on CosmeticType {
@@ -478,6 +590,7 @@ extension CosmeticTypeExt on CosmeticType {
         CosmeticType.nicknameDecor => 'Декор нікнейму',
         CosmeticType.avatarFrame => 'Рамки аватара',
         CosmeticType.titleBadge => 'Титули',
+        CosmeticType.sendButtonStyle => 'Кнопка «Надіслати»',
       };
 
   String get icon => switch (this) {
@@ -485,6 +598,7 @@ extension CosmeticTypeExt on CosmeticType {
         CosmeticType.nicknameDecor => '✏️',
         CosmeticType.avatarFrame => '🖼️',
         CosmeticType.titleBadge => '🏷️',
+        CosmeticType.sendButtonStyle => '📮',
       };
 }
 
@@ -553,6 +667,14 @@ const cosmeticCatalog = <CosmeticItem>[
   CosmeticItem(id: 'title_glitch', type: CosmeticType.titleBadge, name: 'Глітч', cost: 2000, preview: '👾 Глітч'),
   CosmeticItem(id: 'title_ceo', type: CosmeticType.titleBadge, name: 'CEO', cost: 5000, preview: '💼 CEO'),
   CosmeticItem(id: 'title_pixel_god', type: CosmeticType.titleBadge, name: 'Pixel God', cost: 10000, preview: '✨ Pixel God'),
+
+  // ── Send button styles ──
+  // Hand-crafted variants for the chat "send" button. Free default +
+  // three premium designs — the most expensive items in the catalog.
+  CosmeticItem(id: 'send_classic', type: CosmeticType.sendButtonStyle, name: 'Класичний', cost: 0, preview: '➤'),
+  CosmeticItem(id: 'send_neon_pulse', type: CosmeticType.sendButtonStyle, name: 'Неоновий Пульс', cost: 6000, preview: '✺'),
+  CosmeticItem(id: 'send_gold_rocket', type: CosmeticType.sendButtonStyle, name: 'Золота Ракета', cost: 12000, preview: '🚀'),
+  CosmeticItem(id: 'send_pixel_arcade', type: CosmeticType.sendButtonStyle, name: 'Піксельна Аркада', cost: 20000, preview: '▶'),
 ];
 
 CosmeticItem? cosmeticById(String id) {
@@ -766,6 +888,155 @@ FurnitureItem? furnitureById(String id) {
   return null;
 }
 
+// ─── Office rooms ──────────────────────────────────────────────────────────
+
+/// Room types split into two groups:
+/// - compact rooms (2×2, 3×2) — dominant, placed in quantity
+/// - luxury rooms (bigger) — 1 per office, each with a signature mechanic
+enum RoomType {
+  // ── Compact ──
+  workstation,
+  breakRoom,
+  meetingRoom,
+  serverRoom,
+  lounge,
+  // ── Luxury (1-2 per office) ──
+  gym,
+  cinema,
+  pool,
+  miniGolf,
+}
+
+extension RoomTypeExt on RoomType {
+  String get nameUk => switch (this) {
+        RoomType.workstation => 'Робоче місце',
+        RoomType.breakRoom => 'Куток відпочинку',
+        RoomType.meetingRoom => 'Переговорний пункт',
+        RoomType.serverRoom => 'Сервер',
+        RoomType.lounge => 'Скейт-куток',
+        RoomType.gym => 'Спортзал',
+        RoomType.cinema => 'Кінозал',
+        RoomType.pool => 'Басейн',
+        RoomType.miniGolf => 'Міні-гольф',
+      };
+
+  String get description => switch (this) {
+        RoomType.workstation => 'Додаткове місце для агента без канонічного стола.',
+        RoomType.breakRoom =>
+          'Агенти сидять за столом на 50 % довше — менше блукають.',
+        RoomType.meetingRoom =>
+          'Координаційний пункт — покращує роботу менеджера.',
+        RoomType.serverRoom => 'Всі агенти рухаються на 10 % швидше.',
+        RoomType.lounge => 'Агенти частіше катаються скейтом саме сюди.',
+        RoomType.gym => 'Люкс. Морал-буст для всієї команди.',
+        RoomType.cinema => 'Люкс. Кіно-перегляди підвищують командний дух.',
+        RoomType.pool => 'Люкс. Найкращий spot для відпочинку між спринтами.',
+        RoomType.miniGolf => 'Люкс. Невеликі змагання між колегами.',
+      };
+
+  String get icon => switch (this) {
+        RoomType.workstation => '💻',
+        RoomType.breakRoom => '🛋️',
+        RoomType.meetingRoom => '🗣️',
+        RoomType.serverRoom => '🖥️',
+        RoomType.lounge => '🛹',
+        RoomType.gym => '🏋️',
+        RoomType.cinema => '🎬',
+        RoomType.pool => '🏊',
+        RoomType.miniGolf => '⛳',
+      };
+
+  int get widthTiles => switch (this) {
+        RoomType.workstation => 2,
+        RoomType.breakRoom => 2,
+        RoomType.meetingRoom => 3,
+        RoomType.serverRoom => 2,
+        RoomType.lounge => 3,
+        RoomType.gym => 4,
+        RoomType.cinema => 5,
+        RoomType.pool => 5,
+        RoomType.miniGolf => 5,
+      };
+
+  int get heightTiles => switch (this) {
+        RoomType.workstation => 2,
+        RoomType.breakRoom => 2,
+        RoomType.meetingRoom => 2,
+        RoomType.serverRoom => 2,
+        RoomType.lounge => 2,
+        RoomType.gym => 3,
+        RoomType.cinema => 3,
+        RoomType.pool => 4,
+        RoomType.miniGolf => 3,
+      };
+
+  int get cost => switch (this) {
+        RoomType.workstation => 400,
+        RoomType.breakRoom => 500,
+        RoomType.meetingRoom => 900,
+        RoomType.serverRoom => 1500,
+        RoomType.lounge => 700,
+        RoomType.gym => 2500,
+        RoomType.cinema => 3500,
+        RoomType.pool => 5000,
+        RoomType.miniGolf => 4000,
+      };
+
+  int get maxPerOffice => switch (this) {
+        RoomType.workstation => 8,
+        RoomType.breakRoom => 4,
+        RoomType.meetingRoom => 3,
+        RoomType.serverRoom => 3,
+        RoomType.lounge => 3,
+        RoomType.gym => 1,
+        RoomType.cinema => 1,
+        RoomType.pool => 1,
+        RoomType.miniGolf => 1,
+      };
+
+  /// Compact rooms are the "dominant" small-size group; luxury rooms are the
+  /// signature 1-per-office feature pieces. UI groups them separately.
+  bool get isLuxury => switch (this) {
+        RoomType.gym ||
+        RoomType.cinema ||
+        RoomType.pool ||
+        RoomType.miniGolf =>
+          true,
+        _ => false,
+      };
+}
+
+class PlacedRoom {
+  final String id;
+  final RoomType type;
+  final int col;
+  final int row;
+
+  const PlacedRoom({
+    required this.id,
+    required this.type,
+    required this.col,
+    required this.row,
+  });
+
+  int get right => col + type.widthTiles;
+  int get bottom => row + type.heightTiles;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.index,
+        'col': col,
+        'row': row,
+      };
+
+  factory PlacedRoom.fromJson(Map<String, dynamic> json) => PlacedRoom(
+        id: json['id'] as String,
+        type: RoomType.values[json['type'] as int],
+        col: json['col'] as int,
+        row: json['row'] as int,
+      );
+}
+
 // ─── Game state ────────────────────────────────────────────────────────────
 
 class GameState {
@@ -796,6 +1067,9 @@ class GameState {
   /// Placed furniture items with their grid positions.
   final List<FurniturePlacement> placedFurniture;
 
+  /// Placed office rooms (Build Mode).
+  final List<PlacedRoom> placedRooms;
+
   /// Epoch millis of the last local mutation. Drives last-write-wins sync
   /// between devices — the server only accepts state with a newer timestamp
   /// than what it already holds.
@@ -814,18 +1088,27 @@ class GameState {
     this.themeState = const ThemeState(),
     this.ownedFurniture = const {},
     this.placedFurniture = const [],
+    this.placedRooms = const [],
     this.updatedAt = 0,
   });
 
-  int get hiredCount => agents.values.where((a) => a.isHired).length;
+  /// Number of hired instances (presence in the map == hired).
+  int get hiredCount => agents.length;
 
+  /// Whether there is free room in the office for another instance.
   bool get canHireMore => hiredCount < officeLevel.maxAgents;
 
-  List<String> get hiredAgentIds =>
-      agents.entries
-          .where((e) => e.value.isHired)
-          .map((e) => e.key)
-          .toList();
+  /// Every hired instanceId (ordered by insertion).
+  List<String> get hiredAgentIds => agents.keys.toList();
+
+  /// Instances belonging to a given role type.
+  List<AgentGameData> instancesOfRole(String roleType) => [
+        for (final a in agents.values)
+          if (a.roleType == roleType) a,
+      ];
+
+  /// How many instances of [roleType] are currently hired.
+  int roleCount(String roleType) => instancesOfRole(roleType).length;
 
   /// Whether the next nickname change is free.
   bool get isNicknameChangeFree => nicknameChangesUsed < freeNicknameChanges;
@@ -854,6 +1137,7 @@ class GameState {
     ThemeState? themeState,
     Set<String>? ownedFurniture,
     List<FurniturePlacement>? placedFurniture,
+    List<PlacedRoom>? placedRooms,
     int? updatedAt,
   }) =>
       GameState(
@@ -869,10 +1153,16 @@ class GameState {
         themeState: themeState ?? this.themeState,
         ownedFurniture: ownedFurniture ?? this.ownedFurniture,
         placedFurniture: placedFurniture ?? this.placedFurniture,
+        placedRooms: placedRooms ?? this.placedRooms,
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
+  /// Current on-disk schema version. v3 adds placedRooms + office grid sizes.
+  /// v2 saves load with empty placedRooms (graceful forward-compat).
+  static const int schemaVersion = 3;
+
   Map<String, dynamic> toJson() => {
+        'schemaVersion': schemaVersion,
         'grymni': grymni,
         'officeLevel': officeLevel.index,
         'agents': {
@@ -892,13 +1182,50 @@ class GameState {
         'placedFurniture': [
           for (final p in placedFurniture) p.toJson(),
         ],
+        'placedRooms': [
+          for (final r in placedRooms) r.toJson(),
+        ],
         'updatedAt': updatedAt,
       };
 
-  factory GameState.fromJson(Map<String, dynamic> json) => GameState(
+  factory GameState.fromJson(Map<String, dynamic> json) {
+    // Load raw then apply in-flight migrations before the real constructor.
+    var level = OfficeLevel.values[json['officeLevel'] as int? ?? 0];
+    var rooms = [
+      for (final r in (json['placedRooms'] as List<dynamic>?) ?? [])
+        PlacedRoom.fromJson(r as Map<String, dynamic>),
+    ];
+    var furniture = [
+      for (final p in (json['placedFurniture'] as List<dynamic>?) ?? [])
+        FurniturePlacement.fromJson(p as Map<String, dynamic>),
+    ];
+
+    // Migration: campus is WIP ("В розробці") — saves stuck at campus are
+    // pulled back to smallOffice so the player can pick a reachable tier.
+    if (level == OfficeLevel.campus) {
+      level = OfficeLevel.smallOffice;
+      // Rooms from a campus map will almost certainly be outside the new
+      // bounds — drop them all and let the player rebuild.
+      rooms = const [];
+    }
+
+    // Drop rooms/furniture that no longer fit in the (possibly shrunken) grid.
+    final gCols = level.gridCols;
+    final gRows = level.gridRows;
+    rooms = rooms
+        .where((r) =>
+            r.col >= 1 &&
+            r.row >= 1 &&
+            r.col + r.type.widthTiles <= gCols - 1 &&
+            r.row + r.type.heightTiles <= gRows - 1)
+        .toList();
+    furniture = furniture
+        .where((p) => p.col < gCols - 1 && p.row < gRows - 1)
+        .toList();
+
+    return GameState(
         grymni: json['grymni'] as int? ?? 500,
-        officeLevel:
-            OfficeLevel.values[json['officeLevel'] as int? ?? 0],
+        officeLevel: level,
         agents: {
           for (final e
               in (json['agents'] as Map<String, dynamic>? ?? {}).entries)
@@ -925,28 +1252,42 @@ class GameState {
           for (final id in (json['ownedFurniture'] as List<dynamic>?) ?? [])
             id as String,
         },
-        placedFurniture: [
-          for (final p in (json['placedFurniture'] as List<dynamic>?) ?? [])
-            FurniturePlacement.fromJson(p as Map<String, dynamic>),
-        ],
+        placedFurniture: furniture,
+        placedRooms: rooms,
         updatedAt: json['updatedAt'] as int? ?? 0,
       );
+  }
 
   String encode() => jsonEncode(toJson());
 
-  factory GameState.decode(String source) =>
-      GameState.fromJson(jsonDecode(source) as Map<String, dynamic>);
+  /// Decode a persisted game state. Saves from older schemas (without a
+  /// [schemaVersion] key, or with a lower version) are rejected so the
+  /// caller falls back to [GameState.initial] — the app currently makes
+  /// no effort to migrate pre-v2 data.
+  factory GameState.decode(String source) {
+    final json = jsonDecode(source) as Map<String, dynamic>;
+    final version = json['schemaVersion'] as int? ?? 1;
+    // Accept v2 (loads with empty placedRooms) and v3. Reject older/unknown.
+    if (version < 2 || version > schemaVersion) {
+      throw const FormatException('Incompatible game state schema');
+    }
+    return GameState.fromJson(json);
+  }
 
-  /// Create default starting state: manager + coder hired, old laptops.
+  /// Create default starting state: seed instances per role defaultSeedCount.
   factory GameState.initial() {
     final agents = <String, AgentGameData>{};
-    for (final entry in agentCatalog) {
-      agents[entry.agentId] = AgentGameData(
-        agentId: entry.agentId,
-        isHired: entry.startsHired,
-        hardware: HardwareTier.oldLaptop,
-        skills: {for (final s in SkillType.values) s: 1},
-      );
+    for (final role in roleCatalog) {
+      for (var i = 1; i <= role.defaultSeedCount; i++) {
+        final id = nextInstanceId(role.roleType, agents.keys);
+        agents[id] = AgentGameData(
+          instanceId: id,
+          roleType: role.roleType,
+          nickname: defaultNicknameFor(role, i),
+          hardware: HardwareTier.oldLaptop,
+          skills: {for (final s in SkillType.values) s: 1},
+        );
+      }
     }
     // Generate a random starter nickname
     final seed = DateTime.now().microsecondsSinceEpoch;

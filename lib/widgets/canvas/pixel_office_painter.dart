@@ -14,7 +14,9 @@ import 'package:flutter/material.dart';
 import '../../models/agent_message.dart';
 import '../../models/game_economy.dart';
 import '../../models/resource_pack.dart';
+import 'character_accessories.dart';
 import 'character_skins.dart';
+import 'room_sprites.dart';
 import 'character_sprites.dart';
 import 'computer_sprites.dart';
 import 'office_game_state.dart';
@@ -44,8 +46,14 @@ class PixelOfficePainter extends CustomPainter {
   final OfficeLevel officeLevel;
   final CharacterSkin? skin;
   final List<FurniturePlacement> placedFurniture;
+  final List<PlacedRoom> placedRooms;
   final bool editMode;
   final String? selectedFurnitureId;
+  final bool buildMode;
+  final RoomType? ghostRoomType;
+  final int? ghostRoomCol;
+  final int? ghostRoomRow;
+  final bool ghostIsValid;
 
   PixelOfficePainter({
     required this.gameState,
@@ -56,8 +64,14 @@ class PixelOfficePainter extends CustomPainter {
     this.officeLevel = OfficeLevel.garage,
     this.skin,
     this.placedFurniture = const [],
+    this.placedRooms = const [],
     this.editMode = false,
     this.selectedFurnitureId,
+    this.buildMode = false,
+    this.ghostRoomType,
+    this.ghostRoomCol,
+    this.ghostRoomRow,
+    this.ghostIsValid = true,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -67,21 +81,23 @@ class PixelOfficePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final scale = math.min(
-      size.width / kCanvasWidth,
-      size.height / kCanvasHeight,
+      size.width / gameState.canvasWidth,
+      size.height / gameState.canvasHeight,
     );
-    final offsetX = (size.width - kCanvasWidth * scale) / 2;
-    final offsetY = (size.height - kCanvasHeight * scale) / 2;
+    final offsetX = (size.width - gameState.canvasWidth * scale) / 2;
+    final offsetY = (size.height - gameState.canvasHeight * scale) / 2;
 
     canvas.save();
     canvas.translate(offsetX, offsetY);
     canvas.scale(scale);
 
     _drawFloorAndWalls(canvas);
+    _drawPlacedRooms(canvas);
     _drawScene(canvas);
     _drawBubbles(canvas);
     _drawVignette(canvas);
     if (editMode) _drawEditOverlay(canvas);
+    if (buildMode) _drawBuildOverlay(canvas);
 
     canvas.restore();
   }
@@ -92,9 +108,11 @@ class PixelOfficePainter extends CustomPainter {
     final paint = Paint()..style = PaintingStyle.fill;
     final tileMap = gameState.tileMap;
     final theme = _theme;
+    final gCols = gameState.gridCols;
+    final gRows = gameState.gridRows;
 
-    for (int r = 0; r < kGridRows; r++) {
-      for (int c = 0; c < kGridCols; c++) {
+    for (int r = 0; r < gRows; r++) {
+      for (int c = 0; c < gCols; c++) {
         final tx = c * kTileSize;
         final ty = r * kTileSize;
         final tile = tileMap[r][c];
@@ -108,7 +126,7 @@ class PixelOfficePainter extends CustomPainter {
             paint.color = theme.wallTop;
             canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize + 0.5, 2), paint);
           }
-          if (r < kGridRows - 1 && tileMap[r + 1][c] == TileType.floor) {
+          if (r < gRows - 1 && tileMap[r + 1][c] == TileType.floor) {
             paint.color = theme.wallInner;
             canvas.drawRect(
               Rect.fromLTWH(tx, ty + kTileSize - 2, kTileSize + 0.5, 2), paint);
@@ -126,17 +144,17 @@ class PixelOfficePainter extends CustomPainter {
       ..color = theme.floorGrid
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.3;
-    for (int c = 1; c < kGridCols; c++) {
+    for (int c = 1; c < gCols; c++) {
       canvas.drawLine(
         Offset(c * kTileSize, kTileSize),
-        Offset(c * kTileSize, (kGridRows - 1) * kTileSize),
+        Offset(c * kTileSize, (gRows - 1) * kTileSize),
         paint,
       );
     }
-    for (int r = 1; r < kGridRows; r++) {
+    for (int r = 1; r < gRows; r++) {
       canvas.drawLine(
         Offset(kTileSize, r * kTileSize),
-        Offset((kGridCols - 1) * kTileSize, r * kTileSize),
+        Offset((gCols - 1) * kTileSize, r * kTileSize),
         paint,
       );
     }
@@ -147,12 +165,27 @@ class PixelOfficePainter extends CustomPainter {
   void _drawScene(Canvas canvas) {
     final drawables = <_Drawable>[];
 
-    // Furniture per station: desk, PC, chair (only for hired agents)
-    for (final station in kStations) {
-      final ch = gameState.characters[station.agentId];
-      if (ch == null || !ch.isHired) continue;
-      final isActive = ch.isActive;
-      _addStationFurniture(drawables, station, isActive, ch);
+    // Furniture per station: desk, PC, chair.
+    // Canonical stations show up when any instance of that role is hired.
+    // Extra (workstation) stations show up when any character is seated there.
+    for (final station in gameState.allStations) {
+      GameCharacter? seated;
+      GameCharacter? anyHired;
+      for (final c in gameState.characters.values) {
+        if (!c.isHired) continue;
+        final matches = station.isExtra
+            ? c.seat == station
+            : c.roleType == station.agentId;
+        if (!matches) continue;
+        anyHired ??= c;
+        if (c.seat != null) {
+          seated = c;
+          break;
+        }
+      }
+      final ch = seated ?? anyHired;
+      if (ch == null) continue;
+      _addStationFurniture(drawables, station, ch.isActive, ch);
     }
 
     // Coffee machine & snack table
@@ -285,8 +318,9 @@ class PixelOfficePainter extends CustomPainter {
     if (!_hasImages || plantImg == null) return;
     final plantTimers = gameState.plantEasterEgg.activeTimers;
 
-    for (int i = 0; i < kPlantPositions.length; i++) {
-      final pos = kPlantPositions[i];
+    final plantPositions = gameState.plantPositions;
+    for (int i = 0; i < plantPositions.length; i++) {
+      final pos = plantPositions[i];
       final px = pos.$1 * kTileSize.toDouble();
       final basePy = pos.$2 * kTileSize - kTileSize;
       final zY = (pos.$2 + 1) * kTileSize.toDouble();
@@ -359,9 +393,9 @@ class PixelOfficePainter extends CustomPainter {
         ch.state == CharState.typing ? kSittingOffsetPx : 0.0;
     final charZY = ch.y + kTileSize / 2 + kCharZSortOffset;
 
-    final isSelected = selectedAgentId == ch.agentId;
-    final isHovered = hoveredAgentId == ch.agentId;
-    final glowColor = agentAccentColor(ch.agentId);
+    final isSelected = selectedAgentId == ch.instanceId;
+    final isHovered = hoveredAgentId == ch.instanceId;
+    final glowColor = agentAccentColor(ch.roleType);
 
     // Active glow under feet
     if (ch.isActive) {
@@ -443,13 +477,19 @@ class PixelOfficePainter extends CustomPainter {
           c.drawImageRect(
               sheet, srcRect, Rect.fromLTWH(drawX, drawY, sw, sh), _pixelPaint);
         }
+        // Hair tint + accessory overlay — keeps instances of the same role
+        // visually distinct without extra sprite sheets.
+        final headX = ch.x;
+        final headY = drawY;
+        drawHairTint(c, ch.cosmetics, headX, headY, ch.dir);
+        drawAccessory(c, ch.cosmetics, headX, headY, ch.dir);
       }));
     } else {
       // Fallback: text sprite with skin palette support
       final activeSkin = skin ?? skinDefault;
-      final skinPalette = activeSkin.palettes[ch.agentId];
+      final skinPalette = activeSkin.palettes[ch.roleType];
       final fallbackPalette =
-          agentPalettes[ch.agentId] ?? agentPalettes['manager']!;
+          agentPalettes[ch.roleType] ?? agentPalettes['manager']!;
 
       Color resolveColor(String key) =>
           skinPalette?.resolve(key) ?? fallbackPalette.resolve(key);
@@ -466,6 +506,8 @@ class PixelOfficePainter extends CustomPainter {
         } else {
           drawSprite(c, sprite, drawX, drawY, 1.0, resolveColor);
         }
+        drawHairTint(c, ch.cosmetics, ch.x, drawY, ch.dir);
+        drawAccessory(c, ch.cosmetics, ch.x, drawY, ch.dir);
       }));
     }
 
@@ -516,7 +558,7 @@ class PixelOfficePainter extends CustomPainter {
         // Speed trail only while riding
         if (ch.state == CharState.walk) {
           final trailPaint = Paint()
-            ..color = agentAccentColor(ch.agentId).withValues(alpha: 0.2)
+            ..color = agentAccentColor(ch.roleType).withValues(alpha: 0.2)
             ..strokeWidth = 0.5
             ..style = PaintingStyle.stroke;
           final trailDir = ch.dir == CharDirection.right || ch.dir == CharDirection.down ? -1.0 : 1.0;
@@ -784,19 +826,97 @@ class PixelOfficePainter extends CustomPainter {
 
   // ─── Edit mode overlay ────────────────────────────────────────────────
 
+  void _drawPlacedRooms(Canvas canvas) {
+    for (final room in placedRooms) {
+      drawRoom(canvas, room, _theme, tick);
+    }
+  }
+
+  void _drawBuildOverlay(Canvas canvas) {
+    final blocked = gameState.blockedTiles;
+    final gCols = gameState.gridCols;
+    final gRows = gameState.gridRows;
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // Tile highlights: green = free, red = blocked
+    for (int r = 1; r < gRows - 1; r++) {
+      for (int c = 1; c < gCols - 1; c++) {
+        final isBlocked = blocked.contains('$c,$r');
+        p.color = isBlocked
+            ? const Color(0xFFFF4444).withValues(alpha: 0.10)
+            : const Color(0xFF44FF88).withValues(alpha: 0.05);
+        canvas.drawRect(
+            Rect.fromLTWH(c * kTileSize, r * kTileSize, kTileSize, kTileSize),
+            p);
+      }
+    }
+
+    // Grid lines
+    p
+      ..color = const Color(0xFF44FF88).withValues(alpha: 0.18)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.5;
+    for (int c = 1; c < gCols; c++) {
+      canvas.drawLine(Offset(c * kTileSize, kTileSize),
+          Offset(c * kTileSize, (gRows - 1) * kTileSize), p);
+    }
+    for (int r = 1; r < gRows; r++) {
+      canvas.drawLine(Offset(kTileSize, r * kTileSize),
+          Offset((gCols - 1) * kTileSize, r * kTileSize), p);
+    }
+
+    // Ghost room preview
+    final gt = ghostRoomType;
+    final gc = ghostRoomCol;
+    final gr = ghostRoomRow;
+    if (gt != null && gc != null && gr != null) {
+      final color =
+          ghostIsValid ? const Color(0xFF44FF88) : const Color(0xFFFF4444);
+      final rx = gc * kTileSize;
+      final ry = gr * kTileSize;
+      final rw = gt.widthTiles * kTileSize;
+      final rh = gt.heightTiles * kTileSize;
+      canvas.drawRect(
+          Rect.fromLTWH(rx, ry, rw, rh),
+          Paint()
+            ..color = color.withValues(alpha: 0.25)
+            ..style = PaintingStyle.fill);
+      canvas.drawRect(
+          Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1),
+          Paint()
+            ..color = color.withValues(alpha: 0.8)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5);
+    }
+
+    // Existing room outlines
+    for (final room in placedRooms) {
+      final rx = room.col * kTileSize;
+      final ry = room.row * kTileSize;
+      final rw = room.type.widthTiles * kTileSize;
+      final rh = room.type.heightTiles * kTileSize;
+      canvas.drawRect(
+          Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1),
+          Paint()
+            ..color = const Color(0xFFFFD700).withValues(alpha: 0.6)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1);
+    }
+  }
+
   void _drawEditOverlay(Canvas canvas) {
     final blocked = gameState.blockedTiles;
+    final gCols = gameState.gridCols;
+    final gRows = gameState.gridRows;
     final p = Paint()..style = PaintingStyle.fill;
 
     // Semi-transparent tile highlights
-    for (int r = 1; r < kGridRows - 1; r++) {
-      for (int c = 1; c < kGridCols - 1; c++) {
+    for (int r = 1; r < gRows - 1; r++) {
+      for (int c = 1; c < gCols - 1; c++) {
         final tx = c * kTileSize;
         final ty = r * kTileSize;
-        final key = '$c,$r';
-        final isBlocked = blocked.contains(key);
+        final isBlocked = blocked.contains('$c,$r');
 
-        // Green = placeable, Red = blocked
         p.color = isBlocked
             ? const Color(0xFFFF4444).withValues(alpha: 0.08)
             : const Color(0xFF44FF44).withValues(alpha: 0.06);
@@ -809,17 +929,17 @@ class PixelOfficePainter extends CustomPainter {
       ..color = const Color(0xFF44FF44).withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 0.5;
-    for (int c = 1; c <= kGridCols - 1; c++) {
+    for (int c = 1; c < gCols; c++) {
       canvas.drawLine(
         Offset(c * kTileSize, kTileSize),
-        Offset(c * kTileSize, (kGridRows - 1) * kTileSize),
+        Offset(c * kTileSize, (gRows - 1) * kTileSize),
         p,
       );
     }
-    for (int r = 1; r <= kGridRows - 1; r++) {
+    for (int r = 1; r < gRows; r++) {
       canvas.drawLine(
         Offset(kTileSize, r * kTileSize),
-        Offset((kGridCols - 1) * kTileSize, r * kTileSize),
+        Offset((gCols - 1) * kTileSize, r * kTileSize),
         p,
       );
     }
@@ -915,10 +1035,58 @@ class PixelOfficePainter extends CustomPainter {
 
   void _drawBubbles(Canvas canvas) {
     for (final ch in gameState.characters.values) {
-      if (!ch.isHired || !ch.isActive || ch.displayStatus == AgentStatus.idle) {
+      if (!ch.isHired) continue;
+      if (ch.isChatting) {
+        _drawChatBubble(canvas, ch);
         continue;
       }
+      if (!ch.isActive || ch.displayStatus == AgentStatus.idle) continue;
       _drawBubble(canvas, ch);
+    }
+  }
+
+  /// Speech bubble shown while two characters are having a casual chat.
+  /// Wider than the agent-status bubble and animates between three dots
+  /// and a simple chat glyph so the scene reads as a real conversation.
+  void _drawChatBubble(Canvas canvas, GameCharacter ch) {
+    final bx = ch.x;
+    final by = ch.y - kSpriteH - 1;
+    final color = agentAccentColor(ch.roleType);
+
+    final rect = Rect.fromCenter(center: Offset(bx, by), width: 16, height: 9);
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2.5)),
+      Paint()..color = const Color(0xFF1E1E2E).withValues(alpha: 0.92),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(2.5)),
+      Paint()
+        ..color = color.withValues(alpha: 0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.6,
+    );
+
+    // Tail
+    final tail = Path()
+      ..moveTo(bx - 1.5, by + 4.5)
+      ..lineTo(bx, by + 7)
+      ..lineTo(bx + 1.5, by + 4.5);
+    canvas.drawPath(
+      tail,
+      Paint()..color = const Color(0xFF1E1E2E).withValues(alpha: 0.92),
+    );
+
+    // Animated content: three dots that light up in sequence.
+    final dotPaint = Paint()..style = PaintingStyle.fill;
+    final phase = tick % 4;
+    for (int i = 0; i < 3; i++) {
+      final on = phase == i || phase == 3;
+      dotPaint.color = color.withValues(alpha: on ? 0.95 : 0.3);
+      canvas.drawRect(
+        Rect.fromLTWH(bx - 4 + i * 3, by - 0.5, 1.5, 1.5),
+        dotPaint,
+      );
     }
   }
 
@@ -927,7 +1095,7 @@ class PixelOfficePainter extends CustomPainter {
         ch.state == CharState.typing ? kSittingOffsetPx : 0.0;
     final bx = ch.x;
     final by = ch.y + sittingOffset - kSpriteH - 2;
-    final color = agentAccentColor(ch.agentId);
+    final color = agentAccentColor(ch.roleType);
 
     // Background pill
     canvas.drawRRect(

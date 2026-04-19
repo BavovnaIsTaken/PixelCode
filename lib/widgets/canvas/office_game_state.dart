@@ -10,6 +10,7 @@ import 'dart:math';
 import '../../models/agent_message.dart';
 import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
+import 'character_accessories.dart';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -62,6 +63,10 @@ const double kSkateboardChance = 0.2;
 const double kSkateMountDuration = 0.8;
 const double kSkateDismountDuration = 0.6;
 const double kSkateRideFrameDuration = 0.25;
+// A skate ride chains this many waypoints so the character laps the office
+// instead of rolling three tiles — picked so total path ≈ 5× a normal wander.
+const int kSkateWaypointCount = 5;
+const int kSkateWaypointSamples = 12;
 
 // Coffee
 const double kCoffeeWalkChance = 0.15;
@@ -77,6 +82,16 @@ const kPlantPositions = <(int, int)>[
   (2, 1), (17, 1),
   (2, 11), (17, 11),
 ];
+
+// Chat interaction
+const double kChatMinDuration = 4.0;
+const double kChatMaxDuration = 9.0;
+const double kChatCooldownMin = 30.0;
+const double kChatCooldownMax = 90.0;
+/// Probability each second an eligible idle character rolls for initiating
+/// a chat with a nearby teammate.
+const double kChatStartChancePerSec = 0.12;
+const double kChatScanInterval = 0.5;
 
 // ─── Enums ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +120,8 @@ class DeskStation {
   final int seatCol;
   final int seatRow;
   final CharDirection facingDir;
+  /// True for stations created from placed workstation rooms (not canonical).
+  final bool isExtra;
 
   const DeskStation({
     required this.agentId,
@@ -113,6 +130,7 @@ class DeskStation {
     required this.seatCol,
     required this.seatRow,
     required this.facingDir,
+    this.isExtra = false,
   });
 }
 
@@ -167,20 +185,18 @@ const kStations = <DeskStation>[
 
 // ─── Game character ─────────────────────────────────────────────────────────
 
-/// Agent → sprite palette index (0-5). 7th agent reuses palette 0.
-const agentPaletteIndex = <String, int>{
-  'manager': 0,
-  'tech-lead': 1,
-  'coder': 2,
-  'reviewer': 3,
-  'tester': 4,
-  'security': 5,
-  'ui-ux-designer': 0,
-};
-
 class GameCharacter {
-  final String agentId;
-  final int paletteIndex;
+  /// Stable unique identity (e.g. "coder#2"). Used as the map key and for
+  /// matching against selection / agent-state / position-sync messages.
+  final String instanceId;
+
+  /// Which role this character belongs to (e.g. "coder"). Used for palette,
+  /// accent color, and station assignment — many instances can share a role.
+  final String roleType;
+
+  final CharCosmetics cosmetics;
+  int get paletteIndex => cosmetics.paletteIndex;
+
   CharState state;
   CharDirection dir;
   double x, y;
@@ -203,8 +219,15 @@ class GameCharacter {
   bool hasCoffee;
   double coffeeTimer;
 
+  // Chat interaction state
+  bool isChatting;
+  double chatTimer;
+  double chatCooldown;
+  String? chatPartnerId;
+
   GameCharacter({
-    required this.agentId,
+    required this.instanceId,
+    required this.roleType,
     required this.seat,
     this.state = CharState.typing,
     CharDirection? dir,
@@ -217,7 +240,11 @@ class GameCharacter {
     this.isOnSkateboard = false,
     this.hasCoffee = false,
     this.coffeeTimer = 0,
-  })  : paletteIndex = agentPaletteIndex[agentId] ?? 0,
+    this.isChatting = false,
+    this.chatTimer = 0,
+    double? chatCooldown,
+    this.chatPartnerId,
+  })  : cosmetics = cosmeticsFor(instanceId, roleType),
         dir = dir ?? seat?.facingDir ?? CharDirection.down,
         x = x ??
             (seat != null
@@ -239,7 +266,8 @@ class GameCharacter {
         isReading = false,
         isHired = true,
         hardware = HardwareTier.oldLaptop,
-        displayStatus = AgentStatus.idle;
+        displayStatus = AgentStatus.idle,
+        chatCooldown = chatCooldown ?? _randomRange(8.0, 20.0);
 }
 
 // ─── Office cat ────────────────────────────────────────────────────────────
@@ -361,30 +389,116 @@ List<TilePos> _findPath(
 // ─── Office game state ──────────────────────────────────────────────────────
 
 class OfficeGameState {
-  late final List<List<TileType>> tileMap;
-  late final Set<String> blockedTiles;
-  late final List<TilePos> walkableTiles;
+  OfficeLevel _level;
+  List<PlacedRoom> _placedRooms;
+  List<FurniturePlacement> _placedFurniture;
+  double _chatScanAccum = 0;
+
+  int get gridCols => _level.gridCols;
+  int get gridRows => _level.gridRows;
+  double get canvasWidth => gridCols * kTileSize;
+  double get canvasHeight => gridRows * kTileSize;
+
+  late List<List<TileType>> tileMap;
+  late Set<String> blockedTiles;
+  late List<TilePos> walkableTiles;
   final Map<String, GameCharacter> characters = {};
-  late final OfficeCat cat;
+  late OfficeCat cat;
   final PlantEasterEgg plantEasterEgg = PlantEasterEgg();
   bool coffeeMachineBrewing = false;
   double _coffeeBrewTimer = 0;
 
-  OfficeGameState() {
-    _buildTileMap();
-    _buildBlockedTiles();
-    _buildWalkableTiles();
-    _initCharacters();
+  List<DeskStation> _extraStations = [];
+  List<DeskStation> get allStations => [...kStations, ..._extraStations];
+
+  /// Plant positions at the four inner corners of the current grid.
+  /// Scales with office level — garage has them at (2,1)/(17,1)/(2,11)/(17,11);
+  /// larger tiers push them to their actual corners.
+  List<(int, int)> get plantPositions => [
+        (2, 1),
+        (gridCols - 3, 1),
+        (2, gridRows - 3),
+        (gridCols - 3, gridRows - 3),
+      ];
+
+  // ── Passive room effects (recomputed on rebuildLayout) ──
+  double _speedBonus = 1.0;         // server room: 1.1×
+  double _seatRestMultiplier = 1.0; // break room: 1.5× seat rest timer
+  TilePos? _loungeCenterTile;       // lounge: skate/wander target bias
+
+  OfficeGameState({
+    OfficeLevel level = OfficeLevel.garage,
+    List<PlacedRoom> placedRooms = const [],
+    List<FurniturePlacement> placedFurniture = const [],
+  })  : _level = level,
+        _placedRooms = placedRooms,
+        _placedFurniture = placedFurniture {
+    _buildAll();
     cat = OfficeCat();
   }
 
+  void _buildAll() {
+    _buildExtraStations();
+    _buildTileMap();
+    _buildBlockedTiles();
+    _buildWalkableTiles();
+    _buildRoomEffects();
+  }
+
+  void _buildRoomEffects() {
+    _speedBonus = _placedRooms.any((r) => r.type == RoomType.serverRoom)
+        ? 1.1
+        : 1.0;
+    _seatRestMultiplier =
+        _placedRooms.any((r) => r.type == RoomType.breakRoom) ? 1.5 : 1.0;
+    final lounge = _placedRooms
+        .where((r) => r.type == RoomType.lounge)
+        .firstOrNull;
+    _loungeCenterTile = lounge != null
+        ? TilePos(
+            lounge.col + lounge.type.widthTiles ~/ 2,
+            lounge.row + lounge.type.heightTiles ~/ 2,
+          )
+        : null;
+  }
+
+  /// Rebuild layout after an office upgrade or Build Mode change.
+  /// Characters are kept in place — those outside the new bounds will
+  /// pathfind to valid tiles on their next update tick.
+  void rebuildLayout(
+    OfficeLevel newLevel,
+    List<PlacedRoom> newRooms, [
+    List<FurniturePlacement> newFurniture = const [],
+  ]) {
+    _level = newLevel;
+    _placedRooms = newRooms;
+    _placedFurniture = newFurniture;
+    _buildAll();
+  }
+
+  void _buildExtraStations() {
+    _extraStations = [
+      for (final room in _placedRooms)
+        if (room.type == RoomType.workstation)
+          DeskStation(
+            agentId: 'ws_${room.id}',
+            deskCol: room.col,
+            deskRow: room.row,
+            seatCol: room.col,
+            seatRow: room.row + 1,
+            facingDir: CharDirection.up,
+            isExtra: true,
+          ),
+    ];
+  }
+
   void _buildTileMap() {
-    tileMap = List.generate(kGridRows, (row) {
-      return List.generate(kGridCols, (col) {
+    tileMap = List.generate(gridRows, (row) {
+      return List.generate(gridCols, (col) {
         if (row == 0 ||
-            row == kGridRows - 1 ||
+            row == gridRows - 1 ||
             col == 0 ||
-            col == kGridCols - 1) {
+            col == gridCols - 1) {
           return TileType.wall;
         }
         return TileType.floor;
@@ -398,15 +512,90 @@ class OfficeGameState {
       blockedTiles.add('${station.deskCol},${station.deskRow}');
       blockedTiles.add('${station.seatCol},${station.seatRow}');
     }
+    for (final station in _extraStations) {
+      blockedTiles.add('${station.deskCol},${station.deskRow}');
+      blockedTiles.add('${station.seatCol},${station.seatRow}');
+    }
     blockedTiles.add('$kCoffeeMachineCol,$kCoffeeMachineRow');
     blockedTiles.add('$kCoffeeMachineCol2,$kCoffeeMachineRow');
     blockedTiles.add('$kSnackTableCol,$kSnackTableRow');
+
+    // Plants are physical objects — agents should walk around them.
+    for (final pos in kPlantPositions) {
+      blockedTiles.add('${pos.$1},${pos.$2}');
+    }
+
+    // Placed furniture items (if they block the path) occupy their footprint.
+    for (final placement in _placedFurniture) {
+      final item = furnitureById(placement.itemId);
+      if (item == null || !item.blocksPath) continue;
+      for (int dc = 0; dc < item.widthTiles; dc++) {
+        for (int dr = 0; dr < item.heightTiles; dr++) {
+          blockedTiles.add('${placement.col + dc},${placement.row + dr}');
+        }
+      }
+    }
+
+    // Internal solid features of placed rooms. Workstation rooms are handled
+    // via _extraStations already — their desk/seat tiles are blocked there.
+    for (final room in _placedRooms) {
+      for (final t in _roomInternalBlocks(room)) {
+        blockedTiles.add('${t.col},${t.row}');
+      }
+    }
+  }
+
+  /// Tiles inside a placed room that are physically occupied by furniture
+  /// the room draws (couches, tables, racks, ramps). Kept in sync with the
+  /// visuals in [drawRoom] — if art changes, this should too.
+  Iterable<TilePos> _roomInternalBlocks(PlacedRoom room) sync* {
+    switch (room.type) {
+      case RoomType.workstation:
+        // Desk/seat already blocked via _extraStations.
+        break;
+      case RoomType.breakRoom:
+        // 2×2: couch spans the bottom row.
+        yield TilePos(room.col, room.row + 1);
+        yield TilePos(room.col + 1, room.row + 1);
+        break;
+      case RoomType.meetingRoom:
+        // 3×2: long table across the bottom row.
+        for (int c = 0; c < 3; c++) {
+          yield TilePos(room.col + c, room.row + 1);
+        }
+        break;
+      case RoomType.serverRoom:
+        // 2×2: two full-height racks.
+        for (int c = 0; c < 2; c++) {
+          yield TilePos(room.col + c, room.row);
+          yield TilePos(room.col + c, room.row + 1);
+        }
+        break;
+      case RoomType.lounge:
+        // 3×2: beanbag on left-bottom, ramp on right column.
+        yield TilePos(room.col, room.row + 1);
+        yield TilePos(room.col + 2, room.row);
+        yield TilePos(room.col + 2, room.row + 1);
+        break;
+      case RoomType.gym:
+      case RoomType.cinema:
+      case RoomType.pool:
+      case RoomType.miniGolf:
+        // Luxury rooms: treat the whole footprint as furniture — characters
+        // can't walk through screens, water, greens or equipment.
+        for (int r = 0; r < room.type.heightTiles; r++) {
+          for (int c = 0; c < room.type.widthTiles; c++) {
+            yield TilePos(room.col + c, room.row + r);
+          }
+        }
+        break;
+    }
   }
 
   void _buildWalkableTiles() {
     walkableTiles = [];
-    for (int r = 0; r < kGridRows; r++) {
-      for (int c = 0; c < kGridCols; c++) {
+    for (int r = 0; r < gridRows; r++) {
+      for (int c = 0; c < gridCols; c++) {
         if (_isWalkable(c, r, tileMap, blockedTiles)) {
           walkableTiles.add(TilePos(c, r));
         }
@@ -414,23 +603,102 @@ class OfficeGameState {
     }
   }
 
-  void _initCharacters() {
-    for (final station in kStations) {
-      characters[station.agentId] = GameCharacter(
-        agentId: station.agentId,
+  /// Sync the hired roster from the game economy into the render characters.
+  ///
+  /// [hiredIds] carries every hired instanceId (e.g. "coder#1", "coder#2"). This
+  /// function creates a [GameCharacter] per instance and disposes of any whose
+  /// instance no longer exists, so multiple instances of the same role render
+  /// as distinct sprites. The first instance of each role claims that role's
+  /// canonical desk station; extras get `seat: null` and wander freely until
+  /// additional seats are added (see office-expansion work).
+  void syncHiredAgents(List<String> hiredIds, [Map<String, HardwareTier>? hardwareMap]) {
+    final hiredSet = hiredIds.toSet();
+
+    // 1. Drop characters whose instance is no longer hired.
+    characters.removeWhere((id, _) => !hiredSet.contains(id));
+
+    // 2. Assign seat ownership — first appearance of each role in hiredIds
+    //    takes the role's canonical station. Others go seatless.
+    final seatOwner = <String, String>{}; // roleType → instanceId that sits there
+    for (final id in hiredIds) {
+      final roleType = roleTypeFromInstanceId(id);
+      seatOwner.putIfAbsent(roleType, () => id);
+    }
+
+    // 3. Create characters for any newly hired instance.
+    for (final id in hiredIds) {
+      if (characters.containsKey(id)) continue;
+      final roleType = roleTypeFromInstanceId(id);
+      final isSeatOwner = seatOwner[roleType] == id;
+      final station = isSeatOwner
+          ? kStations.firstWhere(
+              (s) => s.agentId == roleType,
+              orElse: () => kStations.first,
+            )
+          : null;
+
+      // Seatless hires spawn on a random walkable tile so they don't stack.
+      int spawnCol, spawnRow;
+      if (station != null) {
+        spawnCol = station.seatCol;
+        spawnRow = station.seatRow;
+      } else if (walkableTiles.isNotEmpty) {
+        final t = walkableTiles[_rng.nextInt(walkableTiles.length)];
+        spawnCol = t.col;
+        spawnRow = t.row;
+      } else {
+        spawnCol = 2;
+        spawnRow = 2;
+      }
+
+      characters[id] = GameCharacter(
+        instanceId: id,
+        roleType: roleType,
         seat: station,
+        tileCol: spawnCol,
+        tileRow: spawnRow,
+        state: station != null ? CharState.typing : CharState.idle,
         seatTimer: _randomRange(8.0, 25.0),
       );
     }
-  }
 
-  /// Sync hired status and hardware tiers from game economy into characters.
-  void syncHiredAgents(List<String> hiredIds, [Map<String, HardwareTier>? hardwareMap]) {
-    final hiredSet = hiredIds.toSet();
+    // 4. Keep seat assignment in sync with the current owner list — e.g. if
+    //    the original primary was fired, the next instance should inherit
+    //    the desk. isHired stays true for everyone in hiredIds.
     for (final ch in characters.values) {
-      ch.isHired = hiredSet.contains(ch.agentId);
-      if (hardwareMap != null && hardwareMap.containsKey(ch.agentId)) {
-        ch.hardware = hardwareMap[ch.agentId]!;
+      ch.isHired = true;
+      final shouldOwnSeat = seatOwner[ch.roleType] == ch.instanceId;
+      if (shouldOwnSeat && (ch.seat == null || ch.seat!.isExtra)) {
+        ch.seat = kStations.firstWhere(
+          (s) => s.agentId == ch.roleType,
+          orElse: () => kStations.first,
+        );
+      } else if (!shouldOwnSeat && ch.seat != null && !ch.seat!.isExtra) {
+        ch.seat = null;
+      }
+    }
+
+    // 4b. Assign seatless characters to free extra workstation stations.
+    final occupiedExtra = <DeskStation>{
+      for (final ch in characters.values)
+        if (ch.seat != null && ch.seat!.isExtra) ch.seat!,
+    };
+    for (final ch in characters.values) {
+      if (ch.seat != null) continue;
+      for (final s in _extraStations) {
+        if (!occupiedExtra.contains(s)) {
+          ch.seat = s;
+          occupiedExtra.add(s);
+          break;
+        }
+      }
+    }
+
+    // 5. Apply per-instance hardware tier.
+    if (hardwareMap != null) {
+      for (final entry in hardwareMap.entries) {
+        final ch = characters[entry.key];
+        if (ch != null) ch.hardware = entry.value;
       }
     }
   }
@@ -440,11 +708,12 @@ class OfficeGameState {
     return {
       for (final ch in characters.values)
         if (ch.isHired)
-          ch.agentId: {
+          ch.instanceId: {
             'col': ch.tileCol,
             'row': ch.tileRow,
             'state': ch.state.name,
             'dir': ch.dir.name,
+            'onSkateboard': ch.isOnSkateboard,
           },
     };
   }
@@ -453,12 +722,22 @@ class OfficeGameState {
   /// Only moves idle/wandering characters — active (typing) characters
   /// are driven by agent_status and left untouched.
   void applyRemotePositions(
-    Map<String, ({int col, int row, String state, String dir})> remote,
+    Map<String, ({int col, int row, String state, String dir, bool onSkateboard})>
+        remote,
   ) {
     for (final entry in remote.entries) {
       final ch = characters[entry.key];
-      if (ch == null || !ch.isHired || ch.isActive) continue;
+      if (ch == null || !ch.isHired || ch.isActive || ch.isChatting) continue;
       final r = entry.value;
+
+      // Mirror skateboard flag so followers render the skateboard sprite and
+      // move at skate speed. The mount/dismount animations are intentionally
+      // skipped on followers — those are cosmetic, and replaying them would
+      // desync against the source's live tile snapshots.
+      if (ch.isOnSkateboard != r.onSkateboard) {
+        ch.isOnSkateboard = r.onSkateboard;
+      }
+
       if (ch.tileCol == r.col && ch.tileRow == r.row) continue;
       // Pathfind to the remote tile so the character walks there naturally
       final path = _findPathForCharacter(ch, r.col, r.row);
@@ -473,37 +752,49 @@ class OfficeGameState {
   }
 
   /// Sync agent states from the provider into game characters.
+  ///
+  /// [agentStates] is keyed by instanceId — one-to-one with our character map.
   void syncAgents(Map<String, AgentState> agentStates) {
-    for (final station in kStations) {
-      final ch = characters[station.agentId]!;
-      final agentState = agentStates[station.agentId];
+    for (final ch in characters.values) {
+      final agentState = agentStates[ch.instanceId];
+      if (agentState == null) continue;
 
-      if (agentState != null) {
-        final isNowActive = agentState.status != AgentStatus.idle;
-        final wasActive = ch.isActive;
+      final isNowActive = agentState.status != AgentStatus.idle;
+      final wasActive = ch.isActive;
 
-        ch.isReading = agentState.status == AgentStatus.reading;
-        ch.displayStatus = agentState.status;
+      ch.isReading = agentState.status == AgentStatus.reading;
+      ch.displayStatus = agentState.status;
 
-        if (isNowActive && !wasActive) {
-          ch.isActive = true;
-          _activateCharacter(ch);
-        } else if (!isNowActive && wasActive) {
-          ch.isActive = false;
-          ch.seatTimer = -1; // sentinel: skip long rest on arrival
-          ch.path = [];
-          ch.moveProgress = 0;
-        }
+      if (isNowActive && !wasActive) {
+        ch.isActive = true;
+        _activateCharacter(ch);
+      } else if (!isNowActive && wasActive) {
+        ch.isActive = false;
+        ch.seatTimer = -1; // sentinel: skip long rest on arrival
+        ch.path = [];
+        ch.moveProgress = 0;
       }
     }
   }
 
   void _activateCharacter(GameCharacter ch) {
     ch.isOnSkateboard = false;
+    // Any activation cancels an in-progress chat — the character has work
+    // to do. The partner is cleaned up on its next update tick.
+    if (ch.isChatting) {
+      ch.isChatting = false;
+      ch.chatTimer = 0;
+      ch.chatPartnerId = null;
+    }
     if (ch.seat == null) {
-      ch.state = CharState.typing;
+      // Seatless extras (e.g. second instance of a role) don't have a desk
+      // to type at. Keep them walking around the office instead of snapping
+      // into a mid-floor typing pose, which looks off.
+      if (ch.state == CharState.walk) return;
+      ch.state = CharState.idle;
       ch.frame = 0;
       ch.frameTimer = 0;
+      ch.wanderTimer = _randomRange(0.3, 1.5);
       return;
     }
 
@@ -544,6 +835,47 @@ class OfficeGameState {
     return path;
   }
 
+  /// Build a long skate path that chains several far-apart waypoints so the
+  /// character laps around the office instead of rolling a handful of tiles.
+  /// Each waypoint is chosen by sampling random walkable tiles and keeping
+  /// the farthest from the current leg origin.
+  List<TilePos> _buildSkateLoopPath(GameCharacter ch) {
+    if (walkableTiles.isEmpty) return const [];
+
+    final ownSeatKey = ch.seat != null
+        ? '${ch.seat!.seatCol},${ch.seat!.seatRow}'
+        : null;
+    if (ownSeatKey != null) blockedTiles.remove(ownSeatKey);
+
+    final path = <TilePos>[];
+    int curCol = ch.tileCol;
+    int curRow = ch.tileRow;
+
+    for (int i = 0; i < kSkateWaypointCount; i++) {
+      TilePos? best;
+      int bestDist = -1;
+      for (int k = 0; k < kSkateWaypointSamples; k++) {
+        final c = walkableTiles[_rng.nextInt(walkableTiles.length)];
+        if (c.col == curCol && c.row == curRow) continue;
+        final d = (c.col - curCol).abs() + (c.row - curRow).abs();
+        if (d > bestDist) {
+          bestDist = d;
+          best = c;
+        }
+      }
+      if (best == null) break;
+      final segment =
+          _findPath(curCol, curRow, best.col, best.row, tileMap, blockedTiles);
+      if (segment.isEmpty) continue;
+      path.addAll(segment);
+      curCol = best.col;
+      curRow = best.row;
+    }
+
+    if (ownSeatKey != null) blockedTiles.add(ownSeatKey);
+    return path;
+  }
+
   void _snapToTile(GameCharacter ch) {
     ch.x = ch.tileCol * kTileSize + kTileSize / 2;
     ch.y = ch.tileRow * kTileSize + kTileSize / 2;
@@ -555,9 +887,81 @@ class OfficeGameState {
       if (!ch.isHired) continue;
       _updateCharacter(ch, dt);
     }
+    _chatScanAccum += dt;
+    if (_chatScanAccum >= kChatScanInterval) {
+      _chatScanAccum -= kChatScanInterval;
+      _maybeStartChats(kChatScanInterval);
+    }
     _updateCat(dt);
     _updatePlants(dt);
     _updateCoffeeMachine(dt);
+  }
+
+  /// Walk the roster and let nearby wandering characters strike up a chat
+  /// occasionally. Both sides enter chat state together so the partner
+  /// actually stops and turns to face back.
+  void _maybeStartChats(double interval) {
+    final startChance = kChatStartChancePerSec * interval;
+    final chars = characters.values.where(_canChat).toList();
+    for (int i = 0; i < chars.length; i++) {
+      final a = chars[i];
+      if (!_canChat(a)) continue; // may have been paired this iteration
+      if (_rng.nextDouble() >= startChance) continue;
+      for (int j = 0; j < chars.length; j++) {
+        if (i == j) continue;
+        final b = chars[j];
+        if (!_canChat(b)) continue;
+        final dx = (a.tileCol - b.tileCol).abs();
+        final dy = (a.tileRow - b.tileRow).abs();
+        // Adjacent (incl. diagonal) — close enough to notice each other.
+        if (dx <= 1 && dy <= 1 && (dx + dy) > 0) {
+          _startChat(a, b);
+          break;
+        }
+      }
+    }
+  }
+
+  bool _canChat(GameCharacter ch) {
+    if (!ch.isHired) return false;
+    if (ch.isActive) return false;
+    if (ch.isChatting) return false;
+    if (ch.isOnSkateboard) return false;
+    if (ch.chatCooldown > 0) return false;
+    // Must be on foot in the office floor, not sitting at a desk.
+    if (ch.state == CharState.typing) return false;
+    if (ch.state == CharState.skateMount ||
+        ch.state == CharState.skateDismount) {
+      return false;
+    }
+    return true;
+  }
+
+  void _startChat(GameCharacter a, GameCharacter b) {
+    final duration = _randomRange(kChatMinDuration, kChatMaxDuration);
+    for (final ch in [a, b]) {
+      ch.isChatting = true;
+      ch.chatTimer = duration;
+      ch.state = CharState.idle;
+      ch.path = [];
+      ch.moveProgress = 0;
+      ch.frame = 0;
+      ch.frameTimer = 0;
+    }
+    a.chatPartnerId = b.instanceId;
+    b.chatPartnerId = a.instanceId;
+    // Face each other.
+    a.dir = _directionBetween(a.tileCol, a.tileRow, b.tileCol, b.tileRow);
+    b.dir = _directionBetween(b.tileCol, b.tileRow, a.tileCol, a.tileRow);
+  }
+
+  void _endChat(GameCharacter ch) {
+    ch.isChatting = false;
+    ch.chatTimer = 0;
+    ch.chatPartnerId = null;
+    ch.chatCooldown = _randomRange(kChatCooldownMin, kChatCooldownMax);
+    // Give them a beat before resuming random motion.
+    ch.wanderTimer = _randomRange(0.5, 2.0);
   }
 
   void _updateCharacter(GameCharacter ch, double dt) {
@@ -569,6 +973,33 @@ class OfficeGameState {
       if (ch.coffeeTimer <= 0) {
         ch.hasCoffee = false;
         ch.coffeeTimer = 0;
+      }
+    }
+
+    // Cool-down between chats so the same pair doesn't immediately re-engage.
+    if (!ch.isChatting && ch.chatCooldown > 0) {
+      ch.chatCooldown -= dt;
+      if (ch.chatCooldown < 0) ch.chatCooldown = 0;
+    }
+
+    // Chatting overrides regular FSM — stand still, animate bubble, wait it out.
+    if (ch.isChatting) {
+      ch.chatTimer -= dt;
+      final partner = ch.chatPartnerId != null
+          ? characters[ch.chatPartnerId]
+          : null;
+      // If partner vanished (fired) or got activated, end early.
+      if (partner == null || !partner.isHired || partner.isActive) {
+        _endChat(ch);
+      } else if (ch.chatTimer <= 0) {
+        _endChat(ch);
+      } else {
+        // Idle sway: toggle frame slowly so the sprite breathes a little.
+        if (ch.frameTimer >= kTypeFrameDuration * 2) {
+          ch.frameTimer -= kTypeFrameDuration * 2;
+          ch.frame = (ch.frame + 1) % 2;
+        }
+        return;
       }
     }
 
@@ -634,27 +1065,41 @@ class OfficeGameState {
           }
 
           if (walkableTiles.isNotEmpty) {
-            final target = walkableTiles[_rng.nextInt(walkableTiles.length)];
-            final path = _findPathForCharacter(ch, target.col, target.row);
+            final wantSkate = ch.hasCoffee
+                ? _rng.nextDouble() < kCoffeeSkateChance
+                : _rng.nextDouble() < kSkateboardChance;
+
+            List<TilePos> path = const [];
+            bool skate = false;
+            if (wantSkate) {
+              path = _buildSkateLoopPath(ch);
+              skate = path.isNotEmpty;
+            }
+            if (path.isEmpty) {
+              // Lounge bias: 40% chance to wander toward lounge when it exists.
+              final lc = _loungeCenterTile;
+              if (lc != null && _rng.nextDouble() < 0.4) {
+                path = _findPathForCharacter(ch, lc.col, lc.row);
+              }
+              if (path.isEmpty) {
+                final target =
+                    walkableTiles[_rng.nextInt(walkableTiles.length)];
+                path = _findPathForCharacter(ch, target.col, target.row);
+              }
+            }
+
             if (path.isNotEmpty) {
               ch.path = path;
               ch.moveProgress = 0;
               ch.wanderCount++;
-              // Decide if skateboarding
-              final wantSkate = ch.hasCoffee
-                  ? _rng.nextDouble() < kCoffeeSkateChance
-                  : _rng.nextDouble() < kSkateboardChance;
-              if (wantSkate) {
-                // Enter mount phase before walking
+              if (skate) {
                 ch.isOnSkateboard = true;
                 ch.state = CharState.skateMount;
-                ch.frame = 0;
-                ch.frameTimer = 0;
               } else {
                 ch.state = CharState.walk;
-                ch.frame = 0;
-                ch.frameTimer = 0;
               }
+              ch.frame = 0;
+              ch.frameTimer = 0;
             }
           }
           ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
@@ -707,7 +1152,7 @@ class OfficeGameState {
         ch.dir = _directionBetween(
           ch.tileCol, ch.tileRow, nextTile.col, nextTile.row,
         );
-        final walkSpeed = ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec;
+        final walkSpeed = (ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec) * _speedBonus;
         ch.moveProgress += (walkSpeed / kTileSize) * dt;
 
         final fromX = ch.tileCol * kTileSize + kTileSize / 2;
@@ -806,7 +1251,7 @@ class OfficeGameState {
         if (ch.seatTimer < 0) {
           ch.seatTimer = 0;
         } else {
-          ch.seatTimer = _randomRange(kSeatRestMin, kSeatRestMax);
+          ch.seatTimer = _randomRange(kSeatRestMin, kSeatRestMax) * _seatRestMultiplier;
         }
         ch.wanderCount = 0;
         ch.wanderLimit = _randomInt(kWanderMovesMin, kWanderMovesMax);
@@ -902,11 +1347,12 @@ class OfficeGameState {
   }
 
   void _catGoToDesk() {
-    // Pick a random hired agent's desk
-    final hiredStations = kStations.where((s) {
-      final ch = characters[s.agentId];
-      return ch != null && ch.isHired;
-    }).toList();
+    // Pick a random desk whose role has at least one hired instance
+    final hiredRoles = <String>{
+      for (final c in characters.values) if (c.isHired) c.roleType,
+    };
+    final hiredStations =
+        kStations.where((s) => hiredRoles.contains(s.agentId)).toList();
     if (hiredStations.isEmpty) {
       _catWander();
       return;

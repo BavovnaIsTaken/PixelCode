@@ -10,6 +10,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../services/network_discovery_service.dart';
+import '../common/pixel_loader.dart';
+
+/// In-memory cache of discovered servers — survives dialog close/open within
+/// an app session, so reopening the form shows results instantly and the
+/// background rescan can silently merge in updates.
+final List<DiscoveredServer> _discoveredCache = [];
 
 /// Opens a dialog to create (or edit) a [SessionProfile].
 ///
@@ -193,8 +199,11 @@ class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
     _hostCtrl = TextEditingController(text: e?.host ?? '');
     _portCtrl = TextEditingController(text: (e?.port ?? 9720).toString());
     _hostCtrl.addListener(() => setState(() {}));
-    // Auto-scan on open (only for new sessions, not edits)
-    if (!_isEdit) _startScan();
+    // Seed from cache so reopening the form shows results instantly.
+    _discovered = List.of(_discoveredCache);
+    // Auto-scan on open (only for new sessions, not edits).
+    // `clear: false` → keep cached items visible while background scan runs.
+    if (!_isEdit) _startScan(clear: false);
   }
 
   @override
@@ -206,16 +215,22 @@ class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
     super.dispose();
   }
 
-  void _startScan() {
+  void _startScan({bool clear = true}) {
     if (_scanning) return;
     setState(() {
       _scanning = true;
-      _discovered = [];
+      if (clear) {
+        _discovered = [];
+        _discoveredCache.clear();
+      }
     });
     final ws = ref.read(wsServiceProvider);
     _scanSub = discoverServers(onLog: ws.log).listen(
       (server) {
-        if (mounted) setState(() => _discovered.add(server));
+        if (!mounted) return;
+        if (_discovered.contains(server)) return;
+        setState(() => _discovered.add(server));
+        if (!_discoveredCache.contains(server)) _discoveredCache.add(server);
       },
       onDone: () {
         if (mounted) setState(() => _scanning = false);
@@ -549,14 +564,7 @@ class _ScanSection extends StatelessWidget {
             ),
             child: Column(
               children: [
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    color: Color(0xFF00C0D1),
-                  ),
-                ),
+                const PixelLoader(size: 20),
                 const SizedBox(height: 8),
                 Text(
                   'Шукаємо сервери в мережі…',
@@ -617,14 +625,7 @@ class _ScanSection extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.5,
-                            color: Color(0xFF00C0D1),
-                          ),
-                        ),
+                        const PixelLoader(size: 16),
                         const SizedBox(width: 8),
                         Text(
                           'Шукаємо…',

@@ -16,7 +16,7 @@ import {
   type SDKToolProgressMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
-  teamAgents,
+  roleTemplateFor,
   buildOfficePrompt,
   hardwareToModel,
   type GameStateData,
@@ -157,12 +157,14 @@ export class AgentRunner {
       const agentTraits = formatTraitsForPrompt(traitStore, agentId);
       const systemPrompt = buildOfficePrompt(agentId, projectMemory, agentTraits, gameState);
 
-      // Determine model from hardware
-      const hwTier = gameState?.agentHardware[agentId] ?? 0;
+      // Determine model from hardware (hardware is tracked per instance now)
+      const instance = gameState?.instances[agentId];
+      const hwTier = instance?.hardware ?? 0;
       const model = hardwareToModel(hwTier);
 
-      // Determine tools — sub-agents cannot delegate
-      const agentDef = teamAgents[agentId];
+      // Determine tools — sub-agents cannot delegate.
+      // Look up the role template via the instance's roleType.
+      const agentDef = roleTemplateFor(agentId, gameState);
       const agentTools = agentDef?.tools?.filter((t) => t !== "Agent") ?? ["Read", "Glob", "Grep", "Bash"];
 
       const promptText = `[Manager dispatched task] ${task}`;

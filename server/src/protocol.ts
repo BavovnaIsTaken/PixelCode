@@ -35,9 +35,19 @@ export type ClientMessage =
   // Game economy
   | {
       type: "set_game_state";
-      hiredAgents: string[];
-      agentHardware: Record<string, number>; // HardwareTier enum index
-      agentSkills: Record<string, Record<string, number>>; // skillType → level (1-10)
+      /**
+       * Hired agent instances keyed by instanceId (e.g. "coder#1").
+       * Each entry carries the role type, nickname, hardware tier, and skills.
+       */
+      instances: Record<
+        string,
+        {
+          roleType: string; // "coder", "reviewer", "manager", etc.
+          nickname: string;
+          hardware: number; // HardwareTier enum index (0..5)
+          skills: Record<string, number>; // skillType index → level (1-10)
+        }
+      >;
       fullState?: string; // JSON-encoded full GameState for cross-device sync
       stateUpdatedAt?: number; // epoch ms — last-write-wins guard, server rejects older
     }
@@ -73,18 +83,24 @@ export type ClientMessage =
   // Tailscale setup
   | { type: "tailscale_connect" }
   // Client identification (sent on connect)
-  | { type: "client_info"; hostname: string; platform: string; clientId: string }
+  | { type: "client_info"; clientId: string; nickname: string; deviceName: string; platform: string }
   // Dungeon training
   | { type: "start_dungeon"; agentId: string; skillType: number; difficulty: 1 | 2 | 3 };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
-/** Agent identity */
+/** Agent identity — refers to either a hired instance (preferred) or a role template. */
 export interface AgentInfo {
+  /** instanceId (e.g. "coder#1") when describing a hired instance; roleType (e.g. "coder") when describing a template. */
   id: string;
+  /** Display nickname for instances, or role label for templates. */
   name: string;
+  /** Ukrainian role label. */
   role: string;
+  /** Effective Claude model. */
   model: string;
+  /** Underlying role type — absent for legacy server responses, present for instances. */
+  roleType?: string;
 }
 
 /** Agent activity status */
@@ -300,7 +316,10 @@ export type ServerMessage =
   // Character position sync (cross-device)
   | {
       type: "positions_sync";
-      positions: Record<string, { col: number; row: number; state: string; dir: string }>;
+      positions: Record<
+        string,
+        { col: number; row: number; state: string; dir: string; onSkateboard?: boolean }
+      >;
     }
   // Agent traits
   | {
@@ -389,8 +408,9 @@ export interface AndroidDeviceInfo {
 /** Info about a connected client device. */
 export interface ConnectedClientInfo {
   clientId: string;
-  hostname: string;
+  nickname: string; // user-chosen display name (primary)
+  deviceName: string; // OS hostname, sanitized (secondary detail)
   platform: string; // "macos" | "ios" | "android" | "web" | "unknown"
   connectedAt: string; // ISO 8601
-  isLocal: boolean; // true if connected to localhost
+  isHostMachine: boolean; // true if client connects via loopback — shares machine with the server
 }

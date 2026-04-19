@@ -169,33 +169,34 @@ class _ThemeGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
+    return Column(
       children: [
         for (final theme in themes)
-          _ThemeChip(
-            theme: theme,
-            isActive: theme.id == activeId,
-            isSelected: theme.id == previewId,
-            isOwned: isOwned(theme.id),
-            onTap: () => onSelect(theme.id),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: _ThemeRow(
+              theme: theme,
+              isActive: theme.id == activeId,
+              isSelected: theme.id == previewId,
+              isOwned: isOwned(theme.id),
+              onTap: () => onSelect(theme.id),
+            ),
           ),
       ],
     );
   }
 }
 
-// ─── Individual theme chip ────────────────────────────────────────────────
+// ─── Individual theme row ─────────────────────────────────────────────────
 
-class _ThemeChip extends StatelessWidget {
+class _ThemeRow extends StatelessWidget {
   final AppThemeDefinition theme;
   final bool isActive;
   final bool isSelected;
   final bool isOwned;
   final VoidCallback onTap;
 
-  const _ThemeChip({
+  const _ThemeRow({
     required this.theme,
     required this.isActive,
     required this.isSelected,
@@ -205,140 +206,88 @@ class _ThemeChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.appColors;
+    final tc = theme.colors;
     final borderColor = isSelected
-        ? theme.colors.accent
+        ? tc.accent
         : isActive
-            ? theme.colors.accent.withValues(alpha: 0.4)
-            : c.border;
+            ? tc.accent.withValues(alpha: 0.35)
+            : Colors.white.withValues(alpha: 0.06);
 
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        height: 40,
         decoration: BoxDecoration(
-          color: isSelected
-              ? theme.colors.accent.withValues(alpha: 0.1)
-              : theme.colors.background.withValues(alpha: 0.6),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: borderColor, width: isSelected ? 1.5 : 1),
+          gradient: LinearGradient(
+            colors: [
+              tc.accent.withValues(alpha: isSelected ? 0.25 : 0.12),
+              tc.background.withValues(alpha: isSelected ? 0.9 : 0.7),
+            ],
+            stops: const [0.0, 0.55],
+          ),
         ),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Row(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            // Colour swatch dots
-            _SwatchDots(colors: theme.colors),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '${theme.emoji} ${theme.name}',
-                      style: TextStyle(
-                        color: isSelected ? theme.colors.accent : c.textHigh,
-                        fontSize: 12,
-                        fontWeight:
-                            isSelected ? FontWeight.w600 : FontWeight.w500,
-                      ),
-                    ),
-                    if (isActive) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 4, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: c.accent.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                        child: Text(
-                          'ON',
-                          style: TextStyle(
-                            color: c.accent,
-                            fontSize: 7,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                if (!isOwned && !theme.isFree) ...[
-                  const SizedBox(height: 2),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.lock_outline, size: 9, color: c.gold.withValues(alpha: 0.6)),
-                      const SizedBox(width: 3),
-                      Text(
-                        '${theme.cost} ₲',
-                        style: TextStyle(
-                          color: c.gold.withValues(alpha: 0.7),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
+            // Color bar
+            Container(
+              width: 3,
+              height: 20,
+              decoration: BoxDecoration(
+                color: tc.accent,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
+            const SizedBox(width: 10),
+            // Name
+            Expanded(
+              child: Text(
+                theme.name,
+                style: TextStyle(
+                  color: isSelected
+                      ? tc.accent
+                      : Colors.white.withValues(alpha: 0.85),
+                  fontSize: 13,
+                  fontWeight:
+                      isSelected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+            // Price badge (not owned)
+            if (!isOwned && !theme.isFree) ...[
+              Icon(Icons.lock_outline,
+                  size: 11,
+                  color: Colors.white.withValues(alpha: 0.35)),
+              const SizedBox(width: 4),
+              Text(
+                '${theme.cost} ₲',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.4),
+                  fontSize: 11,
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
+            // Active indicator
+            if (isActive)
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: tc.accent,
+                ),
+              )
+            else
+              const SizedBox(width: 6),
           ],
         ),
       ),
     );
   }
-}
-
-// ─── Colour swatch dots ──────────────────────────────────────────────────
-
-class _SwatchDots extends StatelessWidget {
-  final ThemeColors colors;
-  const _SwatchDots({required this.colors});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _dot(colors.background),
-            const SizedBox(width: 2),
-            _dot(colors.surface),
-          ],
-        ),
-        const SizedBox(height: 2),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _dot(colors.accent),
-            const SizedBox(width: 2),
-            _dot(colors.gold),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _dot(Color color) => Container(
-        width: 8,
-        height: 8,
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(2),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.1),
-            width: 0.5,
-          ),
-        ),
-      );
 }
 
 // ─── Theme preview card with actions ──────────────────────────────────────
