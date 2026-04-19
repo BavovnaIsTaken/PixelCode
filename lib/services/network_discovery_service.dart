@@ -67,8 +67,10 @@ Stream<DiscoveredServer> discoverServers({
     } else if (event.type ==
         BonsoirDiscoveryEventType.discoveryServiceResolved) {
       if (service is! ResolvedBonsoirService) return;
-      final host = service.host;
-      if (host == null) return;
+      // Bonsoir returns an absolute DNS name with a trailing dot (e.g.
+      // "host.local.") which iOS mDNS can't resolve — strip it.
+      final host = service.host?.replaceAll(RegExp(r'\.+$'), '');
+      if (host == null || host.isEmpty) return;
       final key = '$host:${service.port}';
       if (seen.add(key)) {
         log('→ emitted: ${service.name} @ $host:${service.port}');

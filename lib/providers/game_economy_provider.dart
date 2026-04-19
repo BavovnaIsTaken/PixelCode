@@ -356,6 +356,41 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _syncToServer();
   }
 
+  /// Fills XP of every hired agent's skill to the next-level threshold,
+  /// skipping skills already at level 10. Does not spend grymni — the player
+  /// still has to click "upgrade" on each skill manually.
+  void maxXpForAllHiredAgents() {
+    if (state.agents.isEmpty) return;
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    for (final entry in state.agents.entries) {
+      final agent = entry.value;
+      final newXp = Map<SkillType, int>.from(agent.skillXp);
+      for (final skill in SkillType.values) {
+        final level = agent.skills[skill] ?? 1;
+        if (level >= 10) continue;
+        newXp[skill] = agent.xpForNextLevel(skill);
+      }
+      updated[entry.key] = agent.copyWith(skillXp: newXp);
+    }
+    state = state.copyWith(agents: updated);
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  void maxXpForAgentSkill(String instanceId, SkillType skill) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return;
+    final level = agent.skills[skill] ?? 1;
+    if (level >= 10) return;
+    final newXp = Map<SkillType, int>.from(agent.skillXp);
+    newXp[skill] = agent.xpForNextLevel(skill);
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = agent.copyWith(skillXp: newXp);
+    state = state.copyWith(agents: updated);
+    _scheduleSave();
+    _syncToServer();
+  }
+
   /// Send a dungeon challenge to the server for the given agent instance + skill.
   void startDungeon(String instanceId, SkillType skill, int difficulty) {
     ref.read(wsServiceProvider).startDungeon(
@@ -407,10 +442,51 @@ class GameEconomyNotifier extends Notifier<GameState> {
     if (next.isWipComingSoon) return;
     final cost = next.upgradeCost;
 
+    // Reset expansion count — the new tier's expansion track is independent.
+    // Drop any rooms/furniture that fall outside the new tier's base grid.
+    final nextCols = next.baseCols;
+    final nextRows = next.baseRows;
+    final keptRooms = state.placedRooms
+        .where((r) =>
+            r.col >= 1 &&
+            r.row >= 1 &&
+            r.col + r.type.widthTiles <= nextCols - 1 &&
+            r.row + r.type.heightTiles <= nextRows - 1)
+        .toList();
+    final keptFurniture = state.placedFurniture
+        .where((p) => p.col < nextCols - 1 && p.row < nextRows - 1)
+        .toList();
+
     state = state.copyWith(
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
       officeLevel: next,
+      officeExpansions: 0,
+      placedRooms: keptRooms,
+      placedFurniture: keptFurniture,
+    );
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  /// Whether the player can afford and is eligible for the next expansion
+  /// step at the current tier.
+  bool canBuyOfficeExpansion() {
+    final next = state.nextExpansion;
+    if (next == null) return false;
+    return state.grymni >= next.cost;
+  }
+
+  /// Buy the next expansion step at the current tier. No-op if the tier is
+  /// already maxed out or the player can't afford it.
+  void buyOfficeExpansion() {
+    if (!canBuyOfficeExpansion()) return;
+    final next = state.nextExpansion!;
+
+    state = state.copyWith(
+      grymni: state.grymni - next.cost,
+      totalSpent: state.totalSpent + next.cost,
+      officeExpansions: state.officeExpansions + 1,
     );
     _scheduleSave();
     _syncToServer();
@@ -648,6 +724,115 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final rooms = List<PlacedRoom>.from(state.placedRooms)..removeAt(idx);
     state = state.copyWith(
       grymni: state.grymni + room.type.cost ~/ 2,
+      placedRooms: rooms,
+    );
+    _scheduleSave();
+    _syncToServer();
+  }
+
+  // ─── Presets ──────────────────────────────────────────────────────────────
+
+  /// Validate whether [preset] fits at the given anchor (col, row) — all
+  /// component rooms must be inside the playable grid, not overlap any blocked
+  /// tile, not collide with existing rooms, and not push any room type past
+  /// its [RoomType.maxPerOffice] cap.
+  ///
+  /// [blockedTiles] is passed in rather than computed here so the caller
+  /// (the canvas) can reuse the same set the painter uses.
+  bool canApplyPreset({
+    required OfficePreset preset,
+    required int col,
+    required int row,
+    required Set<String> blockedTiles,
+  }) {
+    if (state.grymni < preset.totalCost) return false;
+
+    final gCols = state.gridCols;
+    final gRows = state.gridRows;
+
+    // Room-type count budget: existing + how many more this preset adds.
+    final addedByType = <RoomType, int>{};
+    for (final slot in preset.rooms) {
+      addedByType[slot.type] = (addedByType[slot.type] ?? 0) + 1;
+    }
+    for (final entry in addedByType.entries) {
+      final existing = roomCount(entry.key);
+      if (existing + entry.value > entry.key.maxPerOffice) return false;
+    }
+
+    // Each slot must fit inside the inner grid, avoid blocked tiles, and not
+    // overlap existing rooms.
+    for (final slot in preset.rooms) {
+      final sc = col + slot.colOffset;
+      final sr = row + slot.rowOffset;
+      final sw = slot.type.widthTiles;
+      final sh = slot.type.heightTiles;
+      if (sc < 1 || sr < 1) return false;
+      if (sc + sw > gCols - 1) return false;
+      if (sr + sh > gRows - 1) return false;
+      for (int dc = 0; dc < sw; dc++) {
+        for (int dr = 0; dr < sh; dr++) {
+          if (blockedTiles.contains('${sc + dc},${sr + dr}')) return false;
+        }
+      }
+      for (final r in state.placedRooms) {
+        final ox = sc < r.col + r.type.widthTiles && sc + sw > r.col;
+        final oy = sr < r.row + r.type.heightTiles && sr + sh > r.row;
+        if (ox && oy) return false;
+      }
+    }
+
+    // Within the preset itself, slots can technically overlap if authored
+    // poorly — reject pairs whose footprints collide.
+    for (int i = 0; i < preset.rooms.length; i++) {
+      final a = preset.rooms[i];
+      final ac = col + a.colOffset;
+      final ar = row + a.rowOffset;
+      for (int j = i + 1; j < preset.rooms.length; j++) {
+        final b = preset.rooms[j];
+        final bc = col + b.colOffset;
+        final br = row + b.rowOffset;
+        final ox = ac < bc + b.type.widthTiles && ac + a.type.widthTiles > bc;
+        final oy = ar < br + b.type.heightTiles && ar + a.type.heightTiles > br;
+        if (ox && oy) return false;
+      }
+    }
+
+    return true;
+  }
+
+  /// Apply [preset] at the given anchor — places every component room in one
+  /// transaction and charges the discounted total. No-op if validation fails.
+  void applyPreset({
+    required OfficePreset preset,
+    required int col,
+    required int row,
+    required Set<String> blockedTiles,
+  }) {
+    if (!canApplyPreset(
+      preset: preset,
+      col: col,
+      row: row,
+      blockedTiles: blockedTiles,
+    )) {
+      return;
+    }
+
+    final nowMicros = DateTime.now().microsecondsSinceEpoch;
+    final rooms = List<PlacedRoom>.from(state.placedRooms);
+    for (int i = 0; i < preset.rooms.length; i++) {
+      final slot = preset.rooms[i];
+      rooms.add(PlacedRoom(
+        id: 'room_${nowMicros}_$i',
+        type: slot.type,
+        col: col + slot.colOffset,
+        row: row + slot.rowOffset,
+      ));
+    }
+
+    state = state.copyWith(
+      grymni: state.grymni - preset.totalCost,
+      totalSpent: state.totalSpent + preset.totalCost,
       placedRooms: rooms,
     );
     _scheduleSave();

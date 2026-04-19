@@ -10,6 +10,23 @@ import 'app_theme.dart';
 
 // ─── Office levels ─────────────────────────────────────────────────────────
 
+/// One expansion step within a given office tier.
+///
+/// Each step grows the grid by [deltaCols] columns and/or [deltaRows] rows
+/// and costs [cost] ₲. Steps are ordered — buying step N requires having
+/// bought all prior steps at the current tier.
+class OfficeExpansion {
+  final int deltaCols;
+  final int deltaRows;
+  final int cost;
+
+  const OfficeExpansion({
+    this.deltaCols = 0,
+    this.deltaRows = 0,
+    required this.cost,
+  });
+}
+
 enum OfficeLevel {
   garage,
   smallOffice,
@@ -72,21 +89,130 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.campus => 500000,
       };
 
-  int get gridCols => switch (this) {
-        OfficeLevel.garage => 20,
-        OfficeLevel.smallOffice => 26,
-        OfficeLevel.modernOffice => 34,
-        OfficeLevel.techHub => 44,
-        OfficeLevel.campus => 70,
+  /// Base grid dimensions at purchase time (before any expansions bought).
+  /// Total grid includes a 1-tile wall on each side; playable inner area is
+  /// `(baseCols-2) × (baseRows-2)`.
+  int get baseCols => switch (this) {
+        OfficeLevel.garage => 7,
+        OfficeLevel.smallOffice => 9,
+        OfficeLevel.modernOffice => 11,
+        OfficeLevel.techHub => 12,
+        OfficeLevel.campus => 14,
       };
 
-  int get gridRows => switch (this) {
-        OfficeLevel.garage => 14,
-        OfficeLevel.smallOffice => 16,
-        OfficeLevel.modernOffice => 20,
-        OfficeLevel.techHub => 26,
-        OfficeLevel.campus => 40,
+  int get baseRows => switch (this) {
+        OfficeLevel.garage => 5,
+        OfficeLevel.smallOffice => 6,
+        OfficeLevel.modernOffice => 7,
+        OfficeLevel.techHub => 9,
+        OfficeLevel.campus => 12,
       };
+
+  /// Ordered expansion steps for this tier. Each step either adds a column
+  /// or a row (usually not both) and costs the given ₲. Steps are bought
+  /// sequentially — you must buy step N before step N+1.
+  List<OfficeExpansion> get expansions => switch (this) {
+        OfficeLevel.garage => const [
+            // base 7×5 inner 5×3=15 → 10×7 inner 8×5=40
+            OfficeExpansion(deltaCols: 1, cost: 80),   // 8×5 → 18
+            OfficeExpansion(deltaCols: 1, cost: 140),  // 9×5 → 21
+            OfficeExpansion(deltaRows: 1, cost: 200),  // 9×6 → 28
+            OfficeExpansion(deltaCols: 1, cost: 280),  // 10×6 → 32
+            OfficeExpansion(deltaRows: 1, cost: 380),  // 10×7 → 40
+          ],
+        OfficeLevel.smallOffice => const [
+            // base 9×6 inner 7×4=28 → 13×10 inner 11×8=88
+            OfficeExpansion(deltaCols: 1, cost: 350),  // 10×6 → 32
+            OfficeExpansion(deltaRows: 1, cost: 500),  // 10×7 → 40
+            OfficeExpansion(deltaCols: 1, cost: 700),  // 11×7 → 45
+            OfficeExpansion(deltaRows: 1, cost: 950),  // 11×8 → 54
+            OfficeExpansion(deltaCols: 1, cost: 1250), // 12×8 → 60
+            OfficeExpansion(deltaRows: 1, cost: 1600), // 12×9 → 70
+            OfficeExpansion(deltaCols: 1, cost: 2000), // 13×9 → 77
+            OfficeExpansion(deltaRows: 1, cost: 2500), // 13×10 → 88
+          ],
+        OfficeLevel.modernOffice => const [
+            // base 11×7 inner 9×5=45 → 16×12 inner 14×10=140
+            OfficeExpansion(deltaCols: 1, cost: 2200), // 12×7 → 50
+            OfficeExpansion(deltaRows: 1, cost: 3000), // 12×8 → 60
+            OfficeExpansion(deltaCols: 1, cost: 4000), // 13×8 → 66
+            OfficeExpansion(deltaRows: 1, cost: 5200), // 13×9 → 77
+            OfficeExpansion(deltaCols: 1, cost: 6800), // 14×9 → 84
+            OfficeExpansion(deltaRows: 1, cost: 8800), // 14×10 → 96
+            OfficeExpansion(deltaCols: 1, cost: 11000),// 15×10 → 104
+            OfficeExpansion(deltaRows: 1, cost: 13500),// 15×11 → 117
+            OfficeExpansion(deltaCols: 1, cost: 16500),// 16×11 → 126
+            OfficeExpansion(deltaRows: 1, cost: 20000),// 16×12 → 140
+          ],
+        OfficeLevel.techHub => const [
+            // base 12×9 inner 10×7=70 → 18×15 inner 16×13=208
+            OfficeExpansion(deltaCols: 1, cost: 12000), // 13×9 → 77
+            OfficeExpansion(deltaRows: 1, cost: 15000), // 13×10 → 88
+            OfficeExpansion(deltaCols: 1, cost: 18500), // 14×10 → 96
+            OfficeExpansion(deltaRows: 1, cost: 23000), // 14×11 → 108
+            OfficeExpansion(deltaCols: 1, cost: 28500), // 15×11 → 117
+            OfficeExpansion(deltaRows: 1, cost: 35000), // 15×12 → 130
+            OfficeExpansion(deltaCols: 1, cost: 43000), // 16×12 → 140
+            OfficeExpansion(deltaRows: 1, cost: 52000), // 16×13 → 154
+            OfficeExpansion(deltaCols: 1, cost: 63000), // 17×13 → 165
+            OfficeExpansion(deltaRows: 1, cost: 76000), // 17×14 → 180
+            OfficeExpansion(deltaCols: 1, cost: 92000), // 18×14 → 192
+            OfficeExpansion(deltaRows: 1, cost: 110000),// 18×15 → 208
+          ],
+        OfficeLevel.campus => const [
+            // base 14×12 inner 12×10=120 → 22×18 inner 20×16=320
+            OfficeExpansion(deltaCols: 1, cost: 90000),
+            OfficeExpansion(deltaRows: 1, cost: 110000),
+            OfficeExpansion(deltaCols: 1, cost: 135000),
+            OfficeExpansion(deltaRows: 1, cost: 165000),
+            OfficeExpansion(deltaCols: 1, cost: 200000),
+            OfficeExpansion(deltaRows: 1, cost: 240000),
+            OfficeExpansion(deltaCols: 1, cost: 285000),
+            OfficeExpansion(deltaRows: 1, cost: 340000),
+            OfficeExpansion(deltaCols: 1, cost: 400000),
+            OfficeExpansion(deltaRows: 1, cost: 470000),
+            OfficeExpansion(deltaCols: 1, cost: 550000),
+            OfficeExpansion(deltaRows: 1, cost: 640000),
+            OfficeExpansion(deltaCols: 1, cost: 740000),
+            OfficeExpansion(deltaRows: 1, cost: 850000),
+            OfficeExpansion(deltaCols: 1, cost: 980000),
+            OfficeExpansion(deltaRows: 1, cost: 1120000),
+          ],
+      };
+
+  /// Effective grid columns after applying [expansionsBought] steps (clamped
+  /// to `expansions.length`).
+  int effectiveCols(int expansionsBought) {
+    final n = expansionsBought.clamp(0, expansions.length);
+    var cols = baseCols;
+    for (var i = 0; i < n; i++) {
+      cols += expansions[i].deltaCols;
+    }
+    return cols;
+  }
+
+  int effectiveRows(int expansionsBought) {
+    final n = expansionsBought.clamp(0, expansions.length);
+    var rows = baseRows;
+    for (var i = 0; i < n; i++) {
+      rows += expansions[i].deltaRows;
+    }
+    return rows;
+  }
+
+  /// Playable inner tiles at the given expansion count — excludes the
+  /// 1-tile wall border. Used by the UI to show "X / Y клітинок" capacity.
+  int playableTiles(int expansionsBought) =>
+      (effectiveCols(expansionsBought) - 2) *
+      (effectiveRows(expansionsBought) - 2);
+
+  /// Base/max playable tiles — used for shop labels.
+  int get basePlayableTiles => playableTiles(0);
+  int get maxPlayableTiles => playableTiles(expansions.length);
+
+  /// Legacy grid dims — kept as aliases to base size for any stale readers.
+  int get gridCols => baseCols;
+  int get gridRows => baseRows;
 
   /// True for tiers that are gated behind "В розробці" — visible in the
   /// upgrade UI but not purchasable yet.
@@ -760,6 +886,32 @@ class FurniturePlacement {
 }
 
 const furnitureCatalog = <FurnitureItem>[
+  // ── Гаражний стартер ──
+  // Free starter props seeded into a fresh garage so the office isn't empty
+  // out of the gate. Remove via the furniture editor once real rooms replace
+  // them.
+  FurnitureItem(
+    id: 'old_desk',
+    type: FurnitureType.coffeeTable,
+    name: 'Пошарпаний стіл',
+    cost: 0,
+    description: 'Хитається, але тримає ноутбук. З чогось треба починати.',
+  ),
+  FurnitureItem(
+    id: 'stool',
+    type: FurnitureType.lounge,
+    name: 'Табуретка',
+    cost: 0,
+    description: 'Без спинки, без любові. Але працює.',
+  ),
+  FurnitureItem(
+    id: 'cardboard_boxes',
+    type: FurnitureType.storage,
+    name: 'Коробки',
+    cost: 0,
+    description: 'Стопка картонних коробок. Щось у них напевно є.',
+  ),
+
   // ── Кавові столики ──
   FurnitureItem(
     id: 'coffee_table_basic',
@@ -1042,6 +1194,12 @@ class PlacedRoom {
 class GameState {
   final int grymni;
   final OfficeLevel officeLevel;
+
+  /// Number of grid-expansion steps purchased at the current [officeLevel].
+  /// Reset to 0 on tier upgrade. Clamped at runtime to
+  /// `officeLevel.expansions.length`.
+  final int officeExpansions;
+
   final Map<String, AgentGameData> agents;
   final int totalEarned;
   final int totalSpent;
@@ -1078,6 +1236,7 @@ class GameState {
   const GameState({
     this.grymni = 500,
     this.officeLevel = OfficeLevel.garage,
+    this.officeExpansions = 0,
     this.agents = const {},
     this.totalEarned = 0,
     this.totalSpent = 0,
@@ -1124,9 +1283,33 @@ class GameState {
   String get displayNickname =>
       applyNicknameDecor(nickname, equippedFor(CosmeticType.nicknameDecor));
 
+  /// Effective grid columns = base + expansions bought at current tier.
+  int get gridCols => officeLevel.effectiveCols(officeExpansions);
+
+  /// Effective grid rows = base + expansions bought at current tier.
+  int get gridRows => officeLevel.effectiveRows(officeExpansions);
+
+  /// Currently playable inner tile count.
+  int get playableTiles => officeLevel.playableTiles(officeExpansions);
+
+  /// Max playable tiles if every expansion for this tier is bought.
+  int get maxPlayableTilesAtTier => officeLevel.maxPlayableTiles;
+
+  /// The next expansion step to be bought at the current tier, or null if
+  /// the tier is fully expanded.
+  OfficeExpansion? get nextExpansion {
+    final steps = officeLevel.expansions;
+    return officeExpansions < steps.length ? steps[officeExpansions] : null;
+  }
+
+  /// Whether the current tier is fully expanded (no more steps to buy).
+  bool get isOfficeFullyExpanded =>
+      officeExpansions >= officeLevel.expansions.length;
+
   GameState copyWith({
     int? grymni,
     OfficeLevel? officeLevel,
+    int? officeExpansions,
     Map<String, AgentGameData>? agents,
     int? totalEarned,
     int? totalSpent,
@@ -1143,6 +1326,7 @@ class GameState {
       GameState(
         grymni: grymni ?? this.grymni,
         officeLevel: officeLevel ?? this.officeLevel,
+        officeExpansions: officeExpansions ?? this.officeExpansions,
         agents: agents ?? this.agents,
         totalEarned: totalEarned ?? this.totalEarned,
         totalSpent: totalSpent ?? this.totalSpent,
@@ -1157,14 +1341,17 @@ class GameState {
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
-  /// Current on-disk schema version. v3 adds placedRooms + office grid sizes.
-  /// v2 saves load with empty placedRooms (graceful forward-compat).
-  static const int schemaVersion = 3;
+  /// Current on-disk schema version.
+  /// v2 → v3: added placedRooms.
+  /// v3 → v4: added officeExpansions; per-tier grids shrank (old saves get
+  /// their rooms re-validated against the new base grid).
+  static const int schemaVersion = 4;
 
   Map<String, dynamic> toJson() => {
         'schemaVersion': schemaVersion,
         'grymni': grymni,
         'officeLevel': officeLevel.index,
+        'officeExpansions': officeExpansions,
         'agents': {
           for (final e in agents.entries) e.key: e.value.toJson(),
         },
@@ -1191,6 +1378,7 @@ class GameState {
   factory GameState.fromJson(Map<String, dynamic> json) {
     // Load raw then apply in-flight migrations before the real constructor.
     var level = OfficeLevel.values[json['officeLevel'] as int? ?? 0];
+    var expansions = json['officeExpansions'] as int? ?? 0;
     var rooms = [
       for (final r in (json['placedRooms'] as List<dynamic>?) ?? [])
         PlacedRoom.fromJson(r as Map<String, dynamic>),
@@ -1200,18 +1388,15 @@ class GameState {
         FurniturePlacement.fromJson(p as Map<String, dynamic>),
     ];
 
-    // Migration: campus is WIP ("В розробці") — saves stuck at campus are
-    // pulled back to smallOffice so the player can pick a reachable tier.
-    if (level == OfficeLevel.campus) {
-      level = OfficeLevel.smallOffice;
-      // Rooms from a campus map will almost certainly be outside the new
-      // bounds — drop them all and let the player rebuild.
-      rooms = const [];
-    }
+    // Clamp expansions to the number this tier actually supports.
+    final maxSteps = level.expansions.length;
+    if (expansions < 0) expansions = 0;
+    if (expansions > maxSteps) expansions = maxSteps;
 
-    // Drop rooms/furniture that no longer fit in the (possibly shrunken) grid.
-    final gCols = level.gridCols;
-    final gRows = level.gridRows;
+    // Drop rooms/furniture that no longer fit in the effective grid (post
+    // migration — e.g. v3 → v4 grids may have shrunk).
+    final gCols = level.effectiveCols(expansions);
+    final gRows = level.effectiveRows(expansions);
     rooms = rooms
         .where((r) =>
             r.col >= 1 &&
@@ -1226,6 +1411,7 @@ class GameState {
     return GameState(
         grymni: json['grymni'] as int? ?? 500,
         officeLevel: level,
+        officeExpansions: expansions,
         agents: {
           for (final e
               in (json['agents'] as Map<String, dynamic>? ?? {}).entries)
@@ -1267,7 +1453,8 @@ class GameState {
   factory GameState.decode(String source) {
     final json = jsonDecode(source) as Map<String, dynamic>;
     final version = json['schemaVersion'] as int? ?? 1;
-    // Accept v2 (loads with empty placedRooms) and v3. Reject older/unknown.
+    // Accept v2 (empty placedRooms), v3 (no officeExpansions) and v4. Reject
+    // older/unknown.
     if (version < 2 || version > schemaVersion) {
       throw const FormatException('Incompatible game state schema');
     }
@@ -1297,9 +1484,14 @@ class GameState {
       agents: agents,
       nickname: generateGameNickname(seed),
       ownedCosmetics: {'title_rookie'}, // Free starter title
-      ownedFurniture: {'snack_table_basic'}, // Free starter furniture
+      ownedFurniture: {'old_desk', 'stool', 'cardboard_boxes'},
+      // Garage base grid is 7×5 (inner cols 1..5, rows 1..3). Pre-place the
+      // starter props along the far row so the office reads "lived-in" but
+      // the player can clear them out via the furniture editor.
       placedFurniture: [
-        FurniturePlacement(itemId: 'snack_table_basic', col: 14, row: 1),
+        FurniturePlacement(itemId: 'old_desk', col: 2, row: 3),
+        FurniturePlacement(itemId: 'stool', col: 3, row: 3),
+        FurniturePlacement(itemId: 'cardboard_boxes', col: 5, row: 3),
       ],
       // 0 = never persisted / never synced. Bumped on first real mutation via
       // _scheduleSave(). The server treats ts=0 as "fresh client, don't let me
@@ -1307,4 +1499,172 @@ class GameState {
       updatedAt: 0,
     );
   }
+}
+
+// ─── Office presets (room bundles) ─────────────────────────────────────────
+
+/// A single room within a preset, positioned relative to the preset anchor.
+class PresetRoomSlot {
+  final RoomType type;
+  final int colOffset;
+  final int rowOffset;
+
+  const PresetRoomSlot({
+    required this.type,
+    required this.colOffset,
+    required this.rowOffset,
+  });
+}
+
+/// A named bundle of rooms placed as a single unit — the "drop a whole
+/// wing in one click" mechanic. Useful when a player wants new space but
+/// doesn't feel like hand-placing individual rooms.
+class OfficePreset {
+  final String id;
+  final String name;
+  final String description;
+  final String icon;
+  final List<PresetRoomSlot> rooms;
+
+  /// Discount on the summed cost of all component rooms, in percent (0–100).
+  /// Reward for using curated layouts instead of buying each room alone.
+  final int discountPercent;
+
+  const OfficePreset({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.icon,
+    required this.rooms,
+    this.discountPercent = 8,
+  });
+
+  int get widthTiles {
+    var maxRight = 0;
+    for (final r in rooms) {
+      final right = r.colOffset + r.type.widthTiles;
+      if (right > maxRight) maxRight = right;
+    }
+    return maxRight;
+  }
+
+  int get heightTiles {
+    var maxBottom = 0;
+    for (final r in rooms) {
+      final bottom = r.rowOffset + r.type.heightTiles;
+      if (bottom > maxBottom) maxBottom = bottom;
+    }
+    return maxBottom;
+  }
+
+  int get componentsCost {
+    var total = 0;
+    for (final r in rooms) {
+      total += r.type.cost;
+    }
+    return total;
+  }
+
+  int get totalCost =>
+      (componentsCost * (100 - discountPercent) / 100).round();
+
+  /// True if any component room is a luxury room (gym, cinema, pool, mini-golf).
+  /// Garage-tier offices hide luxury presets since they can't host them anyway.
+  bool get hasLuxury {
+    for (final r in rooms) {
+      if (r.type.isLuxury) return true;
+    }
+    return false;
+  }
+}
+
+/// Starter catalog of curated room bundles.
+const officePresetCatalog = <OfficePreset>[
+  OfficePreset(
+    id: 'starter_desk',
+    name: 'Стартовий куток',
+    description: 'Одне робоче місце + переговорна. Мінімум для старту.',
+    icon: '🪑',
+    discountPercent: 5,
+    rooms: [
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.meetingRoom, colOffset: 2, rowOffset: 0),
+    ],
+  ),
+  OfficePreset(
+    id: 'dev_pod',
+    name: 'Дев-гніздо',
+    description: 'Два робочі місця + куток відпочинку поруч.',
+    icon: '💻',
+    discountPercent: 10,
+    rooms: [
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 2, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.breakRoom, colOffset: 0, rowOffset: 2),
+    ],
+  ),
+  OfficePreset(
+    id: 'meeting_hub',
+    name: 'Переговорний хаб',
+    description: 'Переговорна + куток відпочинку. Ідеально для планування.',
+    icon: '🗣️',
+    discountPercent: 8,
+    rooms: [
+      PresetRoomSlot(type: RoomType.meetingRoom, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.breakRoom, colOffset: 0, rowOffset: 2),
+    ],
+  ),
+  OfficePreset(
+    id: 'data_fortress',
+    name: 'Фортеця даних',
+    description: 'Сервер + робоче місце для devops. Спід-буст усій команді.',
+    icon: '🖥️',
+    discountPercent: 10,
+    rooms: [
+      PresetRoomSlot(type: RoomType.serverRoom, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 2, rowOffset: 0),
+    ],
+  ),
+  OfficePreset(
+    id: 'chill_wing',
+    name: 'Релакс-крило',
+    description: 'Скейт-куток + куток відпочинку. Тут батареї заряджаються.',
+    icon: '🛹',
+    discountPercent: 12,
+    rooms: [
+      PresetRoomSlot(type: RoomType.lounge, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.breakRoom, colOffset: 0, rowOffset: 2),
+    ],
+  ),
+  OfficePreset(
+    id: 'production_line',
+    name: 'Виробнича лінія',
+    description: 'Три робочі місця в ряд + сервер поруч.',
+    icon: '⚙️',
+    discountPercent: 12,
+    rooms: [
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 2, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.workstation, colOffset: 4, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.serverRoom, colOffset: 0, rowOffset: 2),
+    ],
+  ),
+  OfficePreset(
+    id: 'luxury_retreat',
+    name: 'Люкс-ретрит',
+    description: 'Спортзал + басейн. Для команд з бюджетом і мріями.',
+    icon: '🏊',
+    discountPercent: 8,
+    rooms: [
+      PresetRoomSlot(type: RoomType.gym, colOffset: 0, rowOffset: 0),
+      PresetRoomSlot(type: RoomType.pool, colOffset: 4, rowOffset: 0),
+    ],
+  ),
+];
+
+OfficePreset? officePresetById(String id) {
+  for (final preset in officePresetCatalog) {
+    if (preset.id == id) return preset;
+  }
+  return null;
 }

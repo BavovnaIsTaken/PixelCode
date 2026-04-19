@@ -68,12 +68,7 @@ class _SettingsPage extends ConsumerWidget {
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),
-      body: const SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: _SettingsContent(),
-        ),
-      ),
+      body: const SafeArea(child: _SettingsContent()),
     );
   }
 }
@@ -138,12 +133,7 @@ class _SettingsDialog extends ConsumerWidget {
               height: 1,
             ),
             // Content
-            const Flexible(
-              child: SingleChildScrollView(
-                padding: EdgeInsets.fromLTRB(24, 20, 24, 24),
-                child: _SettingsContent(),
-              ),
-            ),
+            const Flexible(child: _SettingsContent()),
           ],
         ),
       ),
@@ -151,67 +141,126 @@ class _SettingsDialog extends ConsumerWidget {
   }
 }
 
+// ─── Category taxonomy ─────────────────────────────────────────────────────
+
+enum _SettingsCategory {
+  account(Icons.person_outline, 'Обліковий запис'),
+  themes(Icons.palette_outlined, 'Теми'),
+  sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
+  sessions(Icons.cloud_outlined, 'Сесії'),
+  ergonomics(Icons.chair_outlined, 'Ергономіка'),
+  glitch(Icons.auto_fix_high_outlined, 'Глітч-ефект'),
+  logoPath(Icons.code, 'Алгоритм логотипа'),
+  tailscale(Icons.hub_outlined, 'Tailscale Funnel'),
+  iosDeploy(Icons.phone_iphone, 'Запуск iOS'),
+  cheats(Icons.auto_awesome_outlined, 'Чіти'),
+  danger(Icons.warning_amber_rounded, 'Небезпечна зона');
+
+  const _SettingsCategory(this.icon, this.label);
+
+  final IconData icon;
+  final String label;
+}
+
 // ─── Shared settings content ────────────────────────────────────────────────
 
-class _SettingsContent extends ConsumerWidget {
+class _SettingsContent extends ConsumerStatefulWidget {
   const _SettingsContent();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
-    final isConnected =
-        ref.watch(connectionStatusProvider).valueOrNull ?? false;
+  ConsumerState<_SettingsContent> createState() => _SettingsContentState();
+}
 
+class _SettingsContentState extends ConsumerState<_SettingsContent> {
+  _SettingsCategory _cat = _SettingsCategory.account;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 20, 16, 24),
+            child: _buildSection(_cat),
+          ),
+        ),
+        Container(width: 1, color: const Color(0xFF2A2A30)),
+        _CategoryRail(
+          selected: _cat,
+          onSelect: (c) => setState(() => _cat = c),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSection(_SettingsCategory cat) {
+    switch (cat) {
+      case _SettingsCategory.account:
+        return const _AccountSection();
+      case _SettingsCategory.themes:
+        return _buildThemes();
+      case _SettingsCategory.sendButton:
+        return _buildSendButton();
+      case _SettingsCategory.sessions:
+        return _buildSessions();
+      case _SettingsCategory.ergonomics:
+        return _buildErgonomics();
+      case _SettingsCategory.glitch:
+        return _buildGlitch();
+      case _SettingsCategory.logoPath:
+        return _buildLogoPath();
+      case _SettingsCategory.tailscale:
+        return _buildTailscale();
+      case _SettingsCategory.iosDeploy:
+        return _buildIosDeploy();
+      case _SettingsCategory.cheats:
+        return _buildCheats();
+      case _SettingsCategory.danger:
+        return _buildDanger();
+    }
+  }
+
+  Widget _buildThemes() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Section: Account ──────────────────────────────────────────
-        const _AccountSection(),
-
-        // ── Section: Themes ──────────────────────────────────────────
         _SectionHeader(title: 'Теми'),
         const SizedBox(height: 12),
-        Text(
-          'Обери стиль свого робочого простору. '
-          'Преміум теми можна кастомізувати.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Обери стиль свого робочого простору. '
+            'Преміум теми можна кастомізувати.'),
         const SizedBox(height: 14),
         const ThemeSection(),
-        const SizedBox(height: 32),
+      ],
+    );
+  }
 
-        // ── Section: Send button ─────────────────────────────────────
+  Widget _buildSendButton() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Кнопка «Надіслати»'),
         const SizedBox(height: 12),
-        Text(
-          'Ексклюзивні ручні дизайни найчастіше натискуваної '
-          'кнопки. Преміум-варіанти — найдорожча косметика в магазині.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Ексклюзивні ручні дизайни найчастіше натискуваної '
+            'кнопки. Преміум-варіанти — найдорожча косметика в магазині.'),
         const SizedBox(height: 14),
         const SendButtonSection(),
-        const SizedBox(height: 32),
+      ],
+    );
+  }
 
-        // ── Section: Sessions ──────────────────────────────────────────
+  Widget _buildSessions() {
+    final session = ref.watch(sessionProvider);
+    final isConnected =
+        ref.watch(connectionStatusProvider).valueOrNull ?? false;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Сесії'),
         const SizedBox(height: 12),
-        Text(
-          'Серверні профілі для підключення. '
-          'Оберіть активну сесію в заголовку вікна.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Серверні профілі для підключення. '
+            'Оберіть активну сесію в заголовку вікна.'),
         const SizedBox(height: 12),
-
-        // Profile list
         for (final profile in session.profiles) ...[
           _SessionProfileTile(
             profile: profile,
@@ -224,7 +273,6 @@ class _SettingsContent extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
         ],
-
         const SizedBox(height: 8),
         SizedBox(
           width: double.infinity,
@@ -244,9 +292,14 @@ class _SettingsContent extends ConsumerWidget {
             ),
           ),
         ),
+      ],
+    );
+  }
 
-        // ── Section: Ergonomics ────────────────────────────────────────
-        const SizedBox(height: 32),
+  Widget _buildErgonomics() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Ергономіка робочого місця'),
         const SizedBox(height: 12),
         Text(
@@ -258,32 +311,25 @@ class _SettingsContent extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Text(
-          'Мікрорегулювання висоти для оптимальної ергономічної '
-          'позиції під час кодування.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Мікрорегулювання висоти для оптимальної ергономічної '
+            'позиції під час кодування.'),
         const SizedBox(height: 14),
         _DeskHeightControl(
           value: ref.watch(settingsProvider).deskHeight,
           onChanged: (v) =>
               ref.read(settingsProvider.notifier).setDeskHeight(v),
         ),
+      ],
+    );
+  }
 
-        // ── Section: Glitch effect ─────────────────────────────────
-        const SizedBox(height: 32),
+  Widget _buildGlitch() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Глітч-ефект'),
         const SizedBox(height: 12),
-        Text(
-          'Налаштування візуального глітч-ефекту на логотипі.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Налаштування візуального глітч-ефекту на логотипі.'),
         const SizedBox(height: 14),
         _GlitchControls(
           enabled: ref.watch(settingsProvider).glitchEnabled,
@@ -305,20 +351,19 @@ class _SettingsContent extends ConsumerWidget {
           onChromaChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchChroma(v),
         ),
+      ],
+    );
+  }
 
-        // ── Section: Logo Path Algorithm ──────────────────────────
-        const SizedBox(height: 32),
+  Widget _buildLogoPath() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Алгоритм руху логотипа'),
         const SizedBox(height: 12),
-        Text(
-          'Власна функція позиції логотипа під час анімації вимкнення. '
-          'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
-          'Output: return Point(x, y).',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Власна функція позиції логотипа під час анімації вимкнення. '
+            'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
+            'Output: return Point(x, y).'),
         const SizedBox(height: 14),
         LogoPathEditor(
           script: ref.watch(settingsProvider).logoPathScript ??
@@ -330,52 +375,65 @@ class _SettingsContent extends ConsumerWidget {
                 .setLogoPathScript(isDefault ? null : script);
           },
         ),
+      ],
+    );
+  }
 
-        // ── Section: Tailscale Funnel ──────────────────────────────
-        const SizedBox(height: 32),
+  Widget _buildTailscale() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Tailscale Funnel'),
         const SizedBox(height: 12),
-        Text(
-          'Дозволяє підключатися до сервера та встановлювати '
-          'білди з iPhone з будь-якої мережі.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Дозволяє підключатися до сервера та встановлювати '
+            'білди з iPhone з будь-якої мережі.'),
         const SizedBox(height: 14),
         const _TailscaleSection(),
+      ],
+    );
+  }
 
-        // ── Section: iOS Deployment ────────────────────────────────
-        const SizedBox(height: 32),
+  Widget _buildIosDeploy() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         _SectionHeader(title: 'Конфігурація запуску iOS'),
         const SizedBox(height: 12),
-        Text(
-          'Побудова та OTA-встановлення iOS додатку через Wi-Fi. '
-          'Натисніть іконку телефону у панелі інструментів для '
-          'швидкого запуску.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Побудова та OTA-встановлення iOS додатку через Wi-Fi. '
+            'Натисніть іконку телефону у панелі інструментів для '
+            'швидкого запуску.'),
         const SizedBox(height: 14),
         const _DeployStatusSection(),
+      ],
+    );
+  }
 
-        // ── Danger zone ─────────────────────────────────────────────
-        const SizedBox(height: 32),
-        _SectionHeader(title: 'Небезпечна зона', color: Colors.red.withValues(alpha: 0.7)),
+  Widget _buildCheats() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Чіти'),
         const SizedBox(height: 12),
-        Text(
-          'Операції, які можуть привести до втрати даних. '
-          'Виконуйте з обережністю.',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.35),
-            fontSize: 12,
-          ),
-        ),
+        _desc('Швидкі дії для розробки та тестування.'),
         const SizedBox(height: 14),
-        // Clear sessions
+      ],
+    );
+  }
+
+  Widget _buildDanger() {
+    final isConnected =
+        ref.watch(connectionStatusProvider).valueOrNull ?? false;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(
+          title: 'Небезпечна зона',
+          color: Colors.red.withValues(alpha: 0.7),
+        ),
+        const SizedBox(height: 12),
+        _desc('Операції, які можуть привести до втрати даних. '
+            'Виконуйте з обережністю.'),
+        const SizedBox(height: 14),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -431,8 +489,7 @@ class _SettingsContent extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 14),
-        // Stop all agents button (only visible when connected)
-        if (isConnected) ...[
+        if (isConnected)
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -461,10 +518,17 @@ class _SettingsContent extends ConsumerWidget {
               ),
             ],
           ),
-        ],
       ],
     );
   }
+
+  Widget _desc(String text) => Text(
+        text,
+        style: TextStyle(
+          color: Colors.white.withValues(alpha: 0.35),
+          fontSize: 12,
+        ),
+      );
 
   Future<void> _addProfile(BuildContext context, WidgetRef ref) async {
     final profile = await showSessionFormDialog(context);
@@ -555,6 +619,89 @@ class _SettingsContent extends ConsumerWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Category rail ─────────────────────────────────────────────────────────
+
+class _CategoryRail extends StatelessWidget {
+  const _CategoryRail({required this.selected, required this.onSelect});
+
+  final _SettingsCategory selected;
+  final ValueChanged<_SettingsCategory> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 44,
+      color: Colors.black.withValues(alpha: 0.15),
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final cat in _SettingsCategory.values) ...[
+              _RailButton(
+                icon: cat.icon,
+                tooltip: cat.label,
+                active: cat == selected,
+                danger: cat == _SettingsCategory.danger,
+                onTap: () => onSelect(cat),
+              ),
+              const SizedBox(height: 6),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RailButton extends StatelessWidget {
+  const _RailButton({
+    required this.icon,
+    required this.tooltip,
+    required this.active,
+    required this.onTap,
+    this.danger = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final bool active;
+  final bool danger;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = danger
+        ? Colors.red.withValues(alpha: 0.85)
+        : const Color(0xFF00C0D1);
+    final iconColor = active
+        ? accent
+        : Colors.white.withValues(alpha: danger ? 0.55 : 0.45);
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: active
+                ? accent.withValues(alpha: 0.18)
+                : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active ? accent : Colors.transparent,
+            ),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 16, color: iconColor),
+        ),
       ),
     );
   }
