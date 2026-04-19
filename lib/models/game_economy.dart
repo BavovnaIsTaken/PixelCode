@@ -960,7 +960,10 @@ class GameState {
       placedFurniture: [
         FurniturePlacement(itemId: 'snack_table_basic', col: 14, row: 1),
       ],
-      updatedAt: DateTime.now().millisecondsSinceEpoch,
+      // 0 = never persisted / never synced. Bumped on first real mutation via
+      // _scheduleSave(). The server treats ts=0 as "fresh client, don't let me
+      // clobber authoritative state" — see set_game_state handler.
+      updatedAt: 0,
     );
   }
 }

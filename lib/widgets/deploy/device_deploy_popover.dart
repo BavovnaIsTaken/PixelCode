@@ -11,6 +11,7 @@ import '../../models/agent_message.dart' show AndroidDevice;
 import '../../models/app_theme.dart';
 import '../../providers/android_deploy_provider.dart';
 import '../../providers/ios_deploy_provider.dart';
+import '../../providers/screenshot_provider.dart';
 
 // ─── Public entry point ──────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
     super.dispose();
   }
 
-  static const _popoverWidth = 280.0;
+  static const _popoverWidth = 320.0;
   static const _edgeMargin = 8.0;
 
   @override
@@ -118,22 +119,36 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
                         ),
                       ],
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _TabBar(
-                          index: _tabIndex,
-                          onChanged: (i) => setState(() => _tabIndex = i),
-                        ),
-                        Container(height: 1, color: tc.divider),
-                        IndexedStack(
-                          index: _tabIndex,
-                          children: const [
-                            _AndroidTab(),
-                            _IOSTab(),
-                          ],
-                        ),
-                      ],
+                    child: IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _TabBar(
+                                  index: _tabIndex,
+                                  onChanged: (i) =>
+                                      setState(() => _tabIndex = i),
+                                ),
+                                Container(height: 1, color: tc.divider),
+                                IndexedStack(
+                                  index: _tabIndex,
+                                  children: const [
+                                    _AndroidTab(),
+                                    _IOSTab(),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(width: 1, color: tc.divider),
+                          _SideToolbar(
+                            platform: _tabIndex == 0 ? 'android' : 'ios',
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -142,6 +157,224 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
           ],
         );
       },
+    );
+  }
+}
+
+// ─── Side toolbar ───────────────────────────────────────────────────────
+
+class _SideToolbar extends ConsumerWidget {
+  const _SideToolbar({required this.platform});
+
+  /// Which tab is active — drives what the toolbar actions target.
+  final String platform;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tc = context.appColors;
+    final shot = ref.watch(screenshotProvider);
+    final busy = shot.phase == ScreenshotPhase.capturing;
+
+    // Show preview once a screenshot is ready — routed to the overlay
+    // after build so we don't schedule a navigator call during build.
+    ref.listen<ScreenshotState>(screenshotProvider, (prev, next) {
+      if (next.phase == ScreenshotPhase.ready && next.url != null) {
+        _showScreenshotViewer(context, next.url!, () {
+          ref.read(screenshotProvider.notifier).dismiss();
+        });
+      }
+    });
+
+    return SizedBox(
+      width: 36,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ToolbarButton(
+              icon: busy ? Icons.hourglass_top : Icons.photo_camera_outlined,
+              tooltip: 'Скріншот пристрою',
+              active: busy,
+              onTap: busy
+                  ? null
+                  : () => ref
+                      .read(screenshotProvider.notifier)
+                      .capture(platform: platform),
+            ),
+            if (shot.phase == ScreenshotPhase.error) ...[
+              const SizedBox(height: 6),
+              Tooltip(
+                message: shot.error ?? 'Помилка',
+                child: Icon(Icons.error_outline, size: 14, color: tc.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ToolbarButton extends StatelessWidget {
+  const _ToolbarButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.appColors;
+    final enabled = onTap != null;
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: active
+                ? tc.accent.withValues(alpha: 0.18)
+                : Colors.white.withValues(alpha: enabled ? 0.04 : 0.0),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active ? tc.accent : Colors.transparent,
+            ),
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            icon,
+            size: 14,
+            color: enabled ? tc.textMedium : tc.textLow,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Screenshot viewer overlay ──────────────────────────────────────────
+
+void _showScreenshotViewer(
+  BuildContext context,
+  String url,
+  VoidCallback onClose,
+) {
+  late OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _ScreenshotViewer(
+      url: url,
+      onClose: () {
+        entry.remove();
+        onClose();
+      },
+    ),
+  );
+  Overlay.of(context, rootOverlay: true).insert(entry);
+}
+
+class _ScreenshotViewer extends StatelessWidget {
+  const _ScreenshotViewer({required this.url, required this.onClose});
+
+  final String url;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.appColors;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onClose,
+            child: Container(color: Colors.black.withValues(alpha: 0.7)),
+          ),
+        ),
+        Center(
+          child: Material(
+            color: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720, maxHeight: 900),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: tc.surface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: tc.border),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.photo_camera_outlined,
+                            size: 14, color: tc.textMedium),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Скріншот',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: tc.textHigh,
+                          ),
+                        ),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: onClose,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(Icons.close,
+                                size: 16, color: tc.textMedium),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Flexible(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.network(
+                          url,
+                          fit: BoxFit.contain,
+                          loadingBuilder: (c, child, p) => p == null
+                              ? child
+                              : SizedBox(
+                                  height: 200,
+                                  child: Center(
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: tc.accent,
+                                    ),
+                                  ),
+                                ),
+                          errorBuilder: (c, _, _) => Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              'Не вдалося завантажити зображення',
+                              style:
+                                  TextStyle(color: tc.error, fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -51,7 +51,11 @@ class AgentWsService {
   /// In-app connection log — visible on device for debugging.
   Stream<String> get connectionLog => _connLogController.stream;
 
-  void _log(String msg) {
+  void _log(String msg) => log(msg);
+
+  /// Public log sink — other services (e.g. mDNS discovery) can write here
+  /// so their output appears in the in-app connection console.
+  void log(String msg) {
     final ts = DateTime.now().toIso8601String().substring(11, 19);
     final line = '[$ts] $msg';
     debugPrint('[WS] $msg');
@@ -401,6 +405,16 @@ class AgentWsService {
 
   void androidDeployCancel() {
     _send({'type': 'android_deploy_cancel'});
+  }
+
+  // ─── Device screenshot ───────────────────────────────────────────────────
+
+  void captureScreenshot({required String platform, String? deviceSerial}) {
+    _send({
+      'type': 'screenshot_capture',
+      'platform': platform,
+      'deviceSerial': ?deviceSerial,
+    });
   }
 
   // ─── Tailscale setup ─────────────────────────────────────────────────────

@@ -1614,6 +1614,7 @@ function makeOtaHandler() {
       ".ipa": "application/octet-stream",
       ".plist": "text/xml",
       ".apk": "application/vnd.android.package-archive",
+      ".png": "image/png",
     };
 
     res.writeHead(200, {
@@ -2282,6 +2283,101 @@ function androidDeployCancel(ws: WebSocket): void {
   }
 }
 
+// ─── Device screenshot ──────────────────────────────────────────────────────
+
+function sendScreenshotError(ws: WebSocket, platform: string, message: string): void {
+  send(ws, { type: "screenshot_status", subtype: "error", platform, message } as any);
+}
+
+function sendScreenshotReady(ws: WebSocket, platform: string, url: string): void {
+  send(ws, { type: "screenshot_status", subtype: "ready", platform, url } as any);
+}
+
+/** Public URL for a file served via the OTA HTTP endpoint. */
+function otaFileUrl(fileName: string): string {
+  const baseUrl = tailscaleUrl
+    ? tailscaleUrl.replace("wss://", "https://")
+    : `http://${getOtaHost()}:${PORT}`;
+  return `${baseUrl}/${fileName}`;
+}
+
+async function captureAndroidScreenshot(ws: WebSocket, requestedSerial?: string): Promise<void> {
+  const adbPath = findAdb();
+  if (!adbPath) {
+    sendScreenshotError(ws, "android", "adb не знайдено");
+    return;
+  }
+
+  let serial = requestedSerial;
+  if (!serial) {
+    const devices = await listAndroidDevices(adbPath);
+    const ready = devices.find((d) => d.state === "device");
+    serial = ready?.serial;
+  }
+  if (!serial) {
+    sendScreenshotError(ws, "android", "Пристрій не знайдено");
+    return;
+  }
+
+  const fileName = `screenshot-android-${Date.now()}.png`;
+  const filePath = join(otaDir, fileName);
+  try { mkdirSync(otaDir, { recursive: true }); } catch { /* ok */ }
+
+  const ok = await new Promise<boolean>((resolve) => {
+    const proc = spawn(adbPath, ["-s", serial!, "exec-out", "screencap", "-p"]);
+    const chunks: Buffer[] = [];
+    let stderr = "";
+    proc.stdout.on("data", (c: Buffer) => chunks.push(c));
+    proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+    proc.on("error", () => resolve(false));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        dbg("warn", "screenshot", `adb screencap exit ${code}: ${stderr}`);
+        resolve(false);
+        return;
+      }
+      try {
+        writeFileSync(filePath, Buffer.concat(chunks));
+        resolve(true);
+      } catch (e) {
+        dbg("warn", "screenshot", `write failed: ${(e as Error).message}`);
+        resolve(false);
+      }
+    });
+  });
+
+  if (!ok) {
+    sendScreenshotError(ws, "android", "Не вдалося зробити скріншот");
+    return;
+  }
+  sendScreenshotReady(ws, "android", otaFileUrl(fileName));
+}
+
+async function captureIosScreenshot(ws: WebSocket): Promise<void> {
+  const fileName = `screenshot-ios-${Date.now()}.png`;
+  const filePath = join(otaDir, fileName);
+  try { mkdirSync(otaDir, { recursive: true }); } catch { /* ok */ }
+
+  const ok = await new Promise<boolean>((resolve) => {
+    const proc = spawn("xcrun", ["simctl", "io", "booted", "screenshot", filePath]);
+    let stderr = "";
+    proc.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+    proc.on("error", () => resolve(false));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        dbg("warn", "screenshot", `simctl screenshot exit ${code}: ${stderr}`);
+      }
+      resolve(code === 0 && existsSync(filePath));
+    });
+  });
+
+  if (!ok) {
+    sendScreenshotError(ws, "ios", "Скріншот не вдався — запущений iOS симулятор?");
+    return;
+  }
+  sendScreenshotReady(ws, "ios", otaFileUrl(fileName));
+}
+
 // ─── HTTP + WebSocket server (single port for WS and OTA file serving) ───────
 
 const httpServer = createHttpServer(makeOtaHandler());
@@ -2297,11 +2393,28 @@ const mdnsService = bonjour.publish({
   type: "pixelcode",
   protocol: "tcp",
   port: PORT,
+  // Explicit TXT record — required for iOS NWBrowser.bonjourWithTXTRecord
+  // (used by the `bonsoir` package) to surface the service. Without a TXT
+  // record, iOS silently filters the service out, even though Android
+  // (NsdManager) and raw mDNS tools still see it.
+  txt: { version: "1" },
 });
 mdnsService.on("up", () => {
   dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${mdnsService.name}"`);
 });
 
+/** Unpublish mDNS and give the "goodbye" packets a moment to fly before exit. */
+function shutdownMdns(signal: string): void {
+  dbg("info", "mDNS", `Shutting down (signal=${signal}) — unpublishing…`);
+  bonjour.unpublishAll(() => {
+    bonjour.destroy();
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 1500);
+}
+
+process.on("SIGINT", () => shutdownMdns("SIGINT"));
+process.on("SIGTERM", () => shutdownMdns("SIGTERM"));
 process.on("exit", () => {
   bonjour.unpublishAll();
   bonjour.destroy();
@@ -2594,12 +2707,21 @@ wss.on("connection", (ws, request) => {
           // Cross-device sync: last-write-wins by timestamp. Older writes are
           // rejected and the authoritative state is pushed back so the stale
           // client converges instead of clobbering everyone.
+          //
+          // A fresh client signals itself with incomingTs == 0 (never-persisted
+          // state). We only accept such a payload when the server has nothing
+          // at all — otherwise a newly installed device could wipe another
+          // device's accumulated progress just by connecting.
           if (msg.fullState) {
             const incomingTs = msg.stateUpdatedAt ?? 0;
-            // Accept as seed when the server has nothing yet (first client
-            // after a fresh install / wiped state file).
             const isSeed = latestFullGameState === null;
-            if (isSeed || incomingTs > latestStateUpdatedAt) {
+            const isFreshClient = incomingTs === 0;
+            // Seed path: empty server accepts whatever the first client sends.
+            // Steady-state: reject fresh clients entirely; otherwise require a
+            // strictly newer timestamp than the authoritative one.
+            const accept =
+              isSeed || (!isFreshClient && incomingTs > latestStateUpdatedAt);
+            if (accept) {
               latestFullGameState = msg.fullState;
               latestStateUpdatedAt = incomingTs;
               persistGameState();
@@ -2773,6 +2895,25 @@ wss.on("connection", (ws, request) => {
         case "android_deploy_cancel":
           androidDeployCancel(ws);
           break;
+
+        // ─── Device screenshot ────────────────────────────────────────────
+        case "screenshot_capture": {
+          const payload = msg as {
+            type: "screenshot_capture";
+            platform: "android" | "ios";
+            deviceSerial?: string;
+          };
+          if (payload.platform === "android") {
+            captureAndroidScreenshot(ws, payload.deviceSerial).catch((err) => {
+              sendScreenshotError(ws, "android", `Screenshot failed: ${err}`);
+            });
+          } else {
+            captureIosScreenshot(ws).catch((err) => {
+              sendScreenshotError(ws, "ios", `Screenshot failed: ${err}`);
+            });
+          }
+          break;
+        }
 
         // ─── Tailscale setup ──────────────────────────────────────────
         case "tailscale_connect": {
