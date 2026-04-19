@@ -985,7 +985,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 // Unified input container: action buttons + text field share one frame
                 Expanded(

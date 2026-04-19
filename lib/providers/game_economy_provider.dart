@@ -31,10 +31,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
 
-    // Send game state to server on (re)connect
+    // Send game state to server on (re)connect — but ONLY if we have real
+    // persisted state. A fresh client (updatedAt == 0) must wait for the
+    // server's push, otherwise its default 500₲ state would race against and
+    // clobber another device's accumulated progress.
     _connSub?.cancel();
     _connSub = ws.connectionStatus.listen((connected) {
-      if (connected) _syncToServer();
+      if (connected && state.updatedAt > 0) _syncToServer();
     });
 
     // Passive income: 10₲ per minute while connected
@@ -147,6 +150,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalEarned: state.totalEarned + earned,
     );
     _scheduleSave();
+    _syncToServer();
   }
 
   void _passiveIncome() {
@@ -160,6 +164,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalEarned: state.totalEarned + 10,
     );
     _scheduleSave();
+    _syncToServer();
   }
 
   // ─── Hiring ────────────────────────────────────────────────────────────
@@ -281,6 +286,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
     updated[msg.agentId] = agent.copyWith(skillXp: newXp);
     state = state.copyWith(agents: updated);
     _scheduleSave();
+    _syncToServer();
   }
 
   /// Send a dungeon challenge to the server for the given agent + skill.
@@ -350,6 +356,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalEarned: state.totalEarned + package.grymni,
     );
     _scheduleSave();
+    _syncToServer();
   }
 
   // ─── Nickname ──────────────────────────────────────────────────────────
@@ -550,6 +557,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalEarned: state.totalEarned + amount,
     );
     _scheduleSave();
+    _syncToServer();
   }
 }
 

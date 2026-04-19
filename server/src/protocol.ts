@@ -68,6 +68,8 @@ export type ClientMessage =
   | { type: "android_deploy_list_devices" }
   | { type: "android_deploy_start"; deviceSerial?: string }
   | { type: "android_deploy_cancel" }
+  // Device screenshot (Android via adb, iOS via simctl)
+  | { type: "screenshot_capture"; platform: "android" | "ios"; deviceSerial?: string }
   // Tailscale setup
   | { type: "tailscale_connect" }
   // Client identification (sent on connect)
@@ -275,6 +277,19 @@ export type ServerMessage =
       type: "android_deploy_status";
       subtype: "devices_list";
       devices: AndroidDeviceInfo[];
+    }
+  // Device screenshot
+  | {
+      type: "screenshot_status";
+      subtype: "ready";
+      platform: "android" | "ios";
+      url: string;
+    }
+  | {
+      type: "screenshot_status";
+      subtype: "error";
+      platform: "android" | "ios";
+      message: string;
     }
   // Game state sync (cross-device)
   | {

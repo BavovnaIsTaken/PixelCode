@@ -87,6 +87,7 @@ sealed class ServerMessage {
       'input_images' => InputImagesMessage.fromJson(json),
       'ios_deploy_status' => IOSDeployStatusMessage.fromJson(json),
       'android_deploy_status' => AndroidDeployStatusMessage.fromJson(json),
+      'screenshot_status' => ScreenshotStatusMessage.fromJson(json),
       'tailscale_log' => TailscaleLogMessage.fromJson(json),
       'chat_history' => ChatHistoryMessage.fromJson(json),
       'game_state_sync' => GameStateSyncMessage.fromJson(json),
@@ -521,6 +522,30 @@ class AndroidDeployStatusMessage implements ServerMessage {
           .toList(),
     );
   }
+}
+
+class ScreenshotStatusMessage implements ServerMessage {
+  /// ready, error
+  final String subtype;
+  /// android, ios
+  final String platform;
+  final String? url;
+  final String? message;
+
+  ScreenshotStatusMessage({
+    required this.subtype,
+    required this.platform,
+    this.url,
+    this.message,
+  });
+
+  factory ScreenshotStatusMessage.fromJson(Map<String, dynamic> json) =>
+      ScreenshotStatusMessage(
+        subtype: json['subtype'] as String,
+        platform: json['platform'] as String? ?? 'android',
+        url: json['url'] as String?,
+        message: json['message'] as String?,
+      );
 }
 
 class TailscaleLogMessage implements ServerMessage {

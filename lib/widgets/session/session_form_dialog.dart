@@ -5,8 +5,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/session_profile.dart';
+import '../../providers/agent_provider.dart';
 import '../../services/network_discovery_service.dart';
 
 /// Opens a dialog to create (or edit) a [SessionProfile].
@@ -147,7 +149,7 @@ class _SessionFormDialog extends StatelessWidget {
 
 // ─── Shared form content ──────────────────────────────────────────────────────
 
-class _SessionFormContent extends StatefulWidget {
+class _SessionFormContent extends ConsumerStatefulWidget {
   const _SessionFormContent({
     this.existing,
     required this.onSubmit,
@@ -159,10 +161,11 @@ class _SessionFormContent extends StatefulWidget {
   final VoidCallback onCancel;
 
   @override
-  State<_SessionFormContent> createState() => _SessionFormContentState();
+  ConsumerState<_SessionFormContent> createState() =>
+      _SessionFormContentState();
 }
 
-class _SessionFormContentState extends State<_SessionFormContent> {
+class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _hostCtrl;
   late final TextEditingController _portCtrl;
@@ -209,7 +212,8 @@ class _SessionFormContentState extends State<_SessionFormContent> {
       _scanning = true;
       _discovered = [];
     });
-    _scanSub = discoverServers().listen(
+    final ws = ref.read(wsServiceProvider);
+    _scanSub = discoverServers(onLog: ws.log).listen(
       (server) {
         if (mounted) setState(() => _discovered.add(server));
       },
@@ -522,19 +526,10 @@ class _ScanSection extends StatelessWidget {
                     borderRadius: BorderRadius.circular(6),
                   ),
                 ),
-                icon: scanning
-                    ? const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: Color(0xFF00C0D1),
-                        ),
-                      )
-                    : const Icon(Icons.wifi_find_outlined, size: 14),
-                label: Text(
-                  scanning ? 'Сканування…' : 'Сканувати',
-                  style: const TextStyle(fontSize: 12),
+                icon: const Icon(Icons.wifi_find_outlined, size: 14),
+                label: const Text(
+                  'Сканувати',
+                  style: TextStyle(fontSize: 12),
                 ),
               ),
             ),

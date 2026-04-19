@@ -1011,55 +1011,67 @@ class _HubScreenState extends ConsumerState<HubScreen>
   }
 }
 
-class _GrymniDisplay extends StatelessWidget {
+class _GrymniDisplay extends ConsumerWidget {
   final int grymni;
   const _GrymniDisplay({required this.grymni});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final label = grymni >= 1000
         ? '${(grymni / 1000).toStringAsFixed(grymni % 1000 == 0 ? 0 : 1)}K'
         : grymni.toString();
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 3, 8, 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFD700).withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: const Color(0xFFFFD700).withValues(alpha: 0.2),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 14,
-            height: 14,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: Color(0xFFFFD700),
-            ),
-            child: const Center(
-              child: Text(
-                '₲',
-                style: TextStyle(
-                  color: Color(0xFF1A1A1F),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w900,
-                ),
+    return Tooltip(
+      message: 'Поповнити гримні',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            ref.read(shopDeepLinkProvider.notifier).state = shopTabDonation;
+          },
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 3, 8, 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFD700).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: const Color(0xFFFFD700).withValues(alpha: 0.2),
               ),
             ),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xFFFFD700),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 14,
+                  height: 14,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(0xFFFFD700),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      '₲',
+                      style: TextStyle(
+                        color: Color(0xFF1A1A1F),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
     );
   }
