@@ -23,6 +23,7 @@ import '../../services/logo_path_program.dart' show kDefaultLogoPathScript;
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
 import 'claude_avatar.dart';
+import 'diagnostics_section.dart';
 import 'logo_path_editor.dart';
 import 'send_button_section.dart';
 import 'theme_section.dart';
@@ -147,12 +148,10 @@ enum _SettingsCategory {
   account(Icons.person_outline, 'Обліковий запис'),
   themes(Icons.palette_outlined, 'Теми'),
   sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
-  sessions(Icons.cloud_outlined, 'Сесії'),
+  network(Icons.hub_outlined, 'Мережа'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
   glitch(Icons.auto_fix_high_outlined, 'Глітч-ефект'),
   logoPath(Icons.code, 'Алгоритм логотипа'),
-  tailscale(Icons.hub_outlined, 'Tailscale Funnel'),
-  iosDeploy(Icons.phone_iphone, 'Запуск iOS'),
   cheats(Icons.auto_awesome_outlined, 'Чіти'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
 
@@ -202,18 +201,14 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return _buildThemes();
       case _SettingsCategory.sendButton:
         return _buildSendButton();
-      case _SettingsCategory.sessions:
-        return _buildSessions();
+      case _SettingsCategory.network:
+        return _buildNetwork();
       case _SettingsCategory.ergonomics:
         return _buildErgonomics();
       case _SettingsCategory.glitch:
         return _buildGlitch();
       case _SettingsCategory.logoPath:
         return _buildLogoPath();
-      case _SettingsCategory.tailscale:
-        return _buildTailscale();
-      case _SettingsCategory.iosDeploy:
-        return _buildIosDeploy();
       case _SettingsCategory.cheats:
         return _buildCheats();
       case _SettingsCategory.danger:
@@ -245,6 +240,21 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             'кнопки. Преміум-варіанти — найдорожча косметика в магазині.'),
         const SizedBox(height: 14),
         const SendButtonSection(),
+      ],
+    );
+  }
+
+  Widget _buildNetwork() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSessions(),
+        const SizedBox(height: 24),
+        _buildTailscale(),
+        const SizedBox(height: 24),
+        _buildIosDeploy(),
+        const SizedBox(height: 24),
+        const DiagnosticsSection(),
       ],
     );
   }

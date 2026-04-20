@@ -47,6 +47,8 @@ import {
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
 import { ChatHistory } from "./chat_history.js";
+import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./health.js";
+import type { HealthItemId } from "./protocol.js";
 
 const PORT = parseInt(process.env.PORT ?? "9720", 10);
 let PROJECT_CWD = process.env.PROJECT_CWD ?? process.cwd();
@@ -2491,20 +2493,48 @@ httpServer.listen(PORT);
 // Advertise this server on the local network so PixelCode clients can
 // discover it automatically without manual IP entry.
 const bonjour = new Bonjour();
-const mdnsService = bonjour.publish({
-  name: `PixelCode @ ${hostname()}`,
-  type: "pixelcode",
-  protocol: "tcp",
-  port: PORT,
-  // Explicit TXT record — required for iOS NWBrowser.bonjourWithTXTRecord
-  // (used by the `bonsoir` package) to surface the service. Without a TXT
-  // record, iOS silently filters the service out, even though Android
-  // (NsdManager) and raw mDNS tools still see it.
-  txt: { version: "1" },
-});
-mdnsService.on("up", () => {
-  dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${mdnsService.name}"`);
-});
+let mdnsActive = false;
+let mdnsService: ReturnType<Bonjour["publish"]>;
+
+function publishMdns(): void {
+  mdnsService = bonjour.publish({
+    name: `PixelCode @ ${hostname()}`,
+    type: "pixelcode",
+    protocol: "tcp",
+    port: PORT,
+    // Explicit TXT record — required for iOS NWBrowser.bonjourWithTXTRecord
+    // (used by the `bonsoir` package) to surface the service. Without a TXT
+    // record, iOS silently filters the service out, even though Android
+    // (NsdManager) and raw mDNS tools still see it.
+    txt: { version: "1" },
+  });
+  mdnsService.on("up", () => {
+    mdnsActive = true;
+    dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${mdnsService.name}"`);
+  });
+}
+
+publishMdns();
+
+async function restartMdns(): Promise<boolean> {
+  mdnsActive = false;
+  return new Promise((resolve) => {
+    bonjour.unpublishAll(() => {
+      publishMdns();
+      // Give Bonjour a moment to re-advertise and fire the "up" event.
+      setTimeout(() => resolve(mdnsActive), 1500);
+    });
+  });
+}
+
+function buildHealthContext(): HealthContext {
+  return {
+    serverPort: PORT,
+    serverListening: httpServer.listening,
+    mdnsActive,
+    restartMdns,
+  };
+}
 
 /** Unpublish mDNS and give the "goodbye" packets a moment to fly before exit. */
 function shutdownMdns(signal: string): void {
@@ -3072,6 +3102,22 @@ wss.on("connection", (ws, request) => {
               tsLog(`tailscale up завершився з кодом ${code}`);
             }
           });
+          break;
+        }
+
+        // ─── Network diagnostics ─────────────────────────────────────────
+        case "health_check_request": {
+          const items = await runAllChecks(buildHealthContext());
+          send(ws, { type: "health_check_result", items } as any);
+          break;
+        }
+
+        case "health_fix_request": {
+          const payload = msg as { type: "health_fix_request"; id: HealthItemId };
+          const ctx = buildHealthContext();
+          await runFix(payload.id, ctx);
+          const updated = await runSingleCheck(payload.id, ctx);
+          if (updated) send(ws, { type: "health_item_update", item: updated } as any);
           break;
         }
 
