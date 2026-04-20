@@ -1192,6 +1192,13 @@ class PlacedRoom {
 // ─── Game state ────────────────────────────────────────────────────────────
 
 class GameState {
+  /// Current on-disk schema version. Bump this constant whenever the
+  /// serialised shape changes in a breaking way.
+  static const int currentSchemaVersion = 4;
+
+  /// The schema version this instance was created with (persisted in JSON).
+  final int schemaVersion;
+
   final int grymni;
   final OfficeLevel officeLevel;
 
@@ -1234,6 +1241,7 @@ class GameState {
   final int updatedAt;
 
   const GameState({
+    this.schemaVersion = currentSchemaVersion,
     this.grymni = 500,
     this.officeLevel = OfficeLevel.garage,
     this.officeExpansions = 0,
@@ -1307,6 +1315,7 @@ class GameState {
       officeExpansions >= officeLevel.expansions.length;
 
   GameState copyWith({
+    int? schemaVersion,
     int? grymni,
     OfficeLevel? officeLevel,
     int? officeExpansions,
@@ -1324,6 +1333,7 @@ class GameState {
     int? updatedAt,
   }) =>
       GameState(
+        schemaVersion: schemaVersion ?? this.schemaVersion,
         grymni: grymni ?? this.grymni,
         officeLevel: officeLevel ?? this.officeLevel,
         officeExpansions: officeExpansions ?? this.officeExpansions,
@@ -1340,12 +1350,6 @@ class GameState {
         placedRooms: placedRooms ?? this.placedRooms,
         updatedAt: updatedAt ?? this.updatedAt,
       );
-
-  /// Current on-disk schema version.
-  /// v2 → v3: added placedRooms.
-  /// v3 → v4: added officeExpansions; per-tier grids shrank (old saves get
-  /// their rooms re-validated against the new base grid).
-  static const int schemaVersion = 4;
 
   Map<String, dynamic> toJson() => {
         'schemaVersion': schemaVersion,
@@ -1409,6 +1413,7 @@ class GameState {
         .toList();
 
     return GameState(
+        schemaVersion: json['schemaVersion'] as int? ?? 1,
         grymni: json['grymni'] as int? ?? 500,
         officeLevel: level,
         officeExpansions: expansions,
@@ -1455,7 +1460,7 @@ class GameState {
     final version = json['schemaVersion'] as int? ?? 1;
     // Accept v2 (empty placedRooms), v3 (no officeExpansions) and v4. Reject
     // older/unknown.
-    if (version < 2 || version > schemaVersion) {
+    if (version < 2 || version > currentSchemaVersion) {
       throw const FormatException('Incompatible game state schema');
     }
     return GameState.fromJson(json);
