@@ -425,6 +425,16 @@ class AgentWsService {
     _send({'type': 'tailscale_connect'});
   }
 
+  // ─── Network diagnostics ────────────────────────────────────────────────
+
+  void healthCheckRequest() {
+    _send({'type': 'health_check_request'});
+  }
+
+  void healthFixRequest(String itemId) {
+    _send({'type': 'health_fix_request', 'id': itemId});
+  }
+
   // ─── Permissions bypass ───────────────────────────────────────────────────
 
   void setBypassPermissions(bool enabled) {

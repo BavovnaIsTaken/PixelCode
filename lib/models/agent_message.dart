@@ -107,6 +107,8 @@ sealed class ServerMessage {
       'android_deploy_status' => AndroidDeployStatusMessage.fromJson(json),
       'screenshot_status' => ScreenshotStatusMessage.fromJson(json),
       'tailscale_log' => TailscaleLogMessage.fromJson(json),
+      'health_check_result' => HealthCheckResultMessage.fromJson(json),
+      'health_item_update' => HealthItemUpdateMessage.fromJson(json),
       'chat_history' => ChatHistoryMessage.fromJson(json),
       'game_state_sync' => GameStateSyncMessage.fromJson(json),
       'positions_sync' => PositionsSyncMessage.fromJson(json),
@@ -574,6 +576,112 @@ class TailscaleLogMessage implements ServerMessage {
   const TailscaleLogMessage({required this.message});
   factory TailscaleLogMessage.fromJson(Map<String, dynamic> json) =>
       TailscaleLogMessage(message: json['message'] as String);
+}
+
+// ─── Network diagnostics ────────────────────────────────────────────────────
+
+enum HealthItemId {
+  tailscaleInstalled,
+  tailscaleRunning,
+  funnelActive,
+  serverListening,
+  clientConnected,
+  iosSigning,
+  xcodeTools,
+  androidSdk,
+  mdnsActive;
+
+  static HealthItemId? fromWire(String raw) => switch (raw) {
+        'tailscaleInstalled' => HealthItemId.tailscaleInstalled,
+        'tailscaleRunning' => HealthItemId.tailscaleRunning,
+        'funnelActive' => HealthItemId.funnelActive,
+        'serverListening' => HealthItemId.serverListening,
+        'clientConnected' => HealthItemId.clientConnected,
+        'iosSigning' => HealthItemId.iosSigning,
+        'xcodeTools' => HealthItemId.xcodeTools,
+        'androidSdk' => HealthItemId.androidSdk,
+        'mdnsActive' => HealthItemId.mdnsActive,
+        _ => null,
+      };
+
+  String get wire => switch (this) {
+        HealthItemId.tailscaleInstalled => 'tailscaleInstalled',
+        HealthItemId.tailscaleRunning => 'tailscaleRunning',
+        HealthItemId.funnelActive => 'funnelActive',
+        HealthItemId.serverListening => 'serverListening',
+        HealthItemId.clientConnected => 'clientConnected',
+        HealthItemId.iosSigning => 'iosSigning',
+        HealthItemId.xcodeTools => 'xcodeTools',
+        HealthItemId.androidSdk => 'androidSdk',
+        HealthItemId.mdnsActive => 'mdnsActive',
+      };
+}
+
+enum HealthStatus { ok, fail, checking }
+
+class HealthItem {
+  final HealthItemId id;
+  final HealthStatus status;
+  final String? detail;
+  final bool fixable;
+  final String? instruction;
+
+  const HealthItem({
+    required this.id,
+    required this.status,
+    this.fixable = false,
+    this.detail,
+    this.instruction,
+  });
+
+  HealthItem copyWith({HealthStatus? status, String? detail, bool? fixable, String? instruction}) =>
+      HealthItem(
+        id: id,
+        status: status ?? this.status,
+        detail: detail ?? this.detail,
+        fixable: fixable ?? this.fixable,
+        instruction: instruction ?? this.instruction,
+      );
+
+  static HealthItem? fromJson(Map<String, dynamic> json) {
+    final id = HealthItemId.fromWire(json['id'] as String? ?? '');
+    if (id == null) return null;
+    final statusRaw = json['status'] as String? ?? 'fail';
+    return HealthItem(
+      id: id,
+      status: switch (statusRaw) {
+        'ok' => HealthStatus.ok,
+        'checking' => HealthStatus.checking,
+        _ => HealthStatus.fail,
+      },
+      detail: json['detail'] as String?,
+      fixable: json['fixable'] as bool? ?? false,
+      instruction: json['instruction'] as String?,
+    );
+  }
+}
+
+class HealthCheckResultMessage implements ServerMessage {
+  final List<HealthItem> items;
+  const HealthCheckResultMessage({required this.items});
+  factory HealthCheckResultMessage.fromJson(Map<String, dynamic> json) {
+    final raw = (json['items'] as List?) ?? const [];
+    final items = <HealthItem>[];
+    for (final entry in raw) {
+      final item = HealthItem.fromJson(entry as Map<String, dynamic>);
+      if (item != null) items.add(item);
+    }
+    return HealthCheckResultMessage(items: items);
+  }
+}
+
+class HealthItemUpdateMessage implements ServerMessage {
+  final HealthItem? item;
+  const HealthItemUpdateMessage({required this.item});
+  factory HealthItemUpdateMessage.fromJson(Map<String, dynamic> json) =>
+      HealthItemUpdateMessage(
+        item: HealthItem.fromJson(json['item'] as Map<String, dynamic>? ?? const {}),
+      );
 }
 
 class ServerInfoMessage implements ServerMessage {

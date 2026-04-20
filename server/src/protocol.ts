@@ -82,6 +82,9 @@ export type ClientMessage =
   | { type: "screenshot_capture"; platform: "android" | "ios"; deviceSerial?: string }
   // Tailscale setup
   | { type: "tailscale_connect" }
+  // Network diagnostics
+  | { type: "health_check_request" }
+  | { type: "health_fix_request"; id: HealthItemId }
   // Client identification (sent on connect)
   | { type: "client_info"; clientId: string; nickname: string; deviceName: string; platform: string }
   // Dungeon training
@@ -346,6 +349,9 @@ export type ServerMessage =
     }
   // Tailscale setup log line
   | { type: "tailscale_log"; message: string }
+  // Network diagnostics
+  | { type: "health_check_result"; items: HealthItem[] }
+  | { type: "health_item_update"; item: HealthItem }
   // Connected devices list
   | {
       type: "clients_updated";
@@ -397,6 +403,26 @@ export type ServerMessage =
       passed: boolean;
     }
   | { type: "dungeon_error"; agentId: string; error: string };
+
+/** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */
+export type HealthItemId =
+  | "tailscaleInstalled"
+  | "tailscaleRunning"
+  | "funnelActive"
+  | "serverListening"
+  | "iosSigning"
+  | "xcodeTools"
+  | "androidSdk"
+  | "mdnsActive";
+
+/** Status of a single health check item. */
+export interface HealthItem {
+  id: HealthItemId;
+  status: "ok" | "fail" | "checking";
+  detail?: string;
+  fixable: boolean;
+  instruction?: string;
+}
 
 /** Info about a connected Android device reported by `adb devices`. */
 export interface AndroidDeviceInfo {
