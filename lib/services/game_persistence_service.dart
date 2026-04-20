@@ -17,12 +17,15 @@ class GamePersistenceService {
       final json = jsonDecode(raw) as Map<String, dynamic>;
       final version = json['schemaVersion'] as int? ?? 1;
       if (version != GameState.currentSchemaVersion) {
-        // Schema mismatch: drop state but preserve cosmetic ownership so
-        // players don't lose purchased items across breaking schema changes.
-        // Set a flag so the UI can show a one-time reset toast.
+        // Schema mismatch: drop state but preserve whitelisted fields so
+        // players don't lose currency or purchased items across breaking
+        // schema changes.  Set a flag so the UI can show a one-time reset
+        // toast.
         prefs.setBool('schemaResetFlag', true);
         final fresh = GameState.initial();
         return fresh.copyWith(
+          grymni: json['grymni'] as int? ?? fresh.grymni,
+          totalEarned: json['totalEarned'] as int? ?? fresh.totalEarned,
           ownedCosmetics: _parseStringSet(
             json['ownedCosmetics'],
             fresh.ownedCosmetics,
