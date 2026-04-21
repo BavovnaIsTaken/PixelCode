@@ -293,6 +293,23 @@ class _HubScreenState extends ConsumerState<HubScreen>
   void initState() {
     super.initState();
     _loadLogoImage();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowSchemaResetToast());
+  }
+
+  void _maybeShowSchemaResetToast() {
+    final prefs = ref.read(sharedPrefsProvider);
+    if (prefs.getBool('schemaResetFlag') != true) return;
+    prefs.remove('schemaResetFlag');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 8),
+        content: Text(
+          'Оновлення системи агентів вимагає перезапуску прогресу. '
+          'Гримні, косметика та ачівки збережені.',
+        ),
+      ),
+    );
   }
 
   @override

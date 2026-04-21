@@ -1194,7 +1194,7 @@ class PlacedRoom {
 class GameState {
   /// Current on-disk schema version. Bump this constant whenever the
   /// serialised shape changes in a breaking way.
-  static const int currentSchemaVersion = 4;
+  static const int currentSchemaVersion = 5;
 
   /// The schema version this instance was created with (persisted in JSON).
   final int schemaVersion;
