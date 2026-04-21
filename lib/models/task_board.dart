@@ -84,12 +84,12 @@ enum StickyColor {
 
 // ─── Task Difficulty ────────────────────────────────────────────────────────
 
-/// Task difficulty level (1-5). Determines required agent avg skill level.
-/// 1=Trivial (skill 1+), 2=Easy (3+), 3=Medium (5+), 4=Hard (7+), 5=Expert (9+)
+/// Task difficulty level (1-5).
+/// 1=Trivial, 2=Easy, 3=Medium, 4=Hard, 5=Expert.
+///
+/// Gating is level-based (see `requiredLevelFor`) + role-based (see
+/// [TaskCard.allowedRoles]); skills are a soft modifier, not a gate.
 extension TaskDifficultyExt on int {
-  /// Minimum required avg skill level for this difficulty.
-  double get requiredSkill => const [0, 1, 3, 5, 7, 9][clamp(0, 5).toInt()].toDouble();
-
   String get difficultyLabel => switch (this) {
         1 => 'Trivial',
         2 => 'Easy',
@@ -109,6 +109,13 @@ extension TaskDifficultyExt on int {
       };
 }
 
+/// Minimum agent level required to take a task of the given difficulty.
+/// Logarithmic curve — Expert stays a real challenge.
+int requiredLevelFor(int difficulty) {
+  final d = difficulty.clamp(1, 5);
+  return const [0, 1, 2, 4, 7, 11][d];
+}
+
 // ─── Task Card ──────────────────────────────────────────────────────────────
 
 class TaskCard {
@@ -124,6 +131,15 @@ class TaskCard {
   /// Difficulty level 1-5. Default 2 (Easy).
   final int difficulty;
 
+  /// Role types eligible to take this task. Default `['coder']`.
+  /// Schema v5+.
+  final List<String> allowedRoles;
+
+  /// Task-type identifier, e.g. `'coding'`, `'review'`, `'testing'`.
+  /// Used by the server to align system prompt. Default `'coding'`.
+  /// Schema v5+.
+  final String taskType;
+
   const TaskCard({
     required this.id,
     required this.title,
@@ -135,7 +151,12 @@ class TaskCard {
     required this.createdAt,
     required this.updatedAt,
     this.difficulty = 2,
+    this.allowedRoles = const ['coder'],
+    this.taskType = 'coding',
   });
+
+  /// Derived: minimum agent level required to take this task.
+  int get requiredLevel => requiredLevelFor(difficulty);
 
   TaskCard copyWith({
     String? title,
@@ -146,6 +167,8 @@ class TaskCard {
     List<String>? assignedAgents,
     DateTime? updatedAt,
     int? difficulty,
+    List<String>? allowedRoles,
+    String? taskType,
   }) =>
       TaskCard(
         id: id,
@@ -158,6 +181,8 @@ class TaskCard {
         createdAt: createdAt,
         updatedAt: updatedAt ?? DateTime.now(),
         difficulty: difficulty ?? this.difficulty,
+        allowedRoles: allowedRoles ?? this.allowedRoles,
+        taskType: taskType ?? this.taskType,
       );
 
   factory TaskCard.fromJson(Map<String, dynamic> json) => TaskCard(
@@ -175,6 +200,11 @@ class TaskCard {
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
         difficulty: json['difficulty'] as int? ?? 2,
+        allowedRoles: (json['allowedRoles'] as List?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const ['coder'],
+        taskType: json['taskType'] as String? ?? 'coding',
       );
 
   Map<String, dynamic> toJson() => {
@@ -188,6 +218,8 @@ class TaskCard {
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
         'difficulty': difficulty,
+        'allowedRoles': allowedRoles,
+        'taskType': taskType,
       };
 }
 
