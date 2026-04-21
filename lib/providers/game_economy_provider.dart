@@ -231,7 +231,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       roleType: roleType,
       nickname: defaultNicknameFor(role, ordinal),
       hardware: HardwareTier.oldLaptop,
-      skills: {for (final s in SkillType.values) s: 1},
+      skills: initialSkillsForRole(roleType),
     );
 
     state = state.copyWith(

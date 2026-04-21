@@ -615,6 +615,77 @@ RoleCatalogEntry? roleCatalogFor(String roleType) {
   return null;
 }
 
+// ─── Role-biased initial skills ───────────────────────────────────────────
+
+/// Initial skill distribution for a newly hired agent.
+///
+/// Each role has its own bias so agents start differentiated instead of
+/// uniform 1/1/1/1/1. Totals ~13 points (avg 2.6 per skill) — well below
+/// `skillCap(1) == 12`, leaving room for gold-paid upgrades.
+///
+/// Unknown roleType falls back to a balanced 2-point baseline across all
+/// skills.
+Map<SkillType, int> initialSkillsForRole(String roleType) {
+  return switch (roleType) {
+    'coder' => const {
+        SkillType.speed: 3,
+        SkillType.precision: 3,
+        SkillType.creativity: 2,
+        SkillType.insight: 3,
+        SkillType.reliability: 2,
+      },
+    'tech-lead' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 3,
+        SkillType.creativity: 3,
+        SkillType.insight: 4,
+        SkillType.reliability: 2,
+      },
+    'reviewer' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 5,
+        SkillType.creativity: 1,
+        SkillType.insight: 4,
+        SkillType.reliability: 3,
+      },
+    'tester' => const {
+        SkillType.speed: 3,
+        SkillType.precision: 2,
+        SkillType.creativity: 1,
+        SkillType.insight: 2,
+        SkillType.reliability: 5,
+      },
+    'security' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 4,
+        SkillType.creativity: 2,
+        SkillType.insight: 4,
+        SkillType.reliability: 3,
+      },
+    'ui-ux-designer' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 3,
+        SkillType.creativity: 5,
+        SkillType.insight: 1,
+        SkillType.reliability: 1,
+      },
+    'manager' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 2,
+        SkillType.creativity: 2,
+        SkillType.insight: 3,
+        SkillType.reliability: 3,
+      },
+    _ => const {
+        SkillType.speed: 2,
+        SkillType.precision: 2,
+        SkillType.creativity: 2,
+        SkillType.insight: 2,
+        SkillType.reliability: 2,
+      },
+  };
+}
+
 // ─── Instance-ID helpers ──────────────────────────────────────────────────
 
 /// Extract the role type from an instanceId like "coder#2" → "coder".
@@ -1489,7 +1560,7 @@ class GameState {
           roleType: role.roleType,
           nickname: defaultNicknameFor(role, i),
           hardware: HardwareTier.oldLaptop,
-          skills: {for (final s in SkillType.values) s: 1},
+          skills: initialSkillsForRole(role.roleType),
         );
       }
     }
