@@ -287,37 +287,46 @@ extension HardwareTierExt on HardwareTier {
 
 // ─── Agent skills ──────────────────────────────────────────────────────────
 
+/// Agent capability skills.
+///
+/// Each value maps to a measurable effect on task execution:
+/// * [speed] — time per task (lower wall-clock).
+/// * [precision] — fewer bugs (replaces old "quality").
+/// * [creativity] — crit chance on divergent task types.
+/// * [insight] — capability on hard tasks; tier-bias when picking the Claude
+///   model (replaces old "problemSolving").
+/// * [reliability] — chance the task completes without an `incomplete` roll.
 enum SkillType {
   speed,
-  quality,
-  communication,
-  problemSolving,
-  specialization,
+  precision,
+  creativity,
+  insight,
+  reliability,
 }
 
 extension SkillTypeExt on SkillType {
   String get label => switch (this) {
         SkillType.speed => 'Швидкість',
-        SkillType.quality => 'Якість коду',
-        SkillType.communication => 'Комунікація',
-        SkillType.problemSolving => 'Вирішення проблем',
-        SkillType.specialization => 'Спеціалізація',
+        SkillType.precision => 'Точність',
+        SkillType.creativity => 'Креативність',
+        SkillType.insight => 'Проникливість',
+        SkillType.reliability => 'Надійність',
       };
 
   String get icon => switch (this) {
         SkillType.speed => '⚡',
-        SkillType.quality => '✨',
-        SkillType.communication => '💬',
-        SkillType.problemSolving => '🧩',
-        SkillType.specialization => '🎯',
+        SkillType.precision => '🎯',
+        SkillType.creativity => '💡',
+        SkillType.insight => '🔮',
+        SkillType.reliability => '🔒',
       };
 
   int get baseCost => switch (this) {
         SkillType.speed => 100,
-        SkillType.quality => 150,
-        SkillType.communication => 120,
-        SkillType.problemSolving => 200,
-        SkillType.specialization => 250,
+        SkillType.precision => 150,
+        SkillType.creativity => 180,
+        SkillType.insight => 200,
+        SkillType.reliability => 130,
       };
 
   /// Cost to upgrade from current level to next.
