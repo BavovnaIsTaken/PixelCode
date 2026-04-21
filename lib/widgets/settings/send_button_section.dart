@@ -32,7 +32,7 @@ class SendButtonSection extends ConsumerWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         // Responsive: 2 columns wide, 1 column on narrow surfaces.
-        final cols = constraints.maxWidth < 380 ? 1 : 2;
+        final cols = constraints.maxWidth < 440 ? 1 : 2;
         return GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -250,15 +250,18 @@ class _StatusLine extends StatelessWidget {
         Icon(Icons.lock_outline,
             size: 11, color: c.textLow.withValues(alpha: 0.8)),
         const SizedBox(width: 4),
-        Text(
-          '${item.cost} ₲',
-          style: TextStyle(
-            color: canAfford ? c.gold : c.textLow,
-            fontSize: 11,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Text(
+            '${item.cost} ₲',
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: canAfford ? c.gold : c.textLow,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
-        const Spacer(),
+        const SizedBox(width: 6),
         _BuyButton(enabled: canAfford, onTap: onPurchase),
       ],
     );
