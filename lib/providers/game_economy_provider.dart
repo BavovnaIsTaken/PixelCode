@@ -356,6 +356,18 @@ class GameEconomyNotifier extends Notifier<GameState> {
     return levelsGained;
   }
 
+  /// Award a one-off crit bonus (100% of a typical task reward).
+  /// Called when a task completes with a creativity crit.
+  void awardCritBonus() {
+    const bonus = 150;
+    state = state.copyWith(
+      grymni: state.grymni + bonus,
+      totalEarned: state.totalEarned + bonus,
+    );
+    _scheduleSave();
+    _syncToServer();
+  }
+
   /// Dungeon completion now awards agent-level XP (not per-skill XP).
   /// The server still reports `xpEarned` in the legacy per-skill scale (0-100+
   /// ballpark); we scale it down ×5 for the new agent-XP curve.

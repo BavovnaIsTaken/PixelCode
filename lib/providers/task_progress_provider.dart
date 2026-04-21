@@ -3,11 +3,16 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/agent_level.dart';
+import '../models/game_economy.dart';
 import '../models/task_board.dart';
 import '../models/work_log_entry.dart';
+import '../services/task_outcome.dart';
+import 'game_economy_provider.dart';
 import 'task_board_provider.dart';
 
 // ─── Work-log provider ────────────────────────────────────────────────────────
@@ -158,18 +163,7 @@ class TaskProgressNotifier extends Notifier<void> {
     );
     if (task.title.isEmpty) return;
 
-    final nextColumn = switch (task.column) {
-      TaskColumn.backlog => TaskColumn.inProgress,
-      TaskColumn.inProgress => TaskColumn.testing,
-      TaskColumn.testing => TaskColumn.done,
-      TaskColumn.done => null,
-    };
-    if (nextColumn == null) {
-      _progress.remove(taskId);
-      return;
-    }
-
-    // Record a work log entry for each assigned agent.
+    // Work-log is recorded regardless of outcome.
     final progress = _progress[taskId];
     if (progress != null) {
       final elapsed = DateTime.now().difference(progress.columnEnteredAt);
@@ -182,13 +176,77 @@ class TaskProgressNotifier extends Notifier<void> {
           .toList();
       ref.read(workLogProvider.notifier).record(taskId, entries);
     }
-
     _progress.remove(taskId);
+
+    // For the final testing → done transition, roll for outcome.
+    // Other transitions (backlog → inProgress → testing) always succeed.
+    if (task.column == TaskColumn.testing) {
+      _advanceFromTesting(task);
+      return;
+    }
+
+    final nextColumn = switch (task.column) {
+      TaskColumn.backlog => TaskColumn.inProgress,
+      TaskColumn.inProgress => TaskColumn.testing,
+      TaskColumn.testing => TaskColumn.done,
+      TaskColumn.done => null,
+    };
+    if (nextColumn == null) return;
     ref.read(taskBoardProvider.notifier).moveTask(
           taskId: taskId,
           column: nextColumn,
         );
   }
+
+  /// Handle `testing → ?` transition: roll outcome, route column, award XP.
+  void _advanceFromTesting(TaskCard task) {
+    final agents = ref.read(gameEconomyProvider).agents;
+    final primaryId = task.assignedAgents.isNotEmpty ? task.assignedAgents.first : null;
+    final agent = primaryId != null ? agents[primaryId] : null;
+
+    // No assigned agent → just complete the task (fallback path; shouldn't normally happen).
+    if (agent == null) {
+      ref.read(taskBoardProvider.notifier).moveTask(
+            taskId: task.id,
+            column: TaskColumn.done,
+          );
+      return;
+    }
+
+    final outcome = rollOutcome(
+      rng: _rng,
+      precisionSkill: agent.skills[SkillType.precision] ?? 1,
+      creativitySkill: agent.skills[SkillType.creativity] ?? 1,
+      reliabilitySkill: agent.skills[SkillType.reliability] ?? 1,
+      isDivergentTask: divergentTaskTypes.contains(task.taskType),
+    );
+
+    final (TaskColumn next, double quality) = switch (outcome) {
+      TaskOutcome.clean => (TaskColumn.done, 1.5),
+      TaskOutcome.crit => (TaskColumn.done, 1.5),
+      TaskOutcome.bug => (TaskColumn.inProgress, 0.5),
+      TaskOutcome.incomplete => (TaskColumn.backlog, 0.5),
+    };
+
+    // Award XP to the agent.
+    final xp = xpForTask(
+      difficulty: task.difficulty,
+      quality: quality,
+      agentLevel: agent.level,
+    );
+    if (xp > 0) {
+      ref.read(gameEconomyProvider.notifier).addXpToAgent(agent.instanceId, xp);
+    }
+
+    // Crit = 100% bonus gold.
+    if (outcome == TaskOutcome.crit) {
+      ref.read(gameEconomyProvider.notifier).awardCritBonus();
+    }
+
+    ref.read(taskBoardProvider.notifier).moveTask(taskId: task.id, column: next);
+  }
+
+  final Random _rng = Random();
 }
 
 final taskProgressProvider =
