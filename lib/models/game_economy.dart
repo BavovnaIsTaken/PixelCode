@@ -354,8 +354,12 @@ class AgentGameData {
   final HardwareTier hardware;
   final Map<SkillType, int> skills;
 
-  /// XP accumulated towards next level for each skill.
-  final Map<SkillType, int> skillXp;
+  /// Agent level (1..maxAgentLevel). Gates tasks, caps skill upgrades,
+  /// grows with XP. Schema v5+.
+  final int level;
+
+  /// Experience points accumulated towards the next level. Schema v5+.
+  final int xp;
 
   const AgentGameData({
     required this.instanceId,
@@ -363,24 +367,26 @@ class AgentGameData {
     required this.nickname,
     this.hardware = HardwareTier.oldLaptop,
     this.skills = const {},
-    this.skillXp = const {},
+    this.level = 1,
+    this.xp = 0,
   });
 
-  int get skillLevel {
+  /// Average skill value — purely a cosmetic summary for UI.
+  /// Not used for gating (see `level`) or capability (see server's
+  /// `skillsToModel` which weights skills explicitly).
+  int get avgSkill {
     if (skills.isEmpty) return 0;
     return (skills.values.reduce((a, b) => a + b) / skills.length).round();
   }
 
   double get totalSpeedModifier => hardware.speedModifier;
 
-  /// XP required to unlock the next level for a skill (level × 100).
-  int xpForNextLevel(SkillType skill) => (skills[skill] ?? 1) * 100;
-
   AgentGameData copyWith({
     String? nickname,
     HardwareTier? hardware,
     Map<SkillType, int>? skills,
-    Map<SkillType, int>? skillXp,
+    int? level,
+    int? xp,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -388,7 +394,8 @@ class AgentGameData {
         nickname: nickname ?? this.nickname,
         hardware: hardware ?? this.hardware,
         skills: skills ?? this.skills,
-        skillXp: skillXp ?? this.skillXp,
+        level: level ?? this.level,
+        xp: xp ?? this.xp,
       );
 
   Map<String, dynamic> toJson() => {
@@ -399,9 +406,8 @@ class AgentGameData {
         'skills': {
           for (final e in skills.entries) e.key.index.toString(): e.value,
         },
-        'skillXp': {
-          for (final e in skillXp.entries) e.key.index.toString(): e.value,
-        },
+        'level': level,
+        'xp': xp,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -414,11 +420,8 @@ class AgentGameData {
               in (json['skills'] as Map<String, dynamic>? ?? {}).entries)
             SkillType.values[int.parse(e.key)]: e.value as int,
         },
-        skillXp: {
-          for (final e
-              in (json['skillXp'] as Map<String, dynamic>? ?? {}).entries)
-            SkillType.values[int.parse(e.key)]: e.value as int,
-        },
+        level: json['level'] as int? ?? 1,
+        xp: json['xp'] as int? ?? 0,
       );
 }
 
