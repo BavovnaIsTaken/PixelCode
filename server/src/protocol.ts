@@ -23,7 +23,16 @@ export type ClientMessage =
   | { type: "get_status" }
   // Task board
   | { type: "board_get_state" }
-  | { type: "board_create_task"; title: string; description?: string; color?: string; priority?: string }
+  | {
+      type: "board_create_task";
+      title: string;
+      description?: string;
+      color?: string;
+      priority?: string;
+      difficulty?: number;
+      allowedRoles?: string[];
+      taskType?: string;
+    }
   | { type: "board_move_task"; taskId: string; column: string }
   | { type: "board_update_task"; taskId: string; updates: Partial<TaskCardData> }
   | { type: "board_delete_task"; taskId: string }
@@ -133,6 +142,10 @@ export interface TaskCardData {
   createdAt: string; // ISO 8601
   updatedAt: string;
   difficulty?: number; // 1-5 (1=trivial, 2=easy, 3=medium, 4=hard, 5=expert), default 2
+  /** Role types eligible to take this task. Default `['coder']`. v5+. */
+  allowedRoles?: string[];
+  /** Task-type identifier (e.g. `'coding'`, `'review'`, `'testing'`). v5+. */
+  taskType?: string;
 }
 
 // ─── Server → Client ────────────────────────────────────────────────────────

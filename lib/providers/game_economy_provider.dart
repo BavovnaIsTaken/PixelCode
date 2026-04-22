@@ -14,6 +14,7 @@ import '../models/app_theme.dart';
 import '../models/game_economy.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
+import 'energy_provider.dart';
 import 'settings_provider.dart';
 
 class GameEconomyNotifier extends Notifier<GameState> {
@@ -118,11 +119,33 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _trackActivity(msg);
     if (msg is ResultMessage) {
       _onTaskCompleted(msg);
+    } else if (msg is SubagentResultMessage) {
+      _onSubagentResult(msg);
     } else if (msg is GameStateSyncMessage) {
       _onGameStateSync(msg);
     } else if (msg is DungeonCompleteMessage) {
       _onDungeonComplete(msg);
     }
+  }
+
+  /// Record a subagent's actual token usage into the Energy meter.
+  /// Model tier is inferred from the agent's skill vector using the same
+  /// capability score the server uses in [skillsToModel] — keeping client
+  /// and server estimates aligned so the meter reflects reality.
+  ///
+  /// Token estimate from `costUsd`: at Sonnet-ish blended pricing,
+  /// ~1 USD ≈ 200k tokens. Approximate but good enough for a budget signal.
+  void _onSubagentResult(SubagentResultMessage msg) {
+    final agent = state.agents[msg.agentId];
+    if (agent == null || msg.costUsd <= 0) return;
+    final model = capabilityModelForSkills(
+      precision: agent.skills[SkillType.precision] ?? 1,
+      creativity: agent.skills[SkillType.creativity] ?? 1,
+      insight: agent.skills[SkillType.insight] ?? 1,
+      reliability: agent.skills[SkillType.reliability] ?? 1,
+    );
+    final tokens = (msg.costUsd * 200000).round();
+    ref.read(energyProvider.notifier).recordTaskTokens(model, tokens);
   }
 
   /// Mirror the subset of AgentsNotifier's active/idle logic needed to decide
@@ -375,15 +398,6 @@ class GameEconomyNotifier extends Notifier<GameState> {
     if (state.agents[msg.agentId] == null) return;
     final gained = (msg.xpEarned ~/ 5).clamp(1, 999);
     addXpToAgent(msg.agentId, gained);
-  }
-
-  /// Send a dungeon challenge to the server for the given agent instance + skill.
-  void startDungeon(String instanceId, SkillType skill, int difficulty) {
-    ref.read(wsServiceProvider).startDungeon(
-      agentId: instanceId,
-      skillType: skill.index,
-      difficulty: difficulty.clamp(1, 3),
-    );
   }
 
   // ─── Hardware ──────────────────────────────────────────────────────────

@@ -10,10 +10,10 @@ test("skillsToModel — starter agent (all ~2) → haiku", () => {
   assert.equal(skillsToModel(skills), "haiku");
 });
 
-test("skillsToModel — mid-Lv reviewer (high precision+insight) → sonnet", () => {
+test("skillsToModel — mid-Lv reviewer (capability 7.3, just under 8) → haiku", () => {
   // Precision 10, Insight 8, Reliability 5, Creativity 1
   const skills = { "0": 1, "1": 10, "2": 1, "3": 8, "4": 5 };
-  // capability = 0.4*8 + 0.3*10 + 0.2*5 + 0.1*1 = 3.2 + 3.0 + 1.0 + 0.1 = 7.3 → still haiku
+  // capability = 0.4*8 + 0.3*10 + 0.2*5 + 0.1*1 = 7.3 → still haiku (threshold 8)
   assert.equal(skillsToModel(skills), "haiku");
 });
 

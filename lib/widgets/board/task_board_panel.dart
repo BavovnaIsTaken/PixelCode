@@ -1398,6 +1398,10 @@ class _BoardHeader extends ConsumerWidget {
           const Spacer(),
           _AddTaskButton(
             onAdd: (title, description, color, priority) {
+              // Difficulty/allowedRoles/taskType use TaskCard defaults
+              // (Easy, ['coder'], 'coding') until the _AddTaskButton sheet
+              // grows UI for them. Gating still applies — just trivially
+              // passes for any coder of Lv ≥ 2.
               final ok = ref.read(taskBoardProvider.notifier).createTask(
                 title: title,
                 description: description.isEmpty ? null : description,

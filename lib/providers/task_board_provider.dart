@@ -81,6 +81,9 @@ class TaskBoardNotifier extends Notifier<BoardState> {
     String? description,
     String? color,
     String? priority,
+    int? difficulty,
+    List<String>? allowedRoles,
+    String? taskType,
   }) {
     debugPrint('[TaskBoard] createTask: "$title"');
     final ws = ref.read(wsServiceProvider);
@@ -93,6 +96,9 @@ class TaskBoardNotifier extends Notifier<BoardState> {
           description: description,
           color: color,
           priority: priority,
+          difficulty: difficulty,
+          allowedRoles: allowedRoles,
+          taskType: taskType,
         );
     return true;
   }

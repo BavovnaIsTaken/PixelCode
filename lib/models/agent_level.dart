@@ -7,14 +7,35 @@ import 'dart:math';
 /// skill cap does not grow.
 const int maxAgentLevel = 20;
 
+/// Client-side mirror of the server's `skillsToModel` in `server/src/agents.ts`.
+/// Returns one of `'haiku' | 'sonnet' | 'opus'` based on a capability score.
+///
+/// Capability score weighting (Speed intentionally excluded):
+/// `0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity`.
+/// Thresholds: ≥14 opus, ≥8 sonnet, else haiku.
+///
+/// Used by the Energy meter to tag completed tasks with the model tier
+/// the server most likely ran. Must stay in sync with the server function.
+String capabilityModelForSkills({
+  required int precision,
+  required int creativity,
+  required int insight,
+  required int reliability,
+}) {
+  final capability = 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;
+  if (capability >= 14) return 'opus';
+  if (capability >= 8) return 'sonnet';
+  return 'haiku';
+}
+
 /// XP required to advance from [level] to [level + 1].
 /// Formula: `50 * level^1.6`. Floored to int.
 ///
-/// Examples (actual values):
+/// Examples (actual values — see `xpToNextLevel` tests):
 /// * Lv 1 → 50
 /// * Lv 2 → 151
-/// * Lv 10 → 1991
-/// * Lv 20 → 6062
+/// * Lv 10 → 1990
+/// * Lv 20 → 6034
 int xpToNextLevel(int level) {
   final n = level.clamp(1, maxAgentLevel).toDouble();
   return (50 * pow(n, 1.6)).floor();
