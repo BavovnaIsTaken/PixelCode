@@ -229,15 +229,33 @@ export function hardwareToModel(tier: number): "haiku" | "sonnet" | "opus" {
 }
 
 /**
- * Maps average skill level to a Claude model.
- * avg 1-3 → haiku, avg 4-6 → sonnet, avg 7-10 → opus
+ * Maps the agent's skill vector to a Claude model using a capability score.
+ *
+ * Skill indices (v5 `SkillType` enum — see `lib/models/game_economy.dart`):
+ *   0 = speed        (reasoning_effort knob, NOT capability)
+ *   1 = precision    (fewer bugs)
+ *   2 = creativity   (crit on divergent tasks)
+ *   3 = insight      (capability on hard tasks, primary tier driver)
+ *   4 = reliability  (completion success)
+ *
+ * Speed is deliberately excluded from the capability score: a "fast" agent
+ * should pick a cheaper/faster model, not a more capable one.
+ *
+ * Thresholds chosen so that Lv1 agents with role-biased starting stats
+ * (~2-3 per skill, capability ~5-7) land on haiku; Lv3-5 agents with
+ * upgrades (capability ~8-13) reach sonnet; and late-game high-Lv agents
+ * (capability ≥14) unlock opus.
  */
 export function skillsToModel(skills: Record<string, number>): "haiku" | "sonnet" | "opus" {
-  const levels = Object.values(skills);
-  if (levels.length === 0) return "haiku";
-  const avg = levels.reduce((a, b) => a + b, 0) / levels.length;
-  if (avg >= 7) return "opus";
-  if (avg >= 4) return "sonnet";
+  const get = (k: string) => skills[k] ?? 1;
+  const precision   = get("1");
+  const creativity  = get("2");
+  const insight     = get("3");
+  const reliability = get("4");
+
+  const capability = 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;
+  if (capability >= 14) return "opus";
+  if (capability >= 8) return "sonnet";
   return "haiku";
 }
 
@@ -254,18 +272,19 @@ function minModel(
 
 const skillNames: Record<string, string> = {
   "0": "Speed",
-  "1": "Code Quality",
-  "2": "Communication",
-  "3": "Problem Solving",
-  "4": "Specialization",
+  "1": "Precision",
+  "2": "Creativity",
+  "3": "Insight",
+  "4": "Reliability",
 };
 
 function formatSkillsForPrompt(skills: Record<string, number>): string {
   const parts: string[] = [];
   for (const [key, level] of Object.entries(skills)) {
     const name = skillNames[key] ?? `Skill ${key}`;
-    const bar = "█".repeat(level) + "░".repeat(10 - level);
-    parts.push(`  ${name}: ${bar} ${level}/10`);
+    const clamped = Math.max(0, Math.min(level, 20));
+    const bar = "█".repeat(clamped) + "░".repeat(20 - clamped);
+    parts.push(`  ${name}: ${bar} ${level}`);
   }
   return parts.join("\n");
 }
