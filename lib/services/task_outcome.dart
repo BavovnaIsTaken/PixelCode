@@ -1,0 +1,79 @@
+/// Pure functions that roll a task's final outcome based on agent skills.
+///
+/// Agents stop being defined by levels alone — the outcome roll is where
+/// Precision/Creativity/Reliability skills express themselves as real
+/// gameplay consequences (bug bounce, crit gold, incomplete reset).
+library;
+
+import 'dart:math';
+
+enum TaskOutcome {
+  /// Task moves `testing → done`. Normal reward.
+  clean,
+
+  /// Task moves `testing → done` AND awards a gold bonus.
+  /// Rolled only on divergent task types (`taskType` in
+  /// `{architecture, product-spec, ui-design}`).
+  crit,
+
+  /// Task bounces `testing → in-progress` (bug was found). Half XP.
+  bug,
+
+  /// Task is reset back to `backlog`. Half XP; agent may pick it up again.
+  incomplete,
+}
+
+/// `0.4 - 0.03 * precisionSkill`, clamped to `[0, 0.4]`.
+/// * Precision 0 → 40% bug chance.
+/// * Precision 7 → 19%.
+/// * Precision 14+ → 0%.
+double bugChance({required int precisionSkill}) =>
+    (0.4 - 0.03 * precisionSkill).clamp(0.0, 0.4);
+
+/// `0.02 * creativitySkill`, clamped to `[0, 1]`.
+/// Only relevant on divergent task types (gated in [rollOutcome]).
+double critChance({required int creativitySkill}) =>
+    (0.02 * creativitySkill).clamp(0.0, 1.0);
+
+/// `0.85 + 0.01 * reliabilitySkill`, clamped to `[0, 1]`.
+/// * Reliability 0 → 15% chance of incomplete.
+/// * Reliability 15+ → 0%.
+double completionSuccessChance({required int reliabilitySkill}) =>
+    (0.85 + 0.01 * reliabilitySkill).clamp(0.0, 1.0);
+
+/// Task-type identifiers considered divergent (where creativity matters).
+const divergentTaskTypes = <String>{
+  'architecture',
+  'product-spec',
+  'ui-design',
+};
+
+/// Rolls the final outcome for a task at the `testing → done` transition.
+///
+/// Order of checks:
+/// 1. Reliability gate (incomplete if we roll above the success threshold).
+/// 2. Bug check (Precision).
+/// 3. Crit check (Creativity, divergent tasks only).
+/// 4. Otherwise `clean`.
+///
+/// [rng] is injectable for deterministic tests.
+TaskOutcome rollOutcome({
+  required Random rng,
+  required int precisionSkill,
+  required int creativitySkill,
+  required int reliabilitySkill,
+  bool isDivergentTask = false,
+}) {
+  if (rng.nextDouble() >
+      completionSuccessChance(reliabilitySkill: reliabilitySkill)) {
+    return TaskOutcome.incomplete;
+  }
+  if (rng.nextDouble() < bugChance(precisionSkill: precisionSkill)) {
+    return TaskOutcome.bug;
+  }
+  if (isDivergentTask &&
+      rng.nextDouble() < critChance(creativitySkill: creativitySkill)) {
+    return TaskOutcome.crit;
+  }
+  return TaskOutcome.clean;
+}

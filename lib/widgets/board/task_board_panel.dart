@@ -7,9 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/game_economy.dart';
 import '../../models/task_board.dart';
 import '../../models/work_log_entry.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/game_economy_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../providers/task_progress_provider.dart';
 
@@ -807,11 +809,17 @@ class _MobileStickyNote extends ConsumerWidget {
                       ),
                     ],
                   ),
-                  // Difficulty badge
-                  if (task.difficulty != 2) ...[
-                    const SizedBox(height: 5),
-                    _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
-                  ],
+                  // Difficulty + requirements
+                  const SizedBox(height: 5),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: [
+                      if (task.difficulty != 2)
+                        _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
+                      _RequirementChip(task: task, textColor: colors.$3),
+                    ],
+                  ),
                   // Description
                   if (task.description.isNotEmpty) ...[
                     const SizedBox(height: 6),
@@ -1390,6 +1398,10 @@ class _BoardHeader extends ConsumerWidget {
           const Spacer(),
           _AddTaskButton(
             onAdd: (title, description, color, priority) {
+              // Difficulty/allowedRoles/taskType use TaskCard defaults
+              // (Easy, ['coder'], 'coding') until the _AddTaskButton sheet
+              // grows UI for them. Gating still applies — just trivially
+              // passes for any coder of Lv ≥ 2.
               final ok = ref.read(taskBoardProvider.notifier).createTask(
                 title: title,
                 description: description.isEmpty ? null : description,
@@ -1873,6 +1885,9 @@ class _DesktopStickyNote extends ConsumerWidget {
     Map<String, AgentState> agents,
   ) {
     final allAgentIds = agents.keys.toList();
+    // Capture messenger before the async gap so we can safely surface the
+    // rejection toast after the menu closes.
+    final messenger = ScaffoldMessenger.of(context);
 
     showMenu<String>(
       context: context,
@@ -1945,6 +1960,23 @@ class _DesktopStickyNote extends ConsumerWidget {
       } else if (value.startsWith('agent:')) {
         final agentId = value.substring(6);
         final isAssigned = task.assignedAgents.contains(agentId);
+        // Gate assignment: reject if role mismatched or agent under-leveled.
+        // Always allow un-assignment.
+        if (!isAssigned) {
+          final agent = ref.read(gameEconomyProvider).agents[agentId];
+          if (agent != null) {
+            final reason = assignmentRejectionReason(task, agent);
+            if (reason != null) {
+              messenger.showSnackBar(
+                SnackBar(
+                  duration: const Duration(seconds: 4),
+                  content: Text(reason),
+                ),
+              );
+              return;
+            }
+          }
+        }
         ref.read(taskBoardProvider.notifier).assignAgent(
               taskId: task.id,
               agentId: agentId,
@@ -2008,11 +2040,17 @@ class _DesktopStickyNote extends ConsumerWidget {
                   ),
                 ],
               ),
-              // Difficulty badge (desktop)
-              if (task.difficulty != 2) ...[
-                const SizedBox(height: 4),
-                _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
-              ],
+              // Difficulty + requirements (desktop)
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [
+                  if (task.difficulty != 2)
+                    _DifficultyBadge(difficulty: task.difficulty, textColor: colors.$3),
+                  _RequirementChip(task: task, textColor: colors.$3),
+                ],
+              ),
               if (task.description.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
@@ -2086,6 +2124,38 @@ class _DifficultyBadge extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─── Requirement chip (role + min level) ──────────────────────────────────
+
+class _RequirementChip extends StatelessWidget {
+  final TaskCard task;
+  final Color textColor;
+
+  const _RequirementChip({required this.task, required this.textColor});
+
+  @override
+  Widget build(BuildContext context) {
+    final roleLabel = task.allowedRoles.length == 1
+        ? (roleCatalogFor(task.allowedRoles.first)?.role ?? task.allowedRoles.first)
+        : '${task.allowedRoles.length} ролей';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: textColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: textColor.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        '🎯 Lv ${task.requiredLevel}+ · $roleLabel',
+        style: TextStyle(
+          color: textColor.withValues(alpha: 0.75),
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }

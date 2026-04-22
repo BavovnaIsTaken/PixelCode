@@ -8,11 +8,13 @@ import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/agent_level.dart';
 import '../models/agent_message.dart';
 import '../models/app_theme.dart';
 import '../models/game_economy.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
+import 'energy_provider.dart';
 import 'settings_provider.dart';
 
 class GameEconomyNotifier extends Notifier<GameState> {
@@ -117,11 +119,33 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _trackActivity(msg);
     if (msg is ResultMessage) {
       _onTaskCompleted(msg);
+    } else if (msg is SubagentResultMessage) {
+      _onSubagentResult(msg);
     } else if (msg is GameStateSyncMessage) {
       _onGameStateSync(msg);
     } else if (msg is DungeonCompleteMessage) {
       _onDungeonComplete(msg);
     }
+  }
+
+  /// Record a subagent's actual token usage into the Energy meter.
+  /// Model tier is inferred from the agent's skill vector using the same
+  /// capability score the server uses in [skillsToModel] — keeping client
+  /// and server estimates aligned so the meter reflects reality.
+  ///
+  /// Token estimate from `costUsd`: at Sonnet-ish blended pricing,
+  /// ~1 USD ≈ 200k tokens. Approximate but good enough for a budget signal.
+  void _onSubagentResult(SubagentResultMessage msg) {
+    final agent = state.agents[msg.agentId];
+    if (agent == null || msg.costUsd <= 0) return;
+    final model = capabilityModelForSkills(
+      precision: agent.skills[SkillType.precision] ?? 1,
+      creativity: agent.skills[SkillType.creativity] ?? 1,
+      insight: agent.skills[SkillType.insight] ?? 1,
+      reliability: agent.skills[SkillType.reliability] ?? 1,
+    );
+    final tokens = (msg.costUsd * 200000).round();
+    ref.read(energyProvider.notifier).recordTaskTokens(model, tokens);
   }
 
   /// Mirror the subset of AgentsNotifier's active/idle logic needed to decide
@@ -230,7 +254,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       roleType: roleType,
       nickname: defaultNicknameFor(role, ordinal),
       hardware: HardwareTier.oldLaptop,
-      skills: {for (final s in SkillType.values) s: 1},
+      skills: initialSkillsForRole(roleType),
     );
 
     state = state.copyWith(
@@ -291,27 +315,21 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
   // ─── Skills ────────────────────────────────────────────────────────────
 
-  /// Returns true if the agent has BOTH enough XP (from dungeons) AND grymni to level up.
+  /// Whether the given skill can be upgraded: below cap AND player can afford.
   bool canUpgradeSkill(String instanceId, SkillType skill) {
     final agent = state.agents[instanceId];
     if (agent == null) return false;
     final currentLevel = agent.skills[skill] ?? 1;
-    if (currentLevel >= 10) return false;
-    final hasGrymni = state.grymni >= skill.upgradeCost(currentLevel);
-    final currentXp = agent.skillXp[skill] ?? 0;
-    final hasXp = currentXp >= agent.xpForNextLevel(skill);
-    return hasGrymni && hasXp;
+    if (currentLevel >= skillCap(agent.level)) return false;
+    return state.grymni >= skill.upgradeCost(currentLevel);
   }
 
-  /// True when the XP gate is already met but grymni is insufficient.
-  bool hasXpButNotGrymni(String instanceId, SkillType skill) {
+  /// Whether this skill is at the level-gated cap (blocked by agent level,
+  /// not by gold). Callers can surface a "Рівень агент досягнуто" hint.
+  bool isSkillCapped(String instanceId, SkillType skill) {
     final agent = state.agents[instanceId];
     if (agent == null) return false;
-    final currentLevel = agent.skills[skill] ?? 1;
-    if (currentLevel >= 10) return false;
-    final currentXp = agent.skillXp[skill] ?? 0;
-    return (currentXp >= agent.xpForNextLevel(skill)) &&
-        state.grymni < skill.upgradeCost(currentLevel);
+    return (agent.skills[skill] ?? 1) >= skillCap(agent.level);
   }
 
   void upgradeSkill(String instanceId, SkillType skill) {
@@ -319,18 +337,12 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final agent = state.agents[instanceId]!;
     final currentLevel = agent.skills[skill] ?? 1;
     final cost = skill.upgradeCost(currentLevel);
-    final threshold = agent.xpForNextLevel(skill);
-    final currentXp = agent.skillXp[skill] ?? 0;
 
     final newSkills = Map<SkillType, int>.from(agent.skills);
     newSkills[skill] = currentLevel + 1;
 
-    // Carry over excess XP to the next level
-    final newXp = Map<SkillType, int>.from(agent.skillXp);
-    newXp[skill] = (currentXp - threshold).clamp(0, 999);
-
     final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[instanceId] = agent.copyWith(skills: newSkills, skillXp: newXp);
+    updated[instanceId] = agent.copyWith(skills: newSkills);
 
     state = state.copyWith(
       grymni: state.grymni - cost,
@@ -341,63 +353,51 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _syncToServer();
   }
 
-  /// Accumulate XP from a dungeon run. Never auto-levels — player must spend grymni to level up.
-  void _onDungeonComplete(DungeonCompleteMessage msg) {
-    final agent = state.agents[msg.agentId];
-    if (agent == null) return;
-    final skill = SkillType.values[msg.skillType.clamp(0, SkillType.values.length - 1)];
-    final newXp = Map<SkillType, int>.from(agent.skillXp);
-    newXp[skill] = ((agent.skillXp[skill] ?? 0) + msg.xpEarned).clamp(0, 9999);
-
-    final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[msg.agentId] = agent.copyWith(skillXp: newXp);
-    state = state.copyWith(agents: updated);
-    _scheduleSave();
-    _syncToServer();
-  }
-
-  /// Fills XP of every hired agent's skill to the next-level threshold,
-  /// skipping skills already at level 10. Does not spend grymni — the player
-  /// still has to click "upgrade" on each skill manually.
-  void maxXpForAllHiredAgents() {
-    if (state.agents.isEmpty) return;
-    final updated = Map<String, AgentGameData>.from(state.agents);
-    for (final entry in state.agents.entries) {
-      final agent = entry.value;
-      final newXp = Map<SkillType, int>.from(agent.skillXp);
-      for (final skill in SkillType.values) {
-        final level = agent.skills[skill] ?? 1;
-        if (level >= 10) continue;
-        newXp[skill] = agent.xpForNextLevel(skill);
-      }
-      updated[entry.key] = agent.copyWith(skillXp: newXp);
-    }
-    state = state.copyWith(agents: updated);
-    _scheduleSave();
-    _syncToServer();
-  }
-
-  void maxXpForAgentSkill(String instanceId, SkillType skill) {
+  /// Award XP to an agent, possibly triggering one or more level-ups.
+  /// Carry-over XP is preserved. Returns the number of levels gained.
+  int addXpToAgent(String instanceId, int xpGained) {
     final agent = state.agents[instanceId];
-    if (agent == null) return;
-    final level = agent.skills[skill] ?? 1;
-    if (level >= 10) return;
-    final newXp = Map<SkillType, int>.from(agent.skillXp);
-    newXp[skill] = agent.xpForNextLevel(skill);
+    if (agent == null || xpGained <= 0) return 0;
+    if (agent.level >= maxAgentLevel) return 0;
+
+    var level = agent.level;
+    var xp = agent.xp + xpGained;
+    var levelsGained = 0;
+
+    while (level < maxAgentLevel && xp >= xpToNextLevel(level)) {
+      xp -= xpToNextLevel(level);
+      level += 1;
+      levelsGained += 1;
+    }
+
     final updated = Map<String, AgentGameData>.from(state.agents);
-    updated[instanceId] = agent.copyWith(skillXp: newXp);
+    updated[instanceId] = agent.copyWith(level: level, xp: xp);
+
     state = state.copyWith(agents: updated);
+    _scheduleSave();
+    _syncToServer();
+    return levelsGained;
+  }
+
+  /// Award a one-off crit bonus (100% of a typical task reward).
+  /// Called when a task completes with a creativity crit.
+  void awardCritBonus() {
+    const bonus = 150;
+    state = state.copyWith(
+      grymni: state.grymni + bonus,
+      totalEarned: state.totalEarned + bonus,
+    );
     _scheduleSave();
     _syncToServer();
   }
 
-  /// Send a dungeon challenge to the server for the given agent instance + skill.
-  void startDungeon(String instanceId, SkillType skill, int difficulty) {
-    ref.read(wsServiceProvider).startDungeon(
-      agentId: instanceId,
-      skillType: skill.index,
-      difficulty: difficulty.clamp(1, 3),
-    );
+  /// Dungeon completion now awards agent-level XP (not per-skill XP).
+  /// The server still reports `xpEarned` in the legacy per-skill scale (0-100+
+  /// ballpark); we scale it down ×5 for the new agent-XP curve.
+  void _onDungeonComplete(DungeonCompleteMessage msg) {
+    if (state.agents[msg.agentId] == null) return;
+    final gained = (msg.xpEarned ~/ 5).clamp(1, 999);
+    addXpToAgent(msg.agentId, gained);
   }
 
   // ─── Hardware ──────────────────────────────────────────────────────────

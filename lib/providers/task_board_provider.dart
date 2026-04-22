@@ -7,8 +7,32 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/agent_message.dart';
+import '../models/game_economy.dart';
 import '../models/task_board.dart';
 import 'agent_provider.dart';
+
+// ─── Assignment gating ─────────────────────────────────────────────────────
+
+/// Checks whether [agent] can be assigned to [task]. Returns a human-readable
+/// rejection reason in Ukrainian, or null if the assignment is allowed.
+///
+/// Gating:
+/// * Role must be in `task.allowedRoles`.
+/// * Agent level must be >= `task.requiredLevel`.
+/// Skills are soft modifiers and never block assignment.
+String? assignmentRejectionReason(TaskCard task, AgentGameData agent) {
+  if (!task.allowedRoles.contains(agent.roleType)) {
+    final labels = task.allowedRoles
+        .map((r) => roleCatalogFor(r)?.role ?? r)
+        .toSet()
+        .join(', ');
+    return 'Ця задача потребує роль: $labels.';
+  }
+  if (agent.level < task.requiredLevel) {
+    return 'Потрібен Lv ${task.requiredLevel}+ (агент: Lv ${agent.level}).';
+  }
+  return null;
+}
 
 // ─── Board state provider ──────────────────────────────────────────────────
 
@@ -57,6 +81,9 @@ class TaskBoardNotifier extends Notifier<BoardState> {
     String? description,
     String? color,
     String? priority,
+    int? difficulty,
+    List<String>? allowedRoles,
+    String? taskType,
   }) {
     debugPrint('[TaskBoard] createTask: "$title"');
     final ws = ref.read(wsServiceProvider);
@@ -69,6 +96,9 @@ class TaskBoardNotifier extends Notifier<BoardState> {
           description: description,
           color: color,
           priority: priority,
+          difficulty: difficulty,
+          allowedRoles: allowedRoles,
+          taskType: taskType,
         );
     return true;
   }
