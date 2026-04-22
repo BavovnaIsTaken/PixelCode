@@ -150,8 +150,7 @@ enum _SettingsCategory {
   sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
   network(Icons.hub_outlined, 'Мережа'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
-  glitch(Icons.auto_fix_high_outlined, 'Глітч-ефект'),
-  logoPath(Icons.code, 'Алгоритм логотипа'),
+  logo(Icons.memory, 'Лого'),
   cheats(Icons.auto_awesome_outlined, 'Чіти'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
 
@@ -205,10 +204,8 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return _buildNetwork();
       case _SettingsCategory.ergonomics:
         return _buildErgonomics();
-      case _SettingsCategory.glitch:
-        return _buildGlitch();
-      case _SettingsCategory.logoPath:
-        return _buildLogoPath();
+      case _SettingsCategory.logo:
+        return _buildLogo();
       case _SettingsCategory.cheats:
         return _buildCheats();
       case _SettingsCategory.danger:
@@ -333,21 +330,26 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
     );
   }
 
-  Widget _buildGlitch() {
+  Widget _buildLogo() {
+    final settings = ref.watch(settingsProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _SectionHeader(title: 'Лого'),
+        const SizedBox(height: 16),
+
+        // ── Subsection: Glitch effect ─────────────────────
         _SectionHeader(title: 'Глітч-ефект'),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         _desc('Налаштування візуального глітч-ефекту на логотипі.'),
         const SizedBox(height: 14),
         _GlitchControls(
-          enabled: ref.watch(settingsProvider).glitchEnabled,
-          intensity: ref.watch(settingsProvider).glitchIntensity,
-          speed: ref.watch(settingsProvider).glitchSpeed,
-          bandHeight: ref.watch(settingsProvider).glitchBandHeight,
-          shift: ref.watch(settingsProvider).glitchShift,
-          chroma: ref.watch(settingsProvider).glitchChroma,
+          enabled: settings.glitchEnabled,
+          intensity: settings.glitchIntensity,
+          speed: settings.glitchSpeed,
+          bandHeight: settings.glitchBandHeight,
+          shift: settings.glitchShift,
+          chroma: settings.glitchChroma,
           onEnabledChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchEnabled(v),
           onIntensityChanged: (v) =>
@@ -361,29 +363,39 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
           onChromaChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchChroma(v),
         ),
-      ],
-    );
-  }
 
-  Widget _buildLogoPath() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Алгоритм руху логотипа'),
-        const SizedBox(height: 12),
+        const SizedBox(height: 28),
+
+        // ── Subsection: Movement algorithm ────────────────
+        _SectionHeader(title: 'Алгоритм руху'),
+        const SizedBox(height: 8),
         _desc('Власна функція позиції логотипа під час анімації вимкнення. '
             'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
             'Output: return Point(x, y).'),
         const SizedBox(height: 14),
         LogoPathEditor(
-          script: ref.watch(settingsProvider).logoPathScript ??
-              kDefaultLogoPathScript,
+          script: settings.logoPathScript ?? kDefaultLogoPathScript,
           onSaved: (script) {
             final isDefault = script.trim() == kDefaultLogoPathScript.trim();
             ref
                 .read(settingsProvider.notifier)
                 .setLogoPathScript(isDefault ? null : script);
           },
+        ),
+
+        const SizedBox(height: 20),
+
+        // ── Subsection: Animation duration ────────────────
+        _SectionHeader(title: 'Час анімації'),
+        const SizedBox(height: 8),
+        _desc('Скільки триває політ іконки під час вимкнення. '
+            'Native window collapse (400 мс) підлаштовується автоматично.'),
+        const SizedBox(height: 12),
+        _LogoAnimationDurationControl(
+          value: settings.logoAnimationDurationMs,
+          onChanged: (v) => ref
+              .read(settingsProvider.notifier)
+              .setLogoAnimationDurationMs(v),
         ),
       ],
     );
@@ -1876,6 +1888,112 @@ class _GlitchControlsState extends State<_GlitchControls>
               enabled: enabled,
               onChanged: enabled ? widget.onChromaChanged : null,
             ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Logo animation duration slider ────────────────────────────────────────
+
+class _LogoAnimationDurationControl extends StatelessWidget {
+  /// null → use [kDefaultLogoAnimationDurationMs].
+  final int? value;
+  final ValueChanged<int?> onChanged;
+
+  const _LogoAnimationDurationControl({
+    required this.value,
+    required this.onChanged,
+  });
+
+  static const _minMs = 400;
+  static const _maxMs = 3000;
+  static const _stepMs = 50;
+
+  @override
+  Widget build(BuildContext context) {
+    final effective = value ?? kDefaultLogoAnimationDurationMs;
+    final isCustom = value != null;
+    const accent = Color(0xFF00C0D1);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: SliderTheme(
+                data: SliderThemeData(
+                  activeTrackColor: accent,
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.08),
+                  thumbColor: accent,
+                  overlayColor: accent.withValues(alpha: 0.12),
+                  trackHeight: 3,
+                  thumbShape:
+                      const RoundSliderThumbShape(enabledThumbRadius: 6),
+                ),
+                child: Slider(
+                  value: effective.toDouble().clamp(
+                        _minMs.toDouble(),
+                        _maxMs.toDouble(),
+                      ),
+                  min: _minMs.toDouble(),
+                  max: _maxMs.toDouble(),
+                  divisions: (_maxMs - _minMs) ~/ _stepMs,
+                  onChanged: (v) {
+                    final rounded = (v / _stepMs).round() * _stepMs;
+                    if (rounded == kDefaultLogoAnimationDurationMs) {
+                      onChanged(null);
+                    } else {
+                      onChanged(rounded);
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 64,
+              child: Text(
+                '$effective мс',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.8),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(
+              'Дефолт: $kDefaultLogoAnimationDurationMs мс',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.35),
+                fontSize: 11,
+              ),
+            ),
+            const Spacer(),
+            if (isCustom)
+              TextButton(
+                onPressed: () => onChanged(null),
+                style: TextButton.styleFrom(
+                  foregroundColor: accent,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  minimumSize: const Size(0, 24),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Скинути',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                ),
+              ),
           ],
         ),
       ],

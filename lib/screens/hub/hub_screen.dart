@@ -57,9 +57,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   // Swipe-between-tabs tracking
   double _swipeDelta = 0;
+  // Duration is reassigned in [_triggerShutdown] from user settings.
   late final AnimationController _iconMoveCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1100),
+    duration: const Duration(milliseconds: kDefaultLogoAnimationDurationMs),
   );
 
   late final AnimationController _tabSwitchCtrl = AnimationController(
@@ -212,10 +213,12 @@ class _HubScreenState extends ConsumerState<HubScreen>
       });
   }
 
-  // Shutdown animation — matches the native window collapse duration (1.5s).
+  // Shutdown animation — spans the icon flight plus the 400 ms native window
+  // collapse tail. Duration is reassigned in [_triggerShutdown] from settings.
   late final AnimationController _shutdownCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 1500),
+    duration:
+        const Duration(milliseconds: kDefaultLogoAnimationDurationMs + 400),
   );
 
   // CRT-style flash — stays dark while the icon flies, then ramps up during
@@ -240,6 +243,14 @@ class _HubScreenState extends ConsumerState<HubScreen>
     const iconSize = 24.0;
     final start = const Offset(16, (48 - iconSize) / 2);
     final end = Offset(size.width - iconSize - 16, size.height - iconSize - 16);
+
+    // Apply the user-configurable icon flight duration (default 1100 ms).
+    // The shutdown controller runs for [iconMs] + 400 ms native-collapse tail.
+    final iconMs = ref.read(settingsProvider).logoAnimationDurationMs ??
+        kDefaultLogoAnimationDurationMs;
+    _iconMoveCtrl.duration = Duration(milliseconds: iconMs);
+    _shutdownCtrl.duration = Duration(milliseconds: iconMs + 400);
+
     setState(() {
       _isShuttingDown = true;
       _iconMoving = true;
@@ -257,8 +268,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
     final isNative =
         platform == TargetPlatform.macOS || platform == TargetPlatform.iOS;
 
-    // After the icon finishes (1.1s), start the native window collapse (0.4s).
-    Future<void>.delayed(const Duration(milliseconds: 1100)).then((_) {
+    // After the icon finishes, start the native window collapse (0.4s).
+    Future<void>.delayed(Duration(milliseconds: iconMs)).then((_) {
       if (!mounted) return;
       if (isNative) _windowChannel.invokeMethod('animateShutdown');
     });
