@@ -244,6 +244,9 @@ class AgentWsService {
     String? description,
     String? color,
     String? priority,
+    int? difficulty,
+    List<String>? allowedRoles,
+    String? taskType,
   }) {
     _send({
       'type': 'board_create_task',
@@ -251,6 +254,9 @@ class AgentWsService {
       'description': ?description,
       'color': ?color,
       'priority': ?priority,
+      'difficulty': ?difficulty,
+      'allowedRoles': ?allowedRoles,
+      'taskType': ?taskType,
     });
   }
 

@@ -287,37 +287,46 @@ extension HardwareTierExt on HardwareTier {
 
 // ─── Agent skills ──────────────────────────────────────────────────────────
 
+/// Agent capability skills.
+///
+/// Each value maps to a measurable effect on task execution:
+/// * [speed] — time per task (lower wall-clock).
+/// * [precision] — fewer bugs (replaces old "quality").
+/// * [creativity] — crit chance on divergent task types.
+/// * [insight] — capability on hard tasks; tier-bias when picking the Claude
+///   model (replaces old "problemSolving").
+/// * [reliability] — chance the task completes without an `incomplete` roll.
 enum SkillType {
   speed,
-  quality,
-  communication,
-  problemSolving,
-  specialization,
+  precision,
+  creativity,
+  insight,
+  reliability,
 }
 
 extension SkillTypeExt on SkillType {
   String get label => switch (this) {
         SkillType.speed => 'Швидкість',
-        SkillType.quality => 'Якість коду',
-        SkillType.communication => 'Комунікація',
-        SkillType.problemSolving => 'Вирішення проблем',
-        SkillType.specialization => 'Спеціалізація',
+        SkillType.precision => 'Точність',
+        SkillType.creativity => 'Креативність',
+        SkillType.insight => 'Проникливість',
+        SkillType.reliability => 'Надійність',
       };
 
   String get icon => switch (this) {
         SkillType.speed => '⚡',
-        SkillType.quality => '✨',
-        SkillType.communication => '💬',
-        SkillType.problemSolving => '🧩',
-        SkillType.specialization => '🎯',
+        SkillType.precision => '🎯',
+        SkillType.creativity => '💡',
+        SkillType.insight => '🔮',
+        SkillType.reliability => '🔒',
       };
 
   int get baseCost => switch (this) {
         SkillType.speed => 100,
-        SkillType.quality => 150,
-        SkillType.communication => 120,
-        SkillType.problemSolving => 200,
-        SkillType.specialization => 250,
+        SkillType.precision => 150,
+        SkillType.creativity => 180,
+        SkillType.insight => 200,
+        SkillType.reliability => 130,
       };
 
   /// Cost to upgrade from current level to next.
@@ -345,8 +354,12 @@ class AgentGameData {
   final HardwareTier hardware;
   final Map<SkillType, int> skills;
 
-  /// XP accumulated towards next level for each skill.
-  final Map<SkillType, int> skillXp;
+  /// Agent level (1..maxAgentLevel). Gates tasks, caps skill upgrades,
+  /// grows with XP. Schema v5+.
+  final int level;
+
+  /// Experience points accumulated towards the next level. Schema v5+.
+  final int xp;
 
   const AgentGameData({
     required this.instanceId,
@@ -354,24 +367,26 @@ class AgentGameData {
     required this.nickname,
     this.hardware = HardwareTier.oldLaptop,
     this.skills = const {},
-    this.skillXp = const {},
+    this.level = 1,
+    this.xp = 0,
   });
 
-  int get skillLevel {
+  /// Average skill value — purely a cosmetic summary for UI.
+  /// Not used for gating (see `level`) or capability (see server's
+  /// `skillsToModel` which weights skills explicitly).
+  int get avgSkill {
     if (skills.isEmpty) return 0;
     return (skills.values.reduce((a, b) => a + b) / skills.length).round();
   }
 
   double get totalSpeedModifier => hardware.speedModifier;
 
-  /// XP required to unlock the next level for a skill (level × 100).
-  int xpForNextLevel(SkillType skill) => (skills[skill] ?? 1) * 100;
-
   AgentGameData copyWith({
     String? nickname,
     HardwareTier? hardware,
     Map<SkillType, int>? skills,
-    Map<SkillType, int>? skillXp,
+    int? level,
+    int? xp,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -379,7 +394,8 @@ class AgentGameData {
         nickname: nickname ?? this.nickname,
         hardware: hardware ?? this.hardware,
         skills: skills ?? this.skills,
-        skillXp: skillXp ?? this.skillXp,
+        level: level ?? this.level,
+        xp: xp ?? this.xp,
       );
 
   Map<String, dynamic> toJson() => {
@@ -390,9 +406,8 @@ class AgentGameData {
         'skills': {
           for (final e in skills.entries) e.key.index.toString(): e.value,
         },
-        'skillXp': {
-          for (final e in skillXp.entries) e.key.index.toString(): e.value,
-        },
+        'level': level,
+        'xp': xp,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -405,11 +420,8 @@ class AgentGameData {
               in (json['skills'] as Map<String, dynamic>? ?? {}).entries)
             SkillType.values[int.parse(e.key)]: e.value as int,
         },
-        skillXp: {
-          for (final e
-              in (json['skillXp'] as Map<String, dynamic>? ?? {}).entries)
-            SkillType.values[int.parse(e.key)]: e.value as int,
-        },
+        level: json['level'] as int? ?? 1,
+        xp: json['xp'] as int? ?? 0,
       );
 }
 
@@ -601,6 +613,77 @@ RoleCatalogEntry? roleCatalogFor(String roleType) {
     if (entry.roleType == roleType) return entry;
   }
   return null;
+}
+
+// ─── Role-biased initial skills ───────────────────────────────────────────
+
+/// Initial skill distribution for a newly hired agent.
+///
+/// Each role has its own bias so agents start differentiated instead of
+/// uniform 1/1/1/1/1. Totals ~13 points (avg 2.6 per skill) — well below
+/// `skillCap(1) == 12`, leaving room for gold-paid upgrades.
+///
+/// Unknown roleType falls back to a balanced 2-point baseline across all
+/// skills.
+Map<SkillType, int> initialSkillsForRole(String roleType) {
+  return switch (roleType) {
+    'coder' => const {
+        SkillType.speed: 3,
+        SkillType.precision: 3,
+        SkillType.creativity: 2,
+        SkillType.insight: 3,
+        SkillType.reliability: 2,
+      },
+    'tech-lead' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 3,
+        SkillType.creativity: 3,
+        SkillType.insight: 4,
+        SkillType.reliability: 2,
+      },
+    'reviewer' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 5,
+        SkillType.creativity: 1,
+        SkillType.insight: 4,
+        SkillType.reliability: 3,
+      },
+    'tester' => const {
+        SkillType.speed: 3,
+        SkillType.precision: 2,
+        SkillType.creativity: 1,
+        SkillType.insight: 2,
+        SkillType.reliability: 5,
+      },
+    'security' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 4,
+        SkillType.creativity: 2,
+        SkillType.insight: 4,
+        SkillType.reliability: 3,
+      },
+    'ui-ux-designer' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 3,
+        SkillType.creativity: 5,
+        SkillType.insight: 1,
+        SkillType.reliability: 1,
+      },
+    'manager' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 2,
+        SkillType.creativity: 2,
+        SkillType.insight: 3,
+        SkillType.reliability: 3,
+      },
+    _ => const {
+        SkillType.speed: 2,
+        SkillType.precision: 2,
+        SkillType.creativity: 2,
+        SkillType.insight: 2,
+        SkillType.reliability: 2,
+      },
+  };
 }
 
 // ─── Instance-ID helpers ──────────────────────────────────────────────────
@@ -1192,6 +1275,13 @@ class PlacedRoom {
 // ─── Game state ────────────────────────────────────────────────────────────
 
 class GameState {
+  /// Current on-disk schema version. Bump this constant whenever the
+  /// serialised shape changes in a breaking way.
+  static const int currentSchemaVersion = 5;
+
+  /// The schema version this instance was created with (persisted in JSON).
+  final int schemaVersion;
+
   final int grymni;
   final OfficeLevel officeLevel;
 
@@ -1234,6 +1324,7 @@ class GameState {
   final int updatedAt;
 
   const GameState({
+    this.schemaVersion = currentSchemaVersion,
     this.grymni = 500,
     this.officeLevel = OfficeLevel.garage,
     this.officeExpansions = 0,
@@ -1307,6 +1398,7 @@ class GameState {
       officeExpansions >= officeLevel.expansions.length;
 
   GameState copyWith({
+    int? schemaVersion,
     int? grymni,
     OfficeLevel? officeLevel,
     int? officeExpansions,
@@ -1324,6 +1416,7 @@ class GameState {
     int? updatedAt,
   }) =>
       GameState(
+        schemaVersion: schemaVersion ?? this.schemaVersion,
         grymni: grymni ?? this.grymni,
         officeLevel: officeLevel ?? this.officeLevel,
         officeExpansions: officeExpansions ?? this.officeExpansions,
@@ -1340,12 +1433,6 @@ class GameState {
         placedRooms: placedRooms ?? this.placedRooms,
         updatedAt: updatedAt ?? this.updatedAt,
       );
-
-  /// Current on-disk schema version.
-  /// v2 → v3: added placedRooms.
-  /// v3 → v4: added officeExpansions; per-tier grids shrank (old saves get
-  /// their rooms re-validated against the new base grid).
-  static const int schemaVersion = 4;
 
   Map<String, dynamic> toJson() => {
         'schemaVersion': schemaVersion,
@@ -1409,6 +1496,7 @@ class GameState {
         .toList();
 
     return GameState(
+        schemaVersion: json['schemaVersion'] as int? ?? 1,
         grymni: json['grymni'] as int? ?? 500,
         officeLevel: level,
         officeExpansions: expansions,
@@ -1455,7 +1543,7 @@ class GameState {
     final version = json['schemaVersion'] as int? ?? 1;
     // Accept v2 (empty placedRooms), v3 (no officeExpansions) and v4. Reject
     // older/unknown.
-    if (version < 2 || version > schemaVersion) {
+    if (version < 2 || version > currentSchemaVersion) {
       throw const FormatException('Incompatible game state schema');
     }
     return GameState.fromJson(json);
@@ -1472,7 +1560,7 @@ class GameState {
           roleType: role.roleType,
           nickname: defaultNicknameFor(role, i),
           hardware: HardwareTier.oldLaptop,
-          skills: {for (final s in SkillType.values) s: 1},
+          skills: initialSkillsForRole(role.roleType),
         );
       }
     }

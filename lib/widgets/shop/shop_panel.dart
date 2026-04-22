@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/agent_level.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
@@ -454,7 +455,7 @@ class _InstanceRow extends StatelessWidget {
                     const SizedBox(width: 8),
                     _MiniStat(
                       icon: '⭐',
-                      label: 'Рівень ${instance.skillLevel}',
+                      label: 'Lv ${instance.level}',
                     ),
                     const SizedBox(width: 8),
                     _MiniStat(
@@ -591,12 +592,10 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
             _SkillUpgradeCard(
               skill: skill,
               level: selectedAgent.skills[skill] ?? 1,
-              currentXp: selectedAgent.skillXp[skill] ?? 0,
-              xpNeeded: selectedAgent.xpForNextLevel(skill),
-              hasXpButNotGrymni: notifier.hasXpButNotGrymni(_selectedAgentId!, skill),
+              skillCap: skillCap(selectedAgent.level),
+              capped: notifier.isSkillCapped(_selectedAgentId!, skill),
               canUpgrade: notifier.canUpgradeSkill(_selectedAgentId!, skill),
               onUpgrade: () => notifier.upgradeSkill(_selectedAgentId!, skill),
-              onTrain: (_) => notifier.maxXpForAgentSkill(_selectedAgentId!, skill),
             ),
         ],
       ],
@@ -750,30 +749,24 @@ class _HardwareUpgradeCard extends StatelessWidget {
 class _SkillUpgradeCard extends StatelessWidget {
   final SkillType skill;
   final int level;
-  final int currentXp;
-  final int xpNeeded;
-  final bool hasXpButNotGrymni;
+  final int skillCap;
+  final bool capped;
   final bool canUpgrade;
   final VoidCallback onUpgrade;
-  final void Function(int difficulty) onTrain;
 
   const _SkillUpgradeCard({
     required this.skill,
     required this.level,
-    required this.currentXp,
-    required this.xpNeeded,
-    required this.hasXpButNotGrymni,
+    required this.skillCap,
+    required this.capped,
     required this.canUpgrade,
     required this.onUpgrade,
-    required this.onTrain,
   });
 
   @override
   Widget build(BuildContext context) {
     final cost = skill.upgradeCost(level);
-    final isMaxed = level >= 10;
-    final xpProgress = isMaxed ? 1.0 : (currentXp / xpNeeded).clamp(0.0, 1.0);
-    final xpReady = currentXp >= xpNeeded;
+    final progress = (level / skillCap).clamp(0.0, 1.0);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -783,242 +776,67 @@ class _SkillUpgradeCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Text(skill.icon, style: const TextStyle(fontSize: 14)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          Text(skill.icon, style: const TextStyle(fontSize: 14)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Text(
-                      skill.label,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
+                    Expanded(
+                      child: Text(
+                        skill.label,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    // Skill level bar
-                    Row(
-                      children: [
-                        for (int i = 0; i < 10; i++)
-                          Container(
-                            width: 12,
-                            height: 4,
-                            margin: const EdgeInsets.only(right: 2),
-                            decoration: BoxDecoration(
-                              color: i < level
-                                  ? _accent
-                                  : Colors.white.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(1),
-                            ),
-                          ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '$level/10',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.3),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              if (isMaxed)
-                Text(
-                  'MAX',
-                  style: TextStyle(
-                    color: _gold.withValues(alpha: 0.6),
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                  ),
-                )
-              else ...[
-                // Train button
-                GestureDetector(
-                  onTap: () => _showDungeonPicker(context),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2A4A2A),
-                      borderRadius: BorderRadius.circular(5),
-                      border: Border.all(color: const Color(0xFF4CAF50).withValues(alpha: 0.4)),
-                    ),
-                    child: const Text(
-                      'Тренувати',
+                    Text(
+                      '$level / $skillCap',
                       style: TextStyle(
-                        color: Color(0xFF4CAF50),
-                        fontSize: 9,
+                        color: Colors.white.withValues(alpha: 0.5),
+                        fontSize: 10,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(width: 6),
-                // Buy button — disabled until XP gate met
-                Tooltip(
-                  message: xpReady
-                      ? ''
-                      : 'Потрібно ${xpNeeded - currentXp} XP ще',
-                  child: _ActionButton(
-                    label: '${_formatNumber(cost)}₲',
-                    color: canUpgrade
-                        ? _accent
-                        : xpReady
-                            ? _gold.withValues(alpha: 0.6)
-                            : Colors.white.withValues(alpha: 0.15),
-                    onTap: canUpgrade ? onUpgrade : null,
-                  ),
-                ),
-              ],
-            ],
-          ),
-          if (!isMaxed) ...[
-            const SizedBox(height: 6),
-            // XP progress bar
-            Row(
-              children: [
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: LinearProgressIndicator(
-                      value: xpProgress,
-                      minHeight: 3,
-                      backgroundColor: Colors.white.withValues(alpha: 0.07),
-                      valueColor: AlwaysStoppedAnimation(
-                        xpReady
-                            ? const Color(0xFF4CAF50)
-                            : const Color(0xFF9C6ADE).withValues(alpha: 0.7),
-                      ),
+                const SizedBox(height: 4),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 4,
+                    backgroundColor: Colors.white.withValues(alpha: 0.07),
+                    valueColor: AlwaysStoppedAnimation(
+                      capped ? _gold : _accent,
                     ),
                   ),
                 ),
-                const SizedBox(width: 6),
-                Text(
-                  '$currentXp/$xpNeeded XP',
-                  style: TextStyle(
-                    color: xpReady
-                        ? const Color(0xFF4CAF50)
-                        : Colors.white.withValues(alpha: 0.3),
-                    fontSize: 8,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
               ],
             ),
-          ],
+          ),
+          const SizedBox(width: 10),
+          Tooltip(
+            message: capped
+                ? 'Досягнуто стелі. Підніми Lv агента, щоб відкрити далі.'
+                : '',
+            child: _ActionButton(
+              label: capped ? 'Cap' : '${_formatNumber(cost)}₲',
+              color: canUpgrade
+                  ? _accent
+                  : capped
+                      ? _gold.withValues(alpha: 0.6)
+                      : Colors.white.withValues(alpha: 0.15),
+              onTap: canUpgrade ? onUpgrade : null,
+            ),
+          ),
         ],
-      ),
-    );
-  }
-
-  void _showDungeonPicker(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => _DungeonPickerDialog(
-        skill: skill,
-        onSelect: onTrain,
-      ),
-    );
-  }
-}
-
-// ─── Dungeon picker dialog ──────────────────────────────────────────────────
-
-class _DungeonPickerDialog extends StatelessWidget {
-  final SkillType skill;
-  final void Function(int difficulty) onSelect;
-
-  const _DungeonPickerDialog({required this.skill, required this.onSelect});
-
-  @override
-  Widget build(BuildContext context) {
-    const difficulties = [
-      (1, 'Легкий', '×10 XP за бал', Color(0xFF4CAF50)),
-      (2, 'Середній', '×20 XP за бал', Color(0xFFFFA726)),
-      (3, 'Складний', '×30 XP за бал', Color(0xFFEF5350)),
-    ];
-
-    return Dialog(
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Text(skill.icon, style: const TextStyle(fontSize: 18)),
-                const SizedBox(width: 8),
-                Text(
-                  'Тренування: ${skill.label}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Обери складність данжу',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.4),
-                fontSize: 11,
-              ),
-            ),
-            const SizedBox(height: 16),
-            for (final (diff, label, reward, color) in difficulties) ...[
-              GestureDetector(
-                onTap: () {
-                  Navigator.pop(context);
-                  onSelect(diff);
-                },
-                child: Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: color.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      Text(
-                        label,
-                        style: TextStyle(
-                          color: color,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        reward,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.4),
-                          fontSize: 10,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
       ),
     );
   }
