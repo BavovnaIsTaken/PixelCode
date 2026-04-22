@@ -12,6 +12,7 @@ import '../../providers/agent_provider.dart';
 import '../../providers/connected_devices_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../widgets/deploy/device_deploy_popover.dart';
+import '../../widgets/energy/energy_meter.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_program.dart';
@@ -716,8 +717,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
           // Currency (server-dependent)
           if (isConnected)
             _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
-          if (isConnected)
-            const SizedBox(width: 8),
+          if (isConnected) const SizedBox(width: 8),
+          // Daily token budget meter (Energy).
+          if (isConnected) const EnergyMeter(),
+          if (isConnected) const SizedBox(width: 8),
           // iOS deploy
           if (isConnected) _DeviceDeployButton(),
           // Settings
