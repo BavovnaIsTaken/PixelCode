@@ -1567,24 +1567,164 @@ class _BoatSwitchState extends State<_BoatSwitch>
 
 // ─── Pixel Chat Skeleton ────────────────────────────────────────────────────
 
-class _PixelChatSkeleton extends StatefulWidget {
+class _PixelChatSkeleton extends StatelessWidget {
   const _PixelChatSkeleton();
 
+  static const double _pulse = 0.08;
+
   @override
-  State<_PixelChatSkeleton> createState() => _PixelChatSkeletonState();
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          _skeletonRow(isUser: false, widths: [120, 80, 60]),
+          const SizedBox(height: 12),
+          _skeletonRow(isUser: true, widths: [90]),
+          const SizedBox(height: 12),
+          _skeletonRow(isUser: false, widths: [140, 100, 70, 50]),
+          const SizedBox(height: 12),
+          _skeletonRow(isUser: true, widths: [70, 40]),
+          const SizedBox(height: 12),
+          _skeletonRow(isUser: false, widths: [110, 90]),
+        ],
+      ),
+    );
+  }
+
+  Widget _skeletonRow({
+    required bool isUser,
+    required List<double> widths,
+  }) {
+    return Row(
+      mainAxisAlignment:
+          isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!isUser) ...[
+          ClipOval(
+            child: Stack(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  color: Colors.white.withValues(alpha: _pulse),
+                ),
+                const Positioned.fill(
+                  child: IgnorePointer(child: _PixelGarland(sparkCount: 3)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+        ],
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: Stack(
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: _pulse * 0.6),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: _pulse * 0.8),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < widths.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 6),
+                      Container(
+                        width: widths[i],
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: _pulse * 1.2),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const Positioned.fill(
+                child: IgnorePointer(child: _PixelGarland(sparkCount: 18)),
+              ),
+            ],
+          ),
+        ),
+        if (isUser) const SizedBox(width: 36),
+      ],
+    );
+  }
 }
 
-class _PixelChatSkeletonState extends State<_PixelChatSkeleton>
+// Pixel-sparkle overlay — random plus-shaped pixels blink in and out across
+// the skeleton surface, like a string of Christmas lights.
+class _PixelGarland extends StatefulWidget {
+  final int sparkCount;
+  const _PixelGarland({this.sparkCount = 10});
+
+  @override
+  State<_PixelGarland> createState() => _PixelGarlandState();
+}
+
+class _Spark {
+  double fx;
+  double fy;
+  double start;
+  double life;
+  Color color;
+  double size;
+
+  _Spark({
+    required this.fx,
+    required this.fy,
+    required this.start,
+    required this.life,
+    required this.color,
+    required this.size,
+  });
+}
+
+class _PixelGarlandState extends State<_PixelGarland>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
+  final math.Random _rng = math.Random();
+  final List<_Spark> _sparks = [];
+
+  static const List<Color> _palette = [
+    Color(0xFF00C0D1),
+    Color(0xFF00D4E7),
+    Color(0xFFFFFFFF),
+    Color(0xFFFF6B9D),
+    Color(0xFFFFC107),
+    Color(0xFF4ECDC4),
+  ];
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1500),
+      duration: const Duration(seconds: 8),
     )..repeat();
+    for (int i = 0; i < widget.sparkCount; i++) {
+      _sparks.add(_makeSpark(_rng.nextDouble()));
+    }
+  }
+
+  _Spark _makeSpark(double startAt) {
+    return _Spark(
+      fx: _rng.nextDouble(),
+      fy: _rng.nextDouble(),
+      start: startAt,
+      life: 0.04 + _rng.nextDouble() * 0.12,
+      color: _palette[_rng.nextInt(_palette.length)],
+      size: 1.0 + _rng.nextInt(2),
+    );
   }
 
   @override
@@ -1598,84 +1738,51 @@ class _PixelChatSkeletonState extends State<_PixelChatSkeleton>
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (context, _) {
-        // Step-wise pulse: snaps between 2 opacity levels like pixel art
-        final raw = (math.sin(_ctrl.value * 2 * math.pi) + 1) / 2;
-        final pulse = raw > 0.5 ? 0.10 : 0.05;
-
-        return Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              _skeletonRow(isUser: false, widths: [120, 80, 60], pulse: pulse),
-              const SizedBox(height: 12),
-              _skeletonRow(isUser: true, widths: [90], pulse: pulse),
-              const SizedBox(height: 12),
-              _skeletonRow(
-                  isUser: false, widths: [140, 100, 70, 50], pulse: pulse),
-              const SizedBox(height: 12),
-              _skeletonRow(isUser: true, widths: [70, 40], pulse: pulse),
-              const SizedBox(height: 12),
-              _skeletonRow(isUser: false, widths: [110, 90], pulse: pulse),
-            ],
-          ),
+        final now = _ctrl.value;
+        for (int i = 0; i < _sparks.length; i++) {
+          final s = _sparks[i];
+          final phase = (now - s.start + 1.0) % 1.0;
+          if (phase > s.life) {
+            _sparks[i] = _makeSpark(now);
+          }
+        }
+        return CustomPaint(
+          painter: _GarlandPainter(sparks: _sparks, now: now),
+          child: const SizedBox.expand(),
         );
       },
     );
   }
+}
 
-  Widget _skeletonRow({
-    required bool isUser,
-    required List<double> widths,
-    required double pulse,
-  }) {
-    return Row(
-      mainAxisAlignment:
-          isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (!isUser) ...[
-          // Avatar placeholder
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: pulse),
-            ),
-          ),
-          const SizedBox(width: 8),
-        ],
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: pulse * 0.6),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: pulse * 0.8),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (var i = 0; i < widths.length; i++) ...[
-                if (i > 0) const SizedBox(height: 6),
-                Container(
-                  width: widths[i],
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: pulse * 1.2),
-                    borderRadius: BorderRadius.circular(1),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (isUser) const SizedBox(width: 36),
-      ],
-    );
+class _GarlandPainter extends CustomPainter {
+  final List<_Spark> sparks;
+  final double now;
+
+  _GarlandPainter({required this.sparks, required this.now});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final s in sparks) {
+      final phase = (now - s.start + 1.0) % 1.0;
+      if (phase > s.life) continue;
+      final t = phase / s.life;
+      final opacity = (t < 0.25 ? t / 0.25 : 1 - (t - 0.25) / 0.75)
+          .clamp(0.0, 1.0);
+      final px = (s.fx * size.width / s.size).floor() * s.size;
+      final py = (s.fy * size.height / s.size).floor() * s.size;
+      final core = Paint()..color = s.color.withValues(alpha: opacity);
+      final edge = Paint()..color = s.color.withValues(alpha: opacity * 0.35);
+      canvas.drawRect(Rect.fromLTWH(px, py, s.size, s.size), core);
+      canvas.drawRect(Rect.fromLTWH(px - s.size, py, s.size, s.size), edge);
+      canvas.drawRect(Rect.fromLTWH(px + s.size, py, s.size, s.size), edge);
+      canvas.drawRect(Rect.fromLTWH(px, py - s.size, s.size, s.size), edge);
+      canvas.drawRect(Rect.fromLTWH(px, py + s.size, s.size, s.size), edge);
+    }
   }
+
+  @override
+  bool shouldRepaint(_GarlandPainter oldDelegate) => true;
 }
 
 class _TypingDots extends StatefulWidget {
