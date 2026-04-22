@@ -3,6 +3,8 @@
 /// Accessed via the "Ринок" toggle in the title bar.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -2090,17 +2092,7 @@ class _DonationTab extends ConsumerWidget {
             package: pkg,
             onPurchase: () {
               notifier.purchaseDonation(pkg);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Оплата успішна! +${_formatNumber(pkg.grymni)}₲',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: _green,
-                  behavior: SnackBarBehavior.floating,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
+              _DonationToast.show(context, pkg.grymni);
             },
           ),
         const SizedBox(height: 16),
@@ -2359,4 +2351,85 @@ String _grymniLabel(int n) {
   if (mod10 == 1 && mod100 != 11) return 'гримня';
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'гримні';
   return 'гримнів';
+}
+
+// ─── Aggregating donation toast ────────────────────────────────────────────
+
+/// Prevents toast spam when the user taps a donation package many times.
+/// While a donation toast is on screen, new purchases add to its running
+/// total (with an animated digit change) and restart the auto-dismiss timer
+/// instead of queueing another toast behind it.
+class _DonationToast {
+  static const _visibleFor = Duration(seconds: 2);
+
+  static ValueNotifier<int>? _total;
+  static ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _controller;
+  static Timer? _dismissTimer;
+
+  static void show(BuildContext context, int grymni) {
+    final existing = _total;
+    if (existing != null) {
+      existing.value += grymni;
+      _restartDismissTimer();
+      return;
+    }
+
+    final notifier = ValueNotifier<int>(grymni);
+    _total = notifier;
+
+    final controller = ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: _DonationToastContent(total: notifier),
+        backgroundColor: _green,
+        behavior: SnackBarBehavior.floating,
+        // Long duration — we drive dismissal via _dismissTimer so new taps
+        // can keep the same toast alive while they accumulate.
+        duration: const Duration(days: 1),
+      ),
+    );
+    _controller = controller;
+
+    controller.closed.then((_) {
+      if (identical(_controller, controller)) {
+        _dismissTimer?.cancel();
+        _dismissTimer = null;
+        _total?.dispose();
+        _total = null;
+        _controller = null;
+      }
+    });
+
+    _restartDismissTimer();
+  }
+
+  static void _restartDismissTimer() {
+    _dismissTimer?.cancel();
+    _dismissTimer = Timer(_visibleFor, () => _controller?.close());
+  }
+}
+
+class _DonationToastContent extends StatelessWidget {
+  final ValueNotifier<int> total;
+
+  const _DonationToastContent({required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: total,
+      builder: (context, value, _) {
+        return TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: value.toDouble()),
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeOutCubic,
+          builder: (context, animated, _) {
+            return Text(
+              'Оплата успішна! +${_formatNumber(animated.round())}₲',
+              style: const TextStyle(color: Colors.white),
+            );
+          },
+        );
+      },
+    );
+  }
 }

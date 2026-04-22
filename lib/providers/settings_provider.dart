@@ -18,6 +18,15 @@ const _keyGlitchShift = 'settings_glitch_shift';
 const _keyGlitchChroma = 'settings_glitch_chroma';
 const _keyLaunchCount = 'settings_launch_count';
 const _keyLogoPathScript = 'settings_logo_path_script';
+const _keyLogoAnimationDurationMs = 'settings_logo_animation_duration_ms';
+
+/// Default duration of the shutdown logo flight (icon moves from top-left
+/// to the opposite corner). The native window collapse that follows adds
+/// 400 ms, so the full shutdown sequence lasts [kDefaultLogoAnimationDurationMs]
+/// + 400 ms.
+const int kDefaultLogoAnimationDurationMs = 1100;
+const int _minLogoAnimationDurationMs = 400;
+const int _maxLogoAnimationDurationMs = 3000;
 
 // ─── Settings model ─────────────────────────────────────────────────────────
 
@@ -47,6 +56,11 @@ class AppSettings {
   /// zigzag algorithm. See [kDefaultLogoPathScript] for the default.
   final String? logoPathScript;
 
+  /// Duration of the shutdown icon flight in milliseconds, or null to use
+  /// [kDefaultLogoAnimationDurationMs]. The native window collapse phase
+  /// (400 ms) is appended automatically.
+  final int? logoAnimationDurationMs;
+
   const AppSettings({
     this.showArkanoidButton = false,
     this.deskHeight = 74.0,
@@ -58,6 +72,7 @@ class AppSettings {
     this.glitchChroma = 0.5,
     this.launchCount = 0,
     this.logoPathScript,
+    this.logoAnimationDurationMs,
   });
 
   AppSettings copyWith({
@@ -71,6 +86,7 @@ class AppSettings {
     double? glitchChroma,
     int? launchCount,
     Object? logoPathScript = _sentinel,
+    Object? logoAnimationDurationMs = _sentinel,
   }) =>
       AppSettings(
         showArkanoidButton: showArkanoidButton ?? this.showArkanoidButton,
@@ -85,6 +101,10 @@ class AppSettings {
         logoPathScript: identical(logoPathScript, _sentinel)
             ? this.logoPathScript
             : logoPathScript as String?,
+        logoAnimationDurationMs:
+            identical(logoAnimationDurationMs, _sentinel)
+                ? this.logoAnimationDurationMs
+                : logoAnimationDurationMs as int?,
       );
 }
 
@@ -97,6 +117,20 @@ String? _loadValidScript(String? raw) {
   if (raw == null || raw.isEmpty) return null;
   return validateLogoPathScript(raw) == null ? raw : null;
 }
+
+/// Coerces out-of-range persisted values back to `null` (→ default).
+int? _loadValidAnimationDurationMs(int? raw) {
+  if (raw == null) return null;
+  if (raw < _minLogoAnimationDurationMs || raw > _maxLogoAnimationDurationMs) {
+    return null;
+  }
+  return raw;
+}
+
+int _clampLogoAnimationDurationMs(int value) => value.clamp(
+      _minLogoAnimationDurationMs,
+      _maxLogoAnimationDurationMs,
+    );
 
 // ─── SharedPreferences instance ─────────────────────────────────────────────
 
@@ -121,6 +155,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
       glitchChroma: prefs.getDouble(_keyGlitchChroma) ?? 0.5,
       launchCount: prefs.getInt(_keyLaunchCount) ?? 0,
       logoPathScript: _loadValidScript(prefs.getString(_keyLogoPathScript)),
+      logoAnimationDurationMs: _loadValidAnimationDurationMs(
+        prefs.getInt(_keyLogoAnimationDurationMs),
+      ),
     );
   }
 
@@ -187,6 +224,18 @@ class SettingsNotifier extends Notifier<AppSettings> {
       await prefs.setString(_keyLogoPathScript, value);
     }
     state = state.copyWith(logoPathScript: value);
+  }
+
+  Future<void> setLogoAnimationDurationMs(int? value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    if (value == null) {
+      await prefs.remove(_keyLogoAnimationDurationMs);
+      state = state.copyWith(logoAnimationDurationMs: null);
+      return;
+    }
+    final clamped = _clampLogoAnimationDurationMs(value);
+    await prefs.setInt(_keyLogoAnimationDurationMs, clamped);
+    state = state.copyWith(logoAnimationDurationMs: clamped);
   }
 }
 
