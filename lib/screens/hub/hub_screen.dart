@@ -307,7 +307,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
         duration: Duration(seconds: 8),
         content: Text(
           'Оновлення системи агентів вимагає перезапуску прогресу. '
-          'Гримні, косметика та ачівки збережені.',
+          'Гримні та куплена косметика збережені.',
         ),
       ),
     );

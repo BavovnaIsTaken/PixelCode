@@ -1467,6 +1467,9 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         assignedAgents: [],
         createdAt: now,
         updatedAt: now,
+        difficulty: msg.difficulty,
+        allowedRoles: msg.allowedRoles,
+        taskType: msg.taskType,
       };
       boardTasks.set(id, task);
       dbg("info", "board", `Created task: ${task.title} (${id})`);
