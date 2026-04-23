@@ -6,9 +6,13 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.os.Build
 import android.provider.MediaStore
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
@@ -20,11 +24,15 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CLIPBOARD_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getImageFromClipboard" -> {
-                    val imageBytes = getImageFromClipboard()
-                    if (imageBytes != null) {
-                        result.success(imageBytes)
-                    } else {
-                        result.success(null)
+                    // Run on background thread to avoid blocking UI
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val imageBytes = getImageFromClipboard()
+                            result.success(imageBytes)
+                        } catch (e: Exception) {
+                            Log.e("MainActivity", "Error getting image from clipboard", e)
+                            result.success(null)
+                        }
                     }
                 }
                 else -> result.notImplemented()
@@ -57,9 +65,14 @@ class MainActivity : FlutterActivity() {
 
             val outputStream = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-            outputStream.toByteArray()
+            val imageBytes = outputStream.toByteArray()
+
+            // Free bitmap memory
+            bitmap.recycle()
+
+            imageBytes
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e("MainActivity", "Error compressing image from clipboard", e)
             null
         }
     }

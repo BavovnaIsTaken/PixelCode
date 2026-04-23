@@ -13,7 +13,6 @@ import '../../providers/agent_provider.dart';
 import '../../providers/connected_devices_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../widgets/deploy/device_deploy_popover.dart';
-import '../../widgets/energy/energy_meter.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_program.dart';
@@ -543,7 +542,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
             // the Office tab available, so a switcher would be pointless.
             if (isConnected)
               Positioned(
-                top: 46, // 48px title bar − 2px so the notch visually merges
+                top: 16, // notch tucks into the 48px title bar, chin protrudes ~10%
                 left: 0,
                 right: 0,
                 child: Center(
@@ -780,9 +779,6 @@ class _HubScreenState extends ConsumerState<HubScreen>
           if (isConnected)
             _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
           if (isConnected) const SizedBox(width: 8),
-          // Daily token budget meter (Energy).
-          if (isConnected) const EnergyMeter(),
-          if (isConnected) const SizedBox(width: 8),
           // iOS deploy
           if (isConnected) _DeviceDeployButton(),
           // Settings
@@ -844,12 +840,25 @@ class _HubScreenState extends ConsumerState<HubScreen>
     final tc = context.appColors;
     return Container(
       height: 48,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      // When connected, the notch chin protrudes ~4px below the title bar,
+      // which visually pulls the perceived toolbar bottom down. We shift the
+      // row content down by the same amount so icons look centred against
+      // the chin bottom rather than the raw 48px bar.
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: isConnected ? 4 : 0,
+      ),
       decoration: BoxDecoration(
         color: tc.surface,
-        border: Border(
-          bottom: BorderSide(color: tc.divider),
-        ),
+        // When connected, the notch overlay paints a single continuous line
+        // (toolbar bottom + notch outline), so we skip the plain bottom border
+        // here to avoid a double line through the flares.
+        border: isConnected
+            ? null
+            : Border(
+                bottom: BorderSide(color: tc.divider),
+              ),
       ),
       child: Row(
         children: [
@@ -1259,38 +1268,27 @@ class _NotchViewToggle extends StatelessWidget {
     final tc = context.appColors;
     return Material(
       color: Colors.transparent,
-      child: Container(
-        // Top flush with the title bar, bottom droops into content.
-        decoration: BoxDecoration(
-          color: tc.surface,
-          borderRadius: const BorderRadius.vertical(
-            bottom: Radius.circular(14),
-          ),
-          border: Border(
-            left: BorderSide(color: tc.divider),
-            right: BorderSide(color: tc.divider),
-            bottom: BorderSide(color: tc.divider),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+      child: CustomPaint(
+        painter: _NotchPainter(
+          fillColor: tc.surface,
+          strokeColor: tc.divider,
+          titleBarInset: 32, // 48px title bar − 16px top offset = inside-title-bar y
+          flareRadius: 14,
         ),
-        padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (int i = 0; i < _items.length; i++)
-              _notchItem(
-                icon: _items[i].$1,
-                label: _items[i].$2,
-                isActive: viewIndex == i,
-                onTap: viewIndex == i ? null : () => onChanged(i),
-              ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (int i = 0; i < _items.length; i++)
+                _notchItem(
+                  icon: _items[i].$1,
+                  label: _items[i].$2,
+                  isActive: viewIndex == i,
+                  onTap: viewIndex == i ? null : () => onChanged(i),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -1342,6 +1340,109 @@ class _NotchViewToggle extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Paints the notch fill, soft shadow, and a single continuous outline that
+/// flows from the title bar's bottom edge (far left) — curving inward with a
+/// small concave fillet — down along the notch sides, around the rounded
+/// bottom, and symmetrically back up and out to the far right. Replaces the
+/// title bar's straight bottom border when shown so there's no visible frame
+/// around the buttons — just one line bending under them.
+class _NotchPainter extends CustomPainter {
+  final Color fillColor;
+  final Color strokeColor;
+  final double titleBarInset;
+  final double flareRadius;
+
+  _NotchPainter({
+    required this.fillColor,
+    required this.strokeColor,
+    required this.titleBarInset,
+    required this.flareRadius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = titleBarInset;
+    // Wings extend far past the notch so the line reaches the screen edges.
+    // Clip.none on the parent Stack lets the draw escape the widget's bounds.
+    const wing = 10000.0;
+
+    // Fill & outline share the same S-bend curves on the sides so the stroke
+    // sits exactly on the fill's boundary — no visible frame around content.
+    // Above the title-bar line the fill is rectangular (but hidden behind the
+    // title bar, which has the same surface colour).
+    // Cubic S-curves: horizontal tangent at both the title-bar line AND the
+    // chin bottom, so the sides flow into the flat bottom with no kink.
+    final fillPath = Path()
+      ..moveTo(-flareRadius, 0)
+      ..lineTo(size.width + flareRadius, 0)
+      ..lineTo(size.width + flareRadius, y)
+      ..cubicTo(
+        size.width,
+        y,
+        size.width,
+        size.height,
+        size.width - flareRadius,
+        size.height,
+      )
+      ..lineTo(flareRadius, size.height)
+      ..cubicTo(0, size.height, 0, y, -flareRadius, y)
+      ..close();
+
+    // Clip shadow to below the title-bar line so the blur halo doesn't bleed
+    // upward into the toolbar.
+    canvas.save();
+    canvas.clipRect(Rect.fromLTRB(
+      -wing,
+      y,
+      size.width + wing,
+      size.height + wing,
+    ));
+    canvas.translate(0, 4);
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    canvas.restore();
+
+    canvas.drawPath(fillPath, Paint()..color = fillColor);
+
+    // Single continuous outline: left wing → S-bend down to chin → flat bottom
+    // → S-bend up → right wing. Tangents match at every joint (horizontal at
+    // title-bar line, vertical at chin) so there are no kinks.
+    final outlinePath = Path()
+      ..moveTo(-wing, y)
+      ..lineTo(-flareRadius, y)
+      ..cubicTo(0, y, 0, size.height, flareRadius, size.height)
+      ..lineTo(size.width - flareRadius, size.height)
+      ..cubicTo(
+        size.width,
+        size.height,
+        size.width,
+        y,
+        size.width + flareRadius,
+        y,
+      )
+      ..lineTo(size.width + wing, y);
+
+    canvas.drawPath(
+      outlinePath,
+      Paint()
+        ..color = strokeColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _NotchPainter old) =>
+      old.fillColor != fillColor ||
+      old.strokeColor != strokeColor ||
+      old.titleBarInset != titleBarInset ||
+      old.flareRadius != flareRadius;
 }
 
 class _MobileNavItem extends StatelessWidget {

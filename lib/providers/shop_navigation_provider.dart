@@ -9,6 +9,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Tab indices in ShopPanel.
+const shopTabOffice = 2;
 const shopTabFurniture = 3;
 const shopTabDonation = 5;
 

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class ClipboardService {
@@ -9,7 +10,8 @@ class ClipboardService {
     try {
       final result = await _channel.invokeMethod<Uint8List>('getImageFromClipboard');
       return result;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Clipboard error: $e');
       return null;
     }
   }

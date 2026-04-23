@@ -578,9 +578,42 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   @override
   Widget build(BuildContext context) {
-    ref.watch(selectedAgentProvider);
+    final selectedAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
     final syncState = ref.watch(chatSyncStateProvider);
+    final agentStatus = ref.watch(
+      agentsProvider.select((m) => m[selectedAgent]?.status ?? AgentStatus.idle),
+    );
+    final agentToolDesc = ref.watch(
+      agentsProvider.select((m) => m[selectedAgent]?.lastToolDescription),
+    );
+    // Team activity: when the selected agent delegates (common for captain),
+    // its own status returns to idle while subagents keep working. Surface a
+    // team-busy indicator so the chat doesn't look frozen.
+    final busySubagents = ref.watch(
+      agentsProvider.select((m) => [
+        for (final e in m.entries)
+          if (e.key != selectedAgent && e.value.isActive) e.value,
+      ]),
+    );
+    final hasStreamingBubble =
+        messages.isNotEmpty && messages.last.isStreaming;
+    final selectedIsActive = agentStatus != AgentStatus.idle;
+    final showThinking =
+        (selectedIsActive || busySubagents.isNotEmpty) && !hasStreamingBubble;
+    final thinkingStatus = showThinking
+        ? (selectedIsActive ? agentStatus : busySubagents.first.status)
+        : agentStatus;
+    final thinkingToolDesc = showThinking
+        ? (selectedIsActive
+            ? agentToolDesc
+            : busySubagents.first.lastToolDescription)
+        : agentToolDesc;
+    final thinkingSubtitle = !showThinking || selectedIsActive
+        ? null
+        : busySubagents.length == 1
+            ? busySubagents.first.info.name
+            : '${busySubagents.length} агентів працюють';
 
     ref.listen(selectedAgentProvider, (prev, next) {
       _autoScroll = true;
@@ -703,7 +736,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 ? (_showSkeleton
                     ? const _PixelChatSkeleton()
                     : const SizedBox.shrink())
-                : messages.isEmpty
+                : (messages.isEmpty && !showThinking)
                     ? _buildEmptyState()
                     : Stack(
                         children: [
@@ -711,9 +744,21 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                             reverse: true,
                             controller: _scrollController,
                             padding: const EdgeInsets.all(16),
-                            itemCount: messages.length,
-                            itemBuilder: (context, index) =>
-                                _ChatBubble(message: messages[messages.length - 1 - index]),
+                            itemCount: messages.length + (showThinking ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              if (showThinking && index == 0) {
+                                return _ThinkingBubble(
+                                  status: thinkingStatus,
+                                  toolDescription: thinkingToolDesc,
+                                  subtitle: thinkingSubtitle,
+                                );
+                              }
+                              final msgIndex = showThinking ? index - 1 : index;
+                              return _ChatBubble(
+                                message:
+                                    messages[messages.length - 1 - msgIndex],
+                              );
+                            },
                           ),
                           if (!_autoScroll)
                             Positioned(
@@ -1691,6 +1736,106 @@ class _GarlandPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_GarlandPainter oldDelegate) => true;
+}
+
+class _ThinkingBubble extends StatelessWidget {
+  final AgentStatus status;
+  final String? toolDescription;
+  final String? subtitle;
+
+  const _ThinkingBubble({
+    required this.status,
+    this.toolDescription,
+    this.subtitle,
+  });
+
+  String get _label {
+    final tool = toolDescription;
+    if (tool != null && tool.isNotEmpty && status == AgentStatus.running) {
+      return tool;
+    }
+    return switch (status) {
+      AgentStatus.thinking => 'Thinking',
+      AgentStatus.typing => 'Typing',
+      AgentStatus.reading => 'Reading',
+      AgentStatus.running => 'Working',
+      AgentStatus.waiting => 'Waiting',
+      AgentStatus.idle => 'Idle',
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
+              ),
+            ),
+            child: const Icon(Icons.psychology, size: 16, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1F27),
+                borderRadius: BorderRadius.circular(12)
+                    .copyWith(bottomLeft: const Radius.circular(4)),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.06),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          _label,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.7),
+                            fontSize: 13,
+                            fontStyle: FontStyle.italic,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _TypingDots(),
+                    ],
+                  ),
+                  if (subtitle != null && subtitle!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        subtitle!,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _TypingDots extends StatefulWidget {
