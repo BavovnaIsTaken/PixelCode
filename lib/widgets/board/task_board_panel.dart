@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/task_board.dart';
 import '../../models/work_log_entry.dart';
@@ -58,9 +59,10 @@ class TaskBoardPanel extends ConsumerWidget {
     ref.watch(taskProgressProvider);
     final board = ref.watch(taskBoardProvider);
     final isNarrow = MediaQuery.sizeOf(context).width < 768;
+    final colors = context.appColors;
 
     return Container(
-      color: const Color(0xFF0E0E11),
+      color: colors.background,
       child: Column(
         children: [
           _BoardHeader(taskCount: board.tasks.length),
@@ -203,13 +205,14 @@ class _ColumnTabRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.appColors;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF0E0E11),
+        color: colors.background,
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: colors.divider),
         ),
       ),
       child: Row(
@@ -246,6 +249,7 @@ class _TabItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.appColors;
     final columnColor = _columnColors[column]!;
 
     return GestureDetector(
@@ -294,8 +298,8 @@ class _TabItem extends StatelessWidget {
                 column.label,
                 style: TextStyle(
                   color: isActive
-                      ? Colors.white
-                      : Colors.white.withValues(alpha: 0.4),
+                      ? colors.textHigh
+                      : colors.textLow,
                   fontSize: 12,
                   fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
                 ),
@@ -311,7 +315,7 @@ class _TabItem extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: isActive
                       ? columnColor.withValues(alpha: 0.25)
-                      : Colors.white.withValues(alpha: 0.06),
+                      : colors.surfaceDim,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
@@ -319,7 +323,7 @@ class _TabItem extends StatelessWidget {
                   style: TextStyle(
                     color: isActive
                         ? columnColor
-                        : Colors.white.withValues(alpha: 0.3),
+                        : colors.textLow,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
@@ -340,6 +344,7 @@ class _GlobalEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.appColors;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -352,7 +357,7 @@ class _GlobalEmptyState extends StatelessWidget {
             Text(
               'Дошка порожня',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.6),
+                color: colors.textMedium,
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
               ),
@@ -362,7 +367,7 @@ class _GlobalEmptyState extends StatelessWidget {
               'Створіть першу задачу,\nщоб почати працювати',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.25),
+                color: colors.textLow,
                 fontSize: 13,
                 fontWeight: FontWeight.w400,
                 height: 1.5,
@@ -380,11 +385,12 @@ class _GlobalEmptyState extends StatelessWidget {
 class _PixelBoardIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final accent = context.appColors.accent;
     return SizedBox(
       width: 52,
       height: 52,
       child: CustomPaint(
-        painter: _PixelBoardPainter(const Color(0xFF00C0D1)),
+        painter: _PixelBoardPainter(accent),
       ),
     );
   }
@@ -473,27 +479,28 @@ class _PixelBoardPainter extends CustomPainter {
 class _LargeAddTaskButton extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final accent = context.appColors.accent;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: () => _showAddDialog(context, ref),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         decoration: BoxDecoration(
-          color: const Color(0xFF00C0D1).withValues(alpha: 0.15),
+          color: accent.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
+            color: accent.withValues(alpha: 0.3),
           ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.add, size: 16, color: const Color(0xFF00C0D1)),
+            Icon(Icons.add, size: 16, color: accent),
             const SizedBox(width: 6),
             Text(
               'Створити задачу',
               style: TextStyle(
-                color: const Color(0xFF00C0D1),
+                color: accent,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
@@ -538,6 +545,7 @@ class _ColumnEmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.appColors;
     final columnColor = _columnColors[column]!;
     final hint = _columnEmptyHints[column] ?? '';
 
@@ -547,7 +555,7 @@ class _ColumnEmptyState extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.02),
+            color: colors.surfaceDim,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: columnColor.withValues(alpha: 0.1),
@@ -573,7 +581,7 @@ class _ColumnEmptyState extends StatelessWidget {
               Text(
                 'Немає задач',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.3),
+                  color: colors.textLow,
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -583,7 +591,7 @@ class _ColumnEmptyState extends StatelessWidget {
                 hint,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: colors.textLow.withValues(alpha: 0.6),
                   fontSize: 12,
                   height: 1.4,
                 ),
@@ -898,9 +906,10 @@ void _showTaskDetailSheet(
   Map<String, AgentState> agents,
   List<WorkLogEntry> workLog,
 ) {
+  final surface = context.appColors.surface;
   showModalBottomSheet(
     context: context,
-    backgroundColor: const Color(0xFF1A1A1F),
+    backgroundColor: surface,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -929,7 +938,8 @@ class _TaskDetailContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = _stickyColors[task.color]!;
+    final themeColors = context.appColors;
+    final stickyColors = _stickyColors[task.color]!;
     final priority = _priorityIndicators[task.priority]!;
     final columnColor = _columnColors[task.column]!;
 
@@ -949,7 +959,7 @@ class _TaskDetailContent extends StatelessWidget {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.2),
+                color: themeColors.textLow,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -963,9 +973,9 @@ class _TaskDetailContent extends StatelessWidget {
                 height: 10,
                 margin: const EdgeInsets.only(top: 5),
                 decoration: BoxDecoration(
-                  color: colors.$1,
+                  color: stickyColors.$1,
                   borderRadius: BorderRadius.circular(2),
-                  border: Border.all(color: colors.$2, width: 1.5),
+                  border: Border.all(color: stickyColors.$2, width: 1.5),
                 ),
               ),
               const SizedBox(width: 10),
@@ -986,8 +996,8 @@ class _TaskDetailContent extends StatelessWidget {
               Expanded(
                 child: Text(
                   task.title,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: themeColors.textHigh,
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                     height: 1.3,

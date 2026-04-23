@@ -55,6 +55,13 @@ const int kCoffeeMachineCol2 = 14; // second tile
 // Snack table next to coffee machine
 const int kSnackTableCol = 15;
 const int kSnackTableRow = 1;
+
+// Foreman — anchors onto the bottom wall row at the right edge. He's
+// "outside the office" visually: feet rest on the wall strip, upper body
+// overhangs into the last floor row. Inline helpers so the painter, hit-
+// test, and blockedTiles all compute the same tile from current grid dims.
+int foremanColFor(int gridCols) => gridCols - 1;
+int foremanRowFor(int gridRows) => gridRows - 1;
 const double kCoffeeBrewDuration = 6.0;
 
 // Skateboard
@@ -509,6 +516,15 @@ class OfficeGameState {
     blockedTiles.add('$kCoffeeMachineCol,$kCoffeeMachineRow');
     blockedTiles.add('$kCoffeeMachineCol2,$kCoffeeMachineRow');
     blockedTiles.add('$kSnackTableCol,$kSnackTableRow');
+
+    // Foreman stands on the bottom wall; his upper body overhangs the inner
+    // tile directly above. Block that inner tile so rooms/furniture can't
+    // cover his head. The wall tile itself isn't walkable anyway, so adding
+    // it to blockedTiles is a no-op for pathing but keeps intent explicit.
+    final fCol = foremanColFor(gridCols);
+    final fRow = foremanRowFor(gridRows);
+    blockedTiles.add('$fCol,$fRow');
+    if (fRow > 0) blockedTiles.add('$fCol,${fRow - 1}');
 
     // Placed furniture items (if they block the path) occupy their footprint.
     for (final placement in _placedFurniture) {

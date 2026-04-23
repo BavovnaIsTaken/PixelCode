@@ -17,10 +17,11 @@ import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import '../../providers/theme_provider.dart';
 import 'build_picker_rail.dart';
 import 'character_sprites.dart';
+import 'foreman_overlay_painter.dart';
 import 'office_game_state.dart';
+import 'office_upgrade_dialog.dart';
 import 'pixel_office_painter.dart';
 import 'pixel_sprites.dart';
 
@@ -321,6 +322,33 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                 ),
                               ),
                             ),
+                            // Foreman + back-wall door — diegetic entry
+                            // points to Build mode and the upgrade dialog.
+                            // Hidden while the player is already building.
+                            if (!_buildMode)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: ForemanOverlayPainter(
+                                      gridCols: _gameState.gridCols,
+                                      gridRows: _gameState.gridRows,
+                                      tick: _tick,
+                                      officeLevel: officeLevel,
+                                      sprites: _sprites,
+                                      attention: _renovationAttention(
+                                          gameEconomy),
+                                      nextTier: officeLevel.nextLevel,
+                                      doorAffordable: ref
+                                          .read(gameEconomyProvider.notifier)
+                                          .canUpgradeOffice(),
+                                      doorDisabled:
+                                          officeLevel.nextLevel == null ||
+                                              officeLevel
+                                                  .nextLevel!.isWipComingSoon,
+                                    ),
+                                  ),
+                                ),
+                              ),
                             ..._buildNameOverlays(agents, constraints),
                           ],
                         ),
@@ -355,55 +383,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             },
           ),
         ),
-
-        // Build-mode bookmark tab (collapsed state) — anchored to the right
-        // edge so it never covers the canvas content.
-        if (!_buildMode)
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: Center(
-              child: Builder(builder: (context) {
-                final surface =
-                    ref.watch(activeThemeColorsProvider).surface;
-                return GestureDetector(
-                  onTap: () => setState(() {
-                    _buildMode = true;
-                    _buildCategory = BuildCategory.compact;
-                    _selectedRoomType = null;
-                    _selectedPreset = null;
-                    _ghostCol = null;
-                    _ghostRow = null;
-                  }),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 14),
-                    decoration: BoxDecoration(
-                      color: surface,
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(10),
-                        bottomLeft: Radius.circular(10),
-                      ),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x40000000),
-                          blurRadius: 24,
-                          spreadRadius: 0,
-                          offset: Offset.zero,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.add_home_outlined,
-                      size: 18,
-                      color: Color(0xFF00C0D1),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
 
         // Build rail + tray: Positioned.fill but the internal widgets only
         // occupy the right strip + bottom strip, so the canvas above sees the
@@ -486,6 +465,37 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _transformController.value = Matrix4.identity();
   }
 
+  /// Is something affordable right now that would make sense to buy from
+  /// the renovation flow (next-tier move-in OR the next expansion step)?
+  bool _renovationAttention(GameState game) {
+    final notifier = ref.read(gameEconomyProvider.notifier);
+    return notifier.canUpgradeOffice() || notifier.canBuyOfficeExpansion();
+  }
+
+  void _enterBuildMode() {
+    setState(() {
+      _buildMode = true;
+      _buildCategory = BuildCategory.compact;
+      _selectedRoomType = null;
+      _selectedPreset = null;
+      _ghostCol = null;
+      _ghostRow = null;
+    });
+  }
+
+  /// Hit-test the Foreman sprite (world-space rect from foreman_overlay_painter).
+  bool _hitTestForeman(Offset screenPos, BoxConstraints constraints) {
+    final world = _screenToWorld(screenPos, constraints);
+    return foremanHitRect(_gameState.gridCols, _gameState.gridRows)
+        .contains(world);
+  }
+
+  /// Hit-test the back-wall door.
+  bool _hitTestDoor(Offset screenPos, BoxConstraints constraints) {
+    final world = _screenToWorld(screenPos, constraints);
+    return doorHitRect(_gameState.gridCols).contains(world);
+  }
+
   /// Convert screen position to world position and hit-test characters.
   String? _hitTestCharacter(Offset screenPos, BoxConstraints constraints) {
     final cw = _gameState.canvasWidth;
@@ -550,6 +560,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     // place or remove furniture on grid.
     if (isEditMode) {
       _handleFurnitureTap(pos, constraints);
+      return;
+    }
+
+    // Back-wall door → open upgrade dialog. Check before the foreman so the
+    // door wins when hit regions happen to overlap on very small grids.
+    if (_hitTestDoor(pos, constraints)) {
+      showOfficeUpgradeDialog(context);
+      return;
+    }
+
+    // Foreman → enter Build mode.
+    if (_hitTestForeman(pos, constraints)) {
+      _enterBuildMode();
       return;
     }
 

@@ -13,6 +13,7 @@ import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
+import '../../providers/energy_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../providers/ios_deploy_provider.dart';
@@ -146,6 +147,7 @@ class _SettingsDialog extends ConsumerWidget {
 
 enum _SettingsCategory {
   account(Icons.person_outline, 'Обліковий запис'),
+  energy(Icons.bolt_outlined, 'Енергія'),
   themes(Icons.palette_outlined, 'Теми'),
   sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
   network(Icons.hub_outlined, 'Мережа'),
@@ -196,6 +198,8 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
     switch (cat) {
       case _SettingsCategory.account:
         return const _AccountSection();
+      case _SettingsCategory.energy:
+        return _buildEnergy();
       case _SettingsCategory.themes:
         return _buildThemes();
       case _SettingsCategory.sendButton:
@@ -211,6 +215,21 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       case _SettingsCategory.danger:
         return _buildDanger();
     }
+  }
+
+  Widget _buildEnergy() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Енергія'),
+        const SizedBox(height: 12),
+        _desc('Денний ліміт токенів Claude API. '
+            'При вичерпанні модель автоматично понижується до Haiku. '
+            'Лічильники скидаються опівночі за локальним часом.'),
+        const SizedBox(height: 18),
+        const _EnergyDetails(),
+      ],
+    );
   }
 
   Widget _buildThemes() {
@@ -2597,4 +2616,136 @@ class _DirtOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DirtOverlayPainter old) => false;
+}
+
+class _EnergyDetails extends ConsumerWidget {
+  const _EnergyDetails();
+
+  static String _fmtK(int v) {
+    if (v >= 1000) {
+      return '${(v / 1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}k';
+    }
+    return v.toString();
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final e = ref.watch(energyProvider);
+    final ratio = e.tokenUsageRatio;
+    final tokenColor = ratio > 0.9
+        ? Colors.redAccent
+        : ratio > 0.7
+            ? Colors.orangeAccent
+            : Colors.greenAccent;
+    final labelStyle = TextStyle(
+      color: Colors.white.withValues(alpha: 0.7),
+      fontSize: 13,
+      fontWeight: FontWeight.w500,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text('🪫', style: TextStyle(fontSize: 16)),
+            const SizedBox(width: 8),
+            Text('Токени сьогодні', style: labelStyle),
+            const Spacer(),
+            Text(
+              '${_fmtK(e.tokensUsedToday)} / ${_fmtK(e.dailyTokenCap)}',
+              style: TextStyle(
+                color: tokenColor,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 6,
+            backgroundColor: Colors.white.withValues(alpha: 0.06),
+            valueColor: AlwaysStoppedAnimation(tokenColor),
+          ),
+        ),
+        const SizedBox(height: 20),
+        _ModelTierRow(
+          label: 'Opus',
+          used: e.opusTasksUsedToday,
+          cap: e.opusCapPerDay,
+          color: const Color(0xFFFFD54F),
+        ),
+        const SizedBox(height: 10),
+        _ModelTierRow(
+          label: 'Sonnet',
+          used: e.sonnetTasksUsedToday,
+          cap: e.sonnetCapPerDay,
+          color: const Color(0xFF81D4FA),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelTierRow extends StatelessWidget {
+  final String label;
+  final int used;
+  final int cap;
+  final Color color;
+
+  const _ModelTierRow({
+    required this.label,
+    required this.used,
+    required this.cap,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final exhausted = used >= cap;
+    final ratio = cap == 0 ? 1.0 : (used / cap).clamp(0.0, 1.0);
+    final effective =
+        exhausted ? Colors.white.withValues(alpha: 0.35) : color;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: effective,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '$used / $cap',
+              style: TextStyle(
+                color: effective,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: ratio,
+            minHeight: 4,
+            backgroundColor: Colors.white.withValues(alpha: 0.06),
+            valueColor: AlwaysStoppedAnimation(
+              exhausted ? color.withValues(alpha: 0.3) : color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }

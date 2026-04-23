@@ -646,6 +646,17 @@ function resolveAgentId(ws: WebSocket, raw: string): string {
   return raw;
 }
 
+/** Resolve the first hired instance of a given roleType (e.g. "manager" → "manager#1").
+ *  Falls back to the bare roleType if no hired instance exists yet. */
+function resolveRoleInstance(ws: WebSocket, roleType: string): string {
+  const gs = clientGameState.get(ws);
+  const hired = gs?.instances ?? {};
+  for (const id of Object.keys(hired)) {
+    if (hired[id].roleType === roleType) return id;
+  }
+  return roleType;
+}
+
 /** AgentInfo list for a client — computed from their game state.
  *
  * Used in init/new_chat/resume_session responses so Flutter can enumerate
@@ -1329,7 +1340,7 @@ async function processQueue(ws: WebSocket): Promise<void> {
         await runQuery(
           ws,
           `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nBriefly report this completion to the user in 1-2 sentences. If there are more queued tasks or running agents, mention that too.`,
-          "manager",
+          resolveRoleInstance(ws, "manager"),
         );
         break;
 
@@ -1337,7 +1348,7 @@ async function processQueue(ws: WebSocket): Promise<void> {
         await runQuery(
           ws,
           `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Please plan and dispatch this work to appropriate agents.`,
-          "manager",
+          resolveRoleInstance(ws, "manager"),
         );
         break;
     }
@@ -1422,6 +1433,18 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     // Manager and tech-lead can delegate via Dispatch MCP tool (no blocking Agent tool)
     const canDelegate = targetRoleType === "manager" || targetRoleType === "tech-lead";
     const allowedTools = [...baseTools];
+    if (canDelegate) {
+      allowedTools.push(
+        "mcp__dispatch__dispatch",
+        "mcp__dispatch__team_status",
+        "mcp__dispatch__cancel_task",
+        "mcp__dispatch__board_create_task",
+        "mcp__dispatch__board_move_task",
+        "mcp__dispatch__board_update_task",
+        "mcp__dispatch__board_assign_agent",
+        "mcp__dispatch__board_list",
+      );
+    }
 
     // Resume from existing session if available, persist for future resume.
     const existingSessionId = clientSessions.get(ws);

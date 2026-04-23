@@ -167,11 +167,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // subscribed (race condition on localhost where response is instant).
     final buffered = ws.lastChatHistory;
     if (buffered != null) {
-      final grouped = <String, List<ChatMessage>>{};
-      for (final m in buffered.messages) {
-        (grouped[m.agentId] ??= []).add(m);
-      }
-      _allMessages = grouped;
+      _allMessages = _mergeHistory(_allMessages, buffered.messages);
       _scheduleSave();
       ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     }
@@ -208,10 +204,44 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
+  /// Merge server-authoritative history with local per-agent messages.
+  ///
+  /// Preserves any local message that is either still streaming or has a
+  /// timestamp newer than the server's latest for that agent — otherwise a
+  /// `chat_history` snapshot taken before the current stream finalized would
+  /// wipe captain responses visible mid-flight.
+  static Map<String, List<ChatMessage>> _mergeHistory(
+    Map<String, List<ChatMessage>> local,
+    List<ChatMessage> serverMessages,
+  ) {
+    final serverGrouped = <String, List<ChatMessage>>{};
+    for (final m in serverMessages) {
+      (serverGrouped[m.agentId] ??= []).add(m);
+    }
+    final merged = <String, List<ChatMessage>>{};
+    final agentIds = {...local.keys, ...serverGrouped.keys};
+    for (final agentId in agentIds) {
+      final serverList = serverGrouped[agentId] ?? const <ChatMessage>[];
+      final localList = local[agentId] ?? const <ChatMessage>[];
+      if (serverList.isEmpty) {
+        merged[agentId] = List.of(localList);
+        continue;
+      }
+      final serverLatest = serverList
+          .map((m) => m.timestamp)
+          .reduce((a, b) => a.isAfter(b) ? a : b);
+      final tail = localList.where(
+        (m) => m.isStreaming || m.timestamp.isAfter(serverLatest),
+      );
+      merged[agentId] = [...serverList, ...tail];
+    }
+    return merged;
+  }
+
   void _scheduleSave() {
+    final prefs = ref.read(sharedPrefsProvider);
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 1), () {
-      final prefs = ref.read(sharedPrefsProvider);
       ChatPersistenceService.saveAllMessages(prefs, _allMessages);
     });
   }
@@ -225,12 +255,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
 
       case ChatHistoryMessage(:final messages):
-        // Replace local history with the authoritative server history
-        final grouped = <String, List<ChatMessage>>{};
-        for (final m in messages) {
-          (grouped[m.agentId] ??= []).add(m);
-        }
-        _allMessages = grouped;
+        _allMessages = _mergeHistory(_allMessages, messages);
         state = _allMessages[_selectedAgent] ?? [];
         _scheduleSave();
         ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
