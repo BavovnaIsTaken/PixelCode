@@ -348,6 +348,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
           intensity: settings.glitchIntensity,
           speed: settings.glitchSpeed,
           bandHeight: settings.glitchBandHeight,
+          bandHeightMin: settings.glitchBandHeightMin,
           shift: settings.glitchShift,
           chroma: settings.glitchChroma,
           onEnabledChanged: (v) =>
@@ -358,6 +359,8 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
               ref.read(settingsProvider.notifier).setGlitchSpeed(v),
           onBandHeightChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchBandHeight(v),
+          onBandHeightMinChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchBandHeightMin(v),
           onShiftChanged: (v) =>
               ref.read(settingsProvider.notifier).setGlitchShift(v),
           onChromaChanged: (v) =>
@@ -671,6 +674,14 @@ class _CategoryRail extends StatelessWidget {
                 active: cat == selected,
                 danger: cat == _SettingsCategory.danger,
                 onTap: () => onSelect(cat),
+                customIcon: cat == _SettingsCategory.logo
+                    ? Image.asset(
+                        'assets/logo_pixel.png',
+                        width: 16,
+                        height: 16,
+                        filterQuality: FilterQuality.none,
+                      )
+                    : null,
               ),
               const SizedBox(height: 6),
             ],
@@ -688,6 +699,7 @@ class _RailButton extends StatelessWidget {
     required this.active,
     required this.onTap,
     this.danger = false,
+    this.customIcon,
   });
 
   final IconData icon;
@@ -695,6 +707,7 @@ class _RailButton extends StatelessWidget {
   final bool active;
   final bool danger;
   final VoidCallback onTap;
+  final Widget? customIcon;
 
   @override
   Widget build(BuildContext context) {
@@ -722,7 +735,12 @@ class _RailButton extends StatelessWidget {
             ),
           ),
           alignment: Alignment.center,
-          child: Icon(icon, size: 16, color: iconColor),
+          child: customIcon != null
+              ? ColorFiltered(
+                  colorFilter: ColorFilter.mode(iconColor, BlendMode.srcIn),
+                  child: customIcon!,
+                )
+              : Icon(icon, size: 16, color: iconColor),
         ),
       ),
     );
@@ -1569,12 +1587,14 @@ class _GlitchControls extends StatefulWidget {
   final double intensity;
   final double speed;
   final int bandHeight;
+  final int bandHeightMin;
   final double shift;
   final double chroma;
   final ValueChanged<bool> onEnabledChanged;
   final ValueChanged<double> onIntensityChanged;
   final ValueChanged<double> onSpeedChanged;
   final ValueChanged<int> onBandHeightChanged;
+  final ValueChanged<int> onBandHeightMinChanged;
   final ValueChanged<double> onShiftChanged;
   final ValueChanged<double> onChromaChanged;
 
@@ -1583,12 +1603,14 @@ class _GlitchControls extends StatefulWidget {
     required this.intensity,
     required this.speed,
     required this.bandHeight,
+    required this.bandHeightMin,
     required this.shift,
     required this.chroma,
     required this.onEnabledChanged,
     required this.onIntensityChanged,
     required this.onSpeedChanged,
     required this.onBandHeightChanged,
+    required this.onBandHeightMinChanged,
     required this.onShiftChanged,
     required this.onChromaChanged,
   });
@@ -1709,6 +1731,7 @@ class _GlitchControlsState extends State<_GlitchControls>
                             displaySize: previewSize,
                             imagePixels: _logoImagePixels,
                             bandHeightMax: widget.bandHeight,
+                            bandHeightMin: widget.bandHeightMin,
                             shiftStrength: widget.shift,
                             chromaStrength: widget.chroma,
                           ),
@@ -1851,10 +1874,23 @@ class _GlitchControlsState extends State<_GlitchControls>
               enabled: enabled,
               onChanged: enabled ? widget.onSpeedChanged : null,
             ),
-            // Band height
+            // Band height — min
+            _vSlider(
+              icon: Icons.horizontal_rule,
+              label: 'min ${widget.bandHeightMin}px',
+              value: widget.bandHeightMin.toDouble(),
+              min: 1,
+              max: 8,
+              divisions: 7,
+              enabled: enabled,
+              onChanged: enabled
+                  ? (v) => widget.onBandHeightMinChanged(v.round())
+                  : null,
+            ),
+            // Band height — max
             _vSlider(
               icon: Icons.line_weight,
-              label: '${widget.bandHeight}px',
+              label: 'max ${widget.bandHeight}px',
               value: widget.bandHeight.toDouble(),
               min: 1,
               max: 8,

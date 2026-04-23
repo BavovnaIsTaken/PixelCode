@@ -123,6 +123,16 @@ function toolStatusText(toolName: string, input: Record<string, unknown>): strin
       return `Checking team status`;
     case "mcp__dispatch__cancel_task":
       return `Cancelling task`;
+    case "mcp__dispatch__board_create_task":
+      return `Adding task: ${((input.title as string) ?? "").slice(0, 40)}`;
+    case "mcp__dispatch__board_move_task":
+      return `Moving task → ${(input.column as string) ?? ""}`;
+    case "mcp__dispatch__board_update_task":
+      return `Updating task ${(input.taskId as string) ?? ""}`;
+    case "mcp__dispatch__board_assign_agent":
+      return `${(input.assign as boolean) ? "Assigning" : "Unassigning"} ${(input.agentId as string) ?? ""}`;
+    case "mcp__dispatch__board_list":
+      return `Reading task board`;
     default:
       return `${toolName}`;
   }
@@ -1032,9 +1042,129 @@ function createDispatchServer(ws: WebSocket) {
     },
   );
 
+  // ─── Board tools (for manager/tech-lead) ────────────────────────────────
+  const boardCreateTool = tool(
+    "board_create_task",
+    "Create a new task card on the shared task board. Use this when breaking a user request into parallelizable subtasks. Cards start in the 'backlog' column.",
+    {
+      title: z.string().describe("Short task title."),
+      description: z.string().optional().describe("Detailed description. Include acceptance criteria or pointers if useful."),
+      column: z.enum(["backlog", "in_progress", "testing", "done"]).optional().describe("Target column. Default: backlog."),
+      priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+      color: z.enum(["yellow", "pink", "blue", "green", "orange", "purple"]).optional(),
+      assignedAgents: z.array(z.string()).optional().describe("Optional instanceIds to assign (e.g. ['coder#1'])."),
+    },
+    async (args) => {
+      const id = `task_${++boardTaskCounter}_${Date.now()}`;
+      const now = new Date().toISOString();
+      const task: TaskCardData = {
+        id,
+        title: args.title,
+        description: args.description ?? "",
+        column: (args.column as TaskColumnKey) ?? "backlog",
+        priority: (args.priority as TaskPriorityKey) ?? "normal",
+        color: (args.color as StickyColorKey) ?? "yellow",
+        assignedAgents: args.assignedAgents ?? [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      boardTasks.set(id, task);
+      dbg("info", "board", `[MCP] Created task: ${task.title} (${id})`);
+      broadcastBoardState();
+      return { content: [{ type: "text" as const, text: `Created task ${id} in ${task.column}: "${task.title}"` }] };
+    },
+  );
+
+  const boardMoveTool = tool(
+    "board_move_task",
+    "Move a task card to another column. Use when task state changes (e.g. start work → in_progress, finished → done).",
+    {
+      taskId: z.string().describe("The task ID returned from board_create_task or board_list."),
+      column: z.enum(["backlog", "in_progress", "testing", "done"]),
+    },
+    async (args) => {
+      const task = boardTasks.get(args.taskId);
+      if (!task) return { content: [{ type: "text" as const, text: `Unknown taskId: ${args.taskId}` }] };
+      const oldColumn = task.column;
+      task.column = args.column as TaskColumnKey;
+      task.updatedAt = new Date().toISOString();
+      broadcastBoardState();
+      dbg("info", "board", `[MCP] Moved ${args.taskId}: ${oldColumn} → ${task.column}`);
+      return { content: [{ type: "text" as const, text: `Moved ${args.taskId}: ${oldColumn} → ${task.column}` }] };
+    },
+  );
+
+  const boardUpdateTool = tool(
+    "board_update_task",
+    "Update a task card's title, description, priority, or color.",
+    {
+      taskId: z.string(),
+      title: z.string().optional(),
+      description: z.string().optional(),
+      priority: z.enum(["low", "normal", "high", "urgent"]).optional(),
+      color: z.enum(["yellow", "pink", "blue", "green", "orange", "purple"]).optional(),
+    },
+    async (args) => {
+      const task = boardTasks.get(args.taskId);
+      if (!task) return { content: [{ type: "text" as const, text: `Unknown taskId: ${args.taskId}` }] };
+      if (args.title !== undefined) task.title = args.title;
+      if (args.description !== undefined) task.description = args.description;
+      if (args.priority !== undefined) task.priority = args.priority as TaskPriorityKey;
+      if (args.color !== undefined) task.color = args.color as StickyColorKey;
+      task.updatedAt = new Date().toISOString();
+      broadcastBoardState();
+      return { content: [{ type: "text" as const, text: `Updated ${args.taskId}.` }] };
+    },
+  );
+
+  const boardAssignTool = tool(
+    "board_assign_agent",
+    "Assign or unassign an agent instance to a task card.",
+    {
+      taskId: z.string(),
+      agentId: z.string().describe("instanceId, e.g. 'coder#1'"),
+      assign: z.boolean().describe("true to assign, false to unassign"),
+    },
+    async (args) => {
+      const task = boardTasks.get(args.taskId);
+      if (!task) return { content: [{ type: "text" as const, text: `Unknown taskId: ${args.taskId}` }] };
+      if (args.assign) {
+        if (!task.assignedAgents.includes(args.agentId)) task.assignedAgents.push(args.agentId);
+      } else {
+        task.assignedAgents = task.assignedAgents.filter((a) => a !== args.agentId);
+      }
+      task.updatedAt = new Date().toISOString();
+      broadcastBoardState();
+      return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.` }] };
+    },
+  );
+
+  const boardListTool = tool(
+    "board_list",
+    "List all task cards on the board with their id, column, title, and assignees. Use before moving/updating to find taskIds.",
+    {},
+    async () => {
+      const lines: string[] = [];
+      for (const t of boardTasks.values()) {
+        const assignees = t.assignedAgents.length > 0 ? ` [${t.assignedAgents.join(", ")}]` : "";
+        lines.push(`- ${t.id} | ${t.column} | ${t.priority} | "${t.title}"${assignees}`);
+      }
+      return { content: [{ type: "text" as const, text: lines.length > 0 ? lines.join("\n") : "(board is empty)" }] };
+    },
+  );
+
   return createSdkMcpServer({
     name: "dispatch",
-    tools: [dispatchTool, teamStatusTool, cancelTaskTool],
+    tools: [
+      dispatchTool,
+      teamStatusTool,
+      cancelTaskTool,
+      boardCreateTool,
+      boardMoveTool,
+      boardUpdateTool,
+      boardAssignTool,
+      boardListTool,
+    ],
   });
 }
 

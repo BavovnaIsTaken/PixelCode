@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -184,10 +185,20 @@ class GameEconomyNotifier extends Notifier<GameState> {
     try {
       final remote = GameState.decode(msg.fullState);
       final remoteTs = msg.stateUpdatedAt != 0 ? msg.stateUpdatedAt : remote.updatedAt;
+      // Detect server-stored state that was serialized under an older schema.
+      // decode() normalizes schemaVersion to current, but the raw JSON on the
+      // server still holds the stale value — push a fresh copy up so future
+      // connects don't keep re-sending the old blob to every client.
+      final remoteIsStale = (jsonDecode(msg.fullState)
+              as Map<String, dynamic>)['schemaVersion'] !=
+          GameState.currentSchemaVersion;
       if (remoteTs > state.updatedAt) {
         state = remote.copyWith(updatedAt: remoteTs);
         _scheduleSaveOnly();
+        if (remoteIsStale) _syncToServer();
       } else if (remoteTs < state.updatedAt) {
+        _syncToServer();
+      } else if (remoteIsStale) {
         _syncToServer();
       }
       // ts == local → no-op (echo of our own write)

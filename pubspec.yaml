@@ -64,6 +64,7 @@ flutter:
 
   assets:
     - assets/logo.png
+    - assets/logo_pixel.png
     - assets/characters/
     - assets/furniture/
 

@@ -1546,7 +1546,15 @@ class GameState {
     if (version < 2 || version > currentSchemaVersion) {
       throw const FormatException('Incompatible game state schema');
     }
-    return GameState.fromJson(json);
+    final state = GameState.fromJson(json);
+    // Silent-migration path: fromJson filled defaults for any missing fields,
+    // so the in-memory state is semantically at the current schema. Normalize
+    // schemaVersion so a server-sourced older state isn't re-persisted with a
+    // stale version — otherwise load() would trigger the reset toast on every
+    // subsequent launch.
+    return state.schemaVersion == currentSchemaVersion
+        ? state
+        : state.copyWith(schemaVersion: currentSchemaVersion);
   }
 
   /// Create default starting state: seed instances per role defaultSeedCount.

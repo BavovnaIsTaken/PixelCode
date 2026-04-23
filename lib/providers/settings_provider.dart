@@ -14,11 +14,13 @@ const _keyGlitchEnabled = 'settings_glitch_enabled';
 const _keyGlitchIntensity = 'settings_glitch_intensity';
 const _keyGlitchSpeed = 'settings_glitch_speed';
 const _keyGlitchBandHeight = 'settings_glitch_band_height';
+const _keyGlitchBandHeightMin = 'settings_glitch_band_height_min';
 const _keyGlitchShift = 'settings_glitch_shift';
 const _keyGlitchChroma = 'settings_glitch_chroma';
 const _keyLaunchCount = 'settings_launch_count';
 const _keyLogoPathScript = 'settings_logo_path_script';
 const _keyLogoAnimationDurationMs = 'settings_logo_animation_duration_ms';
+const _keyHideDirectMessagingHint = 'settings_hide_direct_messaging_hint';
 
 /// Default duration of the shutdown logo flight (icon moves from top-left
 /// to the opposite corner). The native window collapse that follows adds
@@ -44,6 +46,9 @@ class AppSettings {
   /// Max height of each scanline band in display pixels (1–8).
   final int glitchBandHeight;
 
+  /// Min height of each scanline band in display pixels (1–glitchBandHeight).
+  final int glitchBandHeightMin;
+
   /// Horizontal shift strength (0.0–1.0). 1.0 = ±50% of display width.
   final double glitchShift;
 
@@ -61,6 +66,10 @@ class AppSettings {
   /// (400 ms) is appended automatically.
   final int? logoAnimationDurationMs;
 
+  /// When true, the chat panel suppresses the "you're messaging a non-captain"
+  /// hint. The user opted out explicitly.
+  final bool hideDirectMessagingHint;
+
   const AppSettings({
     this.showArkanoidButton = false,
     this.deskHeight = 74.0,
@@ -68,11 +77,13 @@ class AppSettings {
     this.glitchIntensity = 0.06,
     this.glitchSpeed = 1.0,
     this.glitchBandHeight = 3,
+    this.glitchBandHeightMin = 1,
     this.glitchShift = 0.5,
     this.glitchChroma = 0.5,
     this.launchCount = 0,
     this.logoPathScript,
     this.logoAnimationDurationMs,
+    this.hideDirectMessagingHint = false,
   });
 
   AppSettings copyWith({
@@ -82,11 +93,13 @@ class AppSettings {
     double? glitchIntensity,
     double? glitchSpeed,
     int? glitchBandHeight,
+    int? glitchBandHeightMin,
     double? glitchShift,
     double? glitchChroma,
     int? launchCount,
     Object? logoPathScript = _sentinel,
     Object? logoAnimationDurationMs = _sentinel,
+    bool? hideDirectMessagingHint,
   }) =>
       AppSettings(
         showArkanoidButton: showArkanoidButton ?? this.showArkanoidButton,
@@ -95,6 +108,7 @@ class AppSettings {
         glitchIntensity: glitchIntensity ?? this.glitchIntensity,
         glitchSpeed: glitchSpeed ?? this.glitchSpeed,
         glitchBandHeight: glitchBandHeight ?? this.glitchBandHeight,
+        glitchBandHeightMin: glitchBandHeightMin ?? this.glitchBandHeightMin,
         glitchShift: glitchShift ?? this.glitchShift,
         glitchChroma: glitchChroma ?? this.glitchChroma,
         launchCount: launchCount ?? this.launchCount,
@@ -105,6 +119,8 @@ class AppSettings {
             identical(logoAnimationDurationMs, _sentinel)
                 ? this.logoAnimationDurationMs
                 : logoAnimationDurationMs as int?,
+        hideDirectMessagingHint:
+            hideDirectMessagingHint ?? this.hideDirectMessagingHint,
       );
 }
 
@@ -151,6 +167,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       glitchIntensity: prefs.getDouble(_keyGlitchIntensity) ?? 0.06,
       glitchSpeed: prefs.getDouble(_keyGlitchSpeed) ?? 1.0,
       glitchBandHeight: prefs.getInt(_keyGlitchBandHeight) ?? 3,
+      glitchBandHeightMin: prefs.getInt(_keyGlitchBandHeightMin) ?? 1,
       glitchShift: prefs.getDouble(_keyGlitchShift) ?? 0.5,
       glitchChroma: prefs.getDouble(_keyGlitchChroma) ?? 0.5,
       launchCount: prefs.getInt(_keyLaunchCount) ?? 0,
@@ -158,7 +175,15 @@ class SettingsNotifier extends Notifier<AppSettings> {
       logoAnimationDurationMs: _loadValidAnimationDurationMs(
         prefs.getInt(_keyLogoAnimationDurationMs),
       ),
+      hideDirectMessagingHint:
+          prefs.getBool(_keyHideDirectMessagingHint) ?? false,
     );
+  }
+
+  Future<void> setHideDirectMessagingHint(bool value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    await prefs.setBool(_keyHideDirectMessagingHint, value);
+    state = state.copyWith(hideDirectMessagingHint: value);
   }
 
   Future<void> incrementLaunchCount() async {
@@ -201,7 +226,19 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> setGlitchBandHeight(int value) async {
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setInt(_keyGlitchBandHeight, value);
-    state = state.copyWith(glitchBandHeight: value);
+    // Keep min ≤ max; bump min down if the user lowered max below it.
+    final newMin = value < state.glitchBandHeightMin ? value : state.glitchBandHeightMin;
+    if (newMin != state.glitchBandHeightMin) {
+      await prefs.setInt(_keyGlitchBandHeightMin, newMin);
+    }
+    state = state.copyWith(glitchBandHeight: value, glitchBandHeightMin: newMin);
+  }
+
+  Future<void> setGlitchBandHeightMin(int value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    final clamped = value > state.glitchBandHeight ? state.glitchBandHeight : value;
+    await prefs.setInt(_keyGlitchBandHeightMin, clamped);
+    state = state.copyWith(glitchBandHeightMin: clamped);
   }
 
   Future<void> setGlitchShift(double value) async {

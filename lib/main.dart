@@ -10,6 +10,7 @@ import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/hub/hub_screen.dart';
+import 'services/agent_ws_service.dart';
 import 'services/project_persistence_service.dart';
 import 'services/server_process_service.dart';
 
@@ -20,14 +21,37 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
 
   runApp(
-    ProviderScope(
-      overrides: [
-        sharedPrefsProvider.overrideWithValue(prefs),
-        serverProcessProvider.overrideWithValue(serverProcess),
-      ],
-      child: const PixelCodeApp(),
+    RestartWidget(
+      child: ProviderScope(
+        overrides: [
+          sharedPrefsProvider.overrideWithValue(prefs),
+          serverProcessProvider.overrideWithValue(serverProcess),
+        ],
+        child: const PixelCodeApp(),
+      ),
     ),
   );
+}
+
+class RestartWidget extends StatefulWidget {
+  const RestartWidget({super.key, required this.child});
+  final Widget child;
+
+  static void restart(BuildContext context) =>
+      context.findAncestorStateOfType<RestartWidgetState>()?.restart();
+
+  @override
+  State<RestartWidget> createState() => RestartWidgetState();
+}
+
+class RestartWidgetState extends State<RestartWidget> {
+  Key _key = UniqueKey();
+
+  void restart() => setState(() => _key = UniqueKey());
+
+  @override
+  Widget build(BuildContext context) =>
+      KeyedSubtree(key: _key, child: widget.child);
 }
 
 class PixelCodeApp extends ConsumerStatefulWidget {
@@ -39,13 +63,15 @@ class PixelCodeApp extends ConsumerStatefulWidget {
 
 class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
+  late final AgentWsService _wsService;
 
   @override
   void initState() {
     super.initState();
+    _wsService = ref.read(wsServiceProvider);
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: () async {
-        await ref.read(wsServiceProvider).dispose();
+        await _wsService.dispose();
         await serverProcess.dispose();
         return AppExitResponse.exit;
       },
@@ -87,7 +113,7 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     // Fallback cleanup — onExitRequested may not have fired (e.g. if the
     // native side terminated the app directly). The _disposed guards inside
     // both services make double-dispose safe.
-    ref.read(wsServiceProvider).dispose();
+    _wsService.dispose();
     serverProcess.dispose();
     super.dispose();
   }
