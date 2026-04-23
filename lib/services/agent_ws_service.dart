@@ -200,16 +200,12 @@ class AgentWsService {
     String content, {
     String agentId = 'manager',
     List<String>? images,
-    int? taskDifficulty,
-    bool forceSend = false,
   }) {
     _send({
       'type': 'send_message',
       'content': content,
       'agentId': agentId,
       if (images != null && images.isNotEmpty) 'images': images,
-      if (taskDifficulty != null) 'taskDifficulty': taskDifficulty,
-      if (forceSend) 'forceSend': true,
     });
   }
 

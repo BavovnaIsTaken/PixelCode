@@ -23,6 +23,7 @@ class PixelGlitchPainter extends CustomPainter {
     required this.displaySize,
     this.imagePixels,
     this.bandHeightMax = 3,
+    this.bandHeightMin = 1,
     this.shiftStrength = 0.5,
     this.chromaStrength = 0.5,
   });
@@ -37,6 +38,9 @@ class PixelGlitchPainter extends CustomPainter {
 
   /// Max height of each scanline band in display pixels (1–8).
   final int bandHeightMax;
+
+  /// Min height of each scanline band in display pixels (1–bandHeightMax).
+  final int bandHeightMin;
 
   /// Horizontal shift amount (0.0–1.0). 1.0 = ±50% of display width.
   final double shiftStrength;
@@ -106,9 +110,10 @@ class PixelGlitchPainter extends CustomPainter {
 
     for (int i = 0; i < bandCount; i++) {
       final bandY = rng.nextDouble() * s;
-      // Band height: 1–bandHeightMax display pixels.
+      // Band height: bandHeightMin–bandHeightMax display pixels.
       final maxH = bandHeightMax.clamp(1, 8);
-      final bandH = (1 + rng.nextInt(maxH)).toDouble();
+      final minH = bandHeightMin.clamp(1, maxH);
+      final bandH = (minH + rng.nextInt(maxH - minH + 1)).toDouble();
       final bandType = rng.nextDouble();
 
       if (bandType < 0.55) {
@@ -197,6 +202,7 @@ class PixelGlitchPainter extends CustomPainter {
       pixelPercent != old.pixelPercent ||
       imagePixels != old.imagePixels ||
       bandHeightMax != old.bandHeightMax ||
+      bandHeightMin != old.bandHeightMin ||
       shiftStrength != old.shiftStrength ||
       chromaStrength != old.chromaStrength;
 }

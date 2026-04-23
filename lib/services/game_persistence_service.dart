@@ -23,7 +23,7 @@ class GamePersistenceService {
         // toast.
         prefs.setBool('schemaResetFlag', true);
         final fresh = GameState.initial();
-        return fresh.copyWith(
+        final migrated = fresh.copyWith(
           grymni: json['grymni'] as int? ?? fresh.grymni,
           totalEarned: json['totalEarned'] as int? ?? fresh.totalEarned,
           ownedCosmetics: _parseStringSet(
@@ -31,6 +31,10 @@ class GamePersistenceService {
             fresh.ownedCosmetics,
           ),
         );
+        // Persist immediately so a quick restart doesn't re-trigger
+        // migration (and the reset toast) on the next launch.
+        prefs.setString(_key, migrated.encode());
+        return migrated;
       }
       return GameState.fromJson(json);
     } catch (_) {

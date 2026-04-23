@@ -294,8 +294,6 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   void sendMessage(
     String text, {
     List<Uint8List> images = const [],
-    int? taskDifficulty,
-    bool forceSend = false,
   }) {
     final agentId = _selectedAgent;
     _activeStreamAgent = agentId;
@@ -313,8 +311,6 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           text,
           agentId: agentId,
           images: imageBase64s.isNotEmpty ? imageBase64s : null,
-          taskDifficulty: taskDifficulty,
-          forceSend: forceSend,
         );
     _scheduleSave();
   }

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../main.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/connected_devices_provider.dart';
 import '../../providers/game_economy_provider.dart';
@@ -29,6 +30,7 @@ import '../../widgets/settings/settings_dialog.dart';
 import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
 import '../../models/app_theme.dart';
+import '../../providers/theme_provider.dart';
 
 /// Main split-screen: Chat (left) + Agent Canvas (right) + Debug Console (bottom)
 class HubScreen extends ConsumerStatefulWidget {
@@ -313,12 +315,61 @@ class _HubScreenState extends ConsumerState<HubScreen>
     if (prefs.getBool('schemaResetFlag') != true) return;
     prefs.remove('schemaResetFlag');
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        duration: Duration(seconds: 8),
-        content: Text(
-          'Оновлення системи агентів вимагає перезапуску прогресу. '
-          'Гримні та куплена косметика збережені.',
+    final colors = ref.read(activeThemeColorsProvider);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        duration: const Duration(days: 1),
+        backgroundColor: colors.surface,
+        padding: EdgeInsets.zero,
+        content: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(color: colors.gold, width: 3),
+            ),
+          ),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                    child: Text(
+                      'Прогрес скинуто через оновлення системи агентів — '
+                      'перезапусти застосунок, щоб продовжити. '
+                      'Гримні та косметика збережені.',
+                      style: TextStyle(color: colors.textHigh, fontSize: 13),
+                    ),
+                  ),
+                ),
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      messenger.removeCurrentSnackBar(
+                        reason: SnackBarClosedReason.dismiss,
+                      );
+                      RestartWidget.restart(context);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Center(
+                        widthFactor: 1,
+                        child: Text(
+                          'Перезапустити',
+                          style: TextStyle(
+                            color: colors.gold,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

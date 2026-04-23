@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import 'send_button.dart';
 
@@ -80,14 +81,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   Timer? _skeletonTimer;
   bool _showSkeleton = false;
 
-  // Task difficulty selector (optional, shown next to input)
-  int? _selectedDifficulty = 2; // 1-5 or null = no gate
-
-  // Stored for forceSend retry after task_too_hard warning
-  String? _pendingText;
-  List<Uint8List> _pendingImages = [];
-  TaskTooHardMessage? _tooHardWarning;
-  StreamSubscription<ServerMessage>? _msgSub;
+  // Direct-messaging hint: dismissed once per chat opening. If the user ticks
+  // the "don't show again" box, the hint is hidden permanently via settings.
+  bool _directMsgHintDismissed = false;
 
   @override
   void initState() {
@@ -127,16 +123,17 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           if (mounted) setState(() => _showSkeleton = true);
         });
       }
-      // Listen for task_too_hard responses
-      _msgSub = ref.read(wsServiceProvider).messages.listen((msg) {
-        if (msg is TaskTooHardMessage && mounted) {
-          setState(() => _tooHardWarning = msg);
-        }
-      });
     });
   }
 
   void _onFocusChange() => setState(() {});
+
+  bool _shouldShowDirectMsgHint() {
+    if (_directMsgHintDismissed) return false;
+    if (ref.watch(settingsProvider).hideDirectMessagingHint) return false;
+    final selected = ref.watch(selectedAgentProvider);
+    return _roleTypeOf(selected) != 'manager';
+  }
 
   void _onInputChanged() {
     if (_applyingRemoteUpdate) return;
@@ -146,7 +143,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   @override
   void dispose() {
     _skeletonTimer?.cancel();
-    _msgSub?.cancel();
     _focusNode.removeListener(_onFocusChange);
     _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
@@ -168,22 +164,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     }
   }
 
-  void _send({bool forceSend = false}) {
+  void _send() {
     final text = _controller.text.trim();
     final loadedImages = _attachedImages.whereType<Uint8List>().toList();
     if (text.isEmpty && loadedImages.isEmpty) return;
 
-    // Store for possible forceSend retry
-    _pendingText = text;
-    _pendingImages = loadedImages;
-
-    setState(() => _tooHardWarning = null);
-
     ref.read(chatProvider.notifier).sendMessage(
           text,
           images: loadedImages,
-          taskDifficulty: _selectedDifficulty,
-          forceSend: forceSend,
         );
     _controller.clear();
     setState(() => _attachedImages.clear());
@@ -194,19 +182,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     _focusNode.requestFocus();
     setState(() => _autoScroll = true);
     _scrollToBottom();
-  }
-
-  void _sendForce() {
-    final text = _pendingText;
-    if (text == null || text.isEmpty) return;
-    setState(() => _tooHardWarning = null);
-    ref.read(chatProvider.notifier).sendMessage(
-          text,
-          images: _pendingImages,
-          taskDifficulty: _selectedDifficulty,
-          forceSend: true,
-        );
-    _focusNode.requestFocus();
   }
 
   Future<void> _pickImages() async {
@@ -861,66 +836,15 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Task-too-hard warning banner
-          if (_tooHardWarning != null)
-            _TaskTooHardBanner(
-              warning: _tooHardWarning!,
-              agentId: ref.watch(selectedAgentProvider),
-              onForceSend: _sendForce,
-              onDismiss: () => setState(() => _tooHardWarning = null),
-            ),
-          // Difficulty selector row
-          Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-              child: Row(
-                children: [
-                  Text(
-                    'Складність:',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.3),
-                      fontSize: 10,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  for (final (diff, label, color) in const [
-                    (2, 'Легко', Color(0xFF4CAF50)),
-                    (3, 'Середнє', Color(0xFFFFC107)),
-                    (4, 'Складно', Color(0xFFFF9800)),
-                    (5, 'Хардкор', Color(0xFFF44336)),
-                  ])
-                    GestureDetector(
-                      onTap: () => setState(() =>
-                          _selectedDifficulty =
-                              _selectedDifficulty == diff ? null : diff),
-                      child: Container(
-                        margin: const EdgeInsets.only(right: 4),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _selectedDifficulty == diff
-                              ? color.withValues(alpha: 0.2)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(
-                            color: _selectedDifficulty == diff
-                                ? color.withValues(alpha: 0.5)
-                                : Colors.white.withValues(alpha: 0.1),
-                          ),
-                        ),
-                        child: Text(
-                          label,
-                          style: TextStyle(
-                            color: _selectedDifficulty == diff
-                                ? color
-                                : Colors.white.withValues(alpha: 0.3),
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+          // Hint: user is addressing a non-manager agent.
+          if (_shouldShowDirectMsgHint())
+            _DirectMsgHint(
+              onDismiss: () => setState(() => _directMsgHintDismissed = true),
+              onDontShowAgain: () {
+                ref.read(settingsProvider.notifier)
+                    .setHideDirectMessagingHint(true);
+                setState(() => _directMsgHintDismissed = true);
+              },
             ),
           // Attached image previews
           if (_attachedImages.isNotEmpty)
@@ -1070,101 +994,85 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 }
 
-// ─── Task Too Hard Banner ─────────────────────────────────────────────────────
+// ─── Direct Messaging Hint ────────────────────────────────────────────────────
 
-class _TaskTooHardBanner extends StatelessWidget {
-  final TaskTooHardMessage warning;
-  final String agentId;
-  final VoidCallback onForceSend;
+class _DirectMsgHint extends StatelessWidget {
   final VoidCallback onDismiss;
+  final VoidCallback onDontShowAgain;
 
-  const _TaskTooHardBanner({
-    required this.warning,
-    required this.agentId,
-    required this.onForceSend,
+  const _DirectMsgHint({
     required this.onDismiss,
+    required this.onDontShowAgain,
   });
 
   @override
   Widget build(BuildContext context) {
+    const accent = Color(0xFF00C0D1);
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A2A10),
+        color: accent.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFFFA726).withValues(alpha: 0.5)),
+        border: Border.all(color: accent.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('⚠️', style: TextStyle(fontSize: 12)),
+              const Padding(
+                padding: EdgeInsets.only(top: 1),
+                child: Icon(Icons.info_outline, size: 14, color: accent),
+              ),
               const SizedBox(width: 6),
-              Expanded(
+              const Expanded(
                 child: Text(
-                  '$agentId (рівень ${warning.current.toStringAsFixed(1)}) '
-                  'може не впоратися з цим завданням. '
-                  'Рекомендований мінімум: рівень ${warning.required.toStringAsFixed(0)}+',
-                  style: const TextStyle(
-                    color: Color(0xFFFFA726),
+                  'Краще писати Капітану — він розподілить роботу по команді. '
+                  'Пряме повідомлення конкретному робітнику — тонке керування: '
+                  'роби так лише якщо добре розумієш що й кому делегуєш.',
+                  style: TextStyle(
+                    color: Colors.white,
                     fontSize: 11,
+                    height: 1.35,
                   ),
                 ),
               ),
               GestureDetector(
                 onTap: onDismiss,
-                child: Icon(
-                  Icons.close,
-                  size: 14,
-                  color: Colors.white.withValues(alpha: 0.3),
+                child: Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Icon(
+                    Icons.close,
+                    size: 14,
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _BannerButton(
-                label: 'Відправити все одно',
-                color: const Color(0xFFFFA726),
-                onTap: onForceSend,
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: GestureDetector(
+              onTap: onDontShowAgain,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                child: Text(
+                  'Не показувати',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.underline,
+                    decorationColor: Colors.white.withValues(alpha: 0.3),
+                  ),
+                ),
               ),
-            ],
+            ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _BannerButton extends StatelessWidget {
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-
-  const _BannerButton({required this.label, required this.color, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(5),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
       ),
     );
   }
