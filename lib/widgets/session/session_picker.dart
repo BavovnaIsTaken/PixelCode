@@ -519,7 +519,7 @@ class _ShareConnectionDialog extends ConsumerWidget {
                   ),
                 ),
                 child: Text(
-                  'На iPhone: відкрий PixelCode → + Сесія → '
+                  'На iPhone: відкрий ПіксельКод → + Сесія → '
                   'сервер з\'явиться автоматично (в одній WiFi) '
                   'або вставь хост вручну.',
                   style: TextStyle(

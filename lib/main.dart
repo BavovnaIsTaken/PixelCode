@@ -125,7 +125,7 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     ref.watch(clientIdentityProvider);
 
     return MaterialApp(
-      title: 'PixelCode',
+      title: 'ПіксельКод',
       debugShowCheckedModeBanner: false,
       theme: theme,
       builder: (context, child) => GestureDetector(

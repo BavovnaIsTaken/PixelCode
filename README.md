@@ -41,7 +41,9 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 - **tsx** — dev-раннер / watch-режим
 
 **Інше**
-- **ios-deploy** (Homebrew) — Wi-Fi-деплой на iPhone/iPad
+- **Tailscale Funnel** — публічний HTTPS-тунель до локального сервера; використовується для OTA-встановлення `.ipa` / `.apk` на мобільні пристрої з будь-якої мережі
+- **Xcode `devicectl`** — сайлент-встановлення на iPhone/iPad, коли пристрій уже спарений із Mac через Xcode
+- **adb** (Android Platform Tools) — сайлент-встановлення `.apk` на Android, коли пристрій підключено по USB або Wi-Fi ADB
 - **LeanKG** — використовується під час розробки для пошуку по коду ([leankg.yaml](leankg.yaml))
 
 ## Основні фічі
@@ -54,7 +56,7 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 - **Рівні офісу** — Garage → Small Office → Modern Office → Tech Hub → Campus; кожен тир підвищує капасіті команди й відкриває механіки.
 - **Сервер Claude Agent SDK** — локальний Node.js WebSocket-сервер керує сесіями, диспатчить команду, робить виклики SDK. [server/src/server.ts](server/src/server.ts).
 - **Мультипроєктність і сесії** — перемикання між Git-репами; іменовані сесії зберігаються per-project. [lib/models/session_profile.dart](lib/models/session_profile.dart).
-- **Пошук у LAN і деплой на пристрій** — Bonjour/mDNS автоматично знаходить сервер у мережі; вбудований iOS-деплой через Wi-Fi за допомогою `ios-deploy`. [lib/services/ios_deploy_service.dart](lib/services/ios_deploy_service.dart).
+- **Пошук у LAN і деплой на пристрій** — Bonjour/mDNS автоматично знаходить сервер у мережі; вбудований iOS-деплой (сайлент через `xcrun devicectl` коли пристрій спарений, або OTA по HTTPS через Tailscale Funnel з будь-якої мережі). [lib/services/ios_deploy_service.dart](lib/services/ios_deploy_service.dart).
 - **Energy meter** — індикатор витрат/використання в реальному часі, прив'язаний до активності субагентів. [lib/widgets/energy/energy_meter.dart](lib/widgets/energy/energy_meter.dart).
 
 ## Косметичні та другорядні фічі
@@ -81,7 +83,7 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 
 ## Як запустити
 
-PixelCode складається з двох частин — Flutter-клієнта та Node.js-сервера ([server/](server/)), який обгортає Claude Agent SDK. На десктопі (macOS / Windows / Linux) клієнт **сам піднімає сервер** як дочірній процес через `npm run dev` ([lib/services/server_process_service.dart](lib/services/server_process_service.dart)) — це на сьогодні єдиний штатний шлях. На iOS/Android сервер не запускається з аппки (обмеження пісочниці ОС), тож мобільний клієнт підключається до сервера, який уже крутиться на десктопі поруч у тій самій Wi-Fi-мережі — знаходить його через Bonjour/mDNS.
+PixelCode складається з двох частин — Flutter-клієнта та Node.js-сервера ([server/](server/)), який обгортає Claude Agent SDK. На десктопі (macOS / Windows / Linux) клієнт **сам піднімає сервер** як дочірній процес через `npm run dev` ([lib/services/server_process_service.dart](lib/services/server_process_service.dart)) — це на сьогодні єдиний штатний шлях. На iOS/Android сервер не запускається з аппки (обмеження пісочниці ОС), тож мобільний клієнт підключається до сервера, який уже крутиться на десктопі. У локальній мережі клієнт знаходить сервер автоматично через Bonjour/mDNS; якщо на Mac піднято Tailscale, сервер додатково публікує себе на публічному HTTPS-endpoint через Funnel — і мобільний клієнт може під'єднатися з будь-якої Wi-Fi чи мобільної мережі.
 
 ### 1. Передумови
 
@@ -94,18 +96,23 @@ PixelCode складається з двох частин — Flutter-клієн
   - **B:** `export ANTHROPIC_API_KEY=sk-ant-…` (ключ з [console.anthropic.com](https://console.anthropic.com/)).
 
 **Якщо збираєш десктоп-білд під macOS або плануєш iOS-таргет:**
-- Xcode 15+ та Command Line Tools
+- Xcode 15+ та Command Line Tools (`xcode-select --install`)
 - CocoaPods: `brew install cocoapods` (або `sudo gem install cocoapods`)
 
-**Для деплою на фізичний iPhone / iPad через Wi-Fi:**
-- `brew install ios-deploy`
-- Apple Developer account (безкоштовний підходить для локального деплою) і Mac та пристрій у тій самій Wi-Fi-мережі
-- Деталі — див. [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md)
+**Для деплою на фізичний iPhone / iPad:**
+- **Apple ID / Apple Developer account.** Безкоштовний Apple ID теж працює (personal team → sideload, перепідписати раз на 7 днів). Платний акаунт — до 1 року без перепідпису.
+- **Налаштувати підпис у Xcode — ОБОВ'ЯЗКОВО для форка.** Відкрий `ios/Runner.xcworkspace`, вибери таргет `Runner` → вкладка `Signing & Capabilities`:
+  - `Team` — свій. У репо зафіксовано placeholder `DEVELOPMENT_TEAM = YOUR_TEAM_ID` (реальний формат — 10 символів, літери й цифри, напр. `ABCD1234EF`); треба замінити на власний у діалозі Xcode, він перепише значення в [ios/Runner.xcodeproj/project.pbxproj](ios/Runner.xcodeproj/project.pbxproj).
+  - `Bundle Identifier` — унікальний (поточний `com.example.pixelCode` — плейсхолдер; Apple не дасть підписати чужий bundle ID, тож зроби напр. `com.<твій-нік>.pixelcode`).
+  - `Automatically manage signing` — увімкнено; Xcode сам випише provisioning profile.
+- **Tailscale — якщо хочеш ставити з будь-якої мережі (без USB).** `brew install tailscale && sudo tailscale up` на Mac. При старті сервер автоматично вмикає `tailscale funnel` ([server/src/server.ts:1872](server/src/server.ts#L1872)) — пристрій встановлює `.ipa` по публічному HTTPS з будь-якої Wi-Fi / мобільної мережі світу. Без Tailscale залишається тільки сайлент-шлях через `xcrun devicectl` (потребує одноразового спарювання пристрою з цим Mac через Xcode).
+- Деталі та діагностика — [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md).
 
-**Для Android (скелет, ще в роботі):**
-- Android Studio + Android SDK (API 34+)
+**Для Android:**
+- Android Studio + Android SDK (API 34+); `ANDROID_HOME` або `ANDROID_SDK_ROOT` у середовищі (або стандартна тека `~/Library/Android/sdk` / `~/Android/Sdk`)
 - JDK 17+
-- Пристрій з USB-debugging або емулятор
+- Tailscale (опційно) — якщо хочеш роздавати `.apk` на пристрої в іншій мережі; без нього фолбек-посилання буде на локальний IP (LAN-only)
+- APK сам за себе не підписаний release-ключем — за замовчуванням Flutter випускає debug-signed APK, якого вистачає для sideload через «Install from unknown sources»
 
 ### 2. Перший запуск
 
@@ -137,12 +144,13 @@ npm run dev                 # tsx watch, перезапуск при зміні 
 PORT=9720 PROJECT_CWD=/path/to/your/repo npm run dev
 ```
 
-Після цього запускаєш мобільний клієнт — він сам знайде сервер у LAN:
+Після цього запускаєш мобільний клієнт — він сам знайде сервер у LAN через Bonjour, або через Tailscale Funnel якщо ти не в тій самій мережі:
 
 ```bash
 flutter run -d <device-id>                # iPhone по USB або Android пристрій/емулятор
-# Для iOS через Wi-Fi — кнопка «Розгорнути на iOS» у хабі ([docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md))
 ```
+
+Для **однокнопкового встановлення вже зібраного `.ipa` / `.apk` на пристрій** — відкрий у хабі попап **Deploy to device** (іконка з телефоном у верхній панелі). Вибираєш вкладку iOS або Android, жмеш **Install** — сервер збирає, пробує сайлент-інстал через `xcrun devicectl` / `adb`, а при невдачі повертає install-URL для OTA через Tailscale Funnel. Деталі: [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md).
 
 ### 4. Що має працювати після першого запуску
 
@@ -160,8 +168,10 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 | `pod install` падає | Застарілий CocoaPods | `brew upgrade cocoapods` або `sudo gem install cocoapods`. |
 | `EADDRINUSE :9720` | Попередній серверний процес завис | `lsof -ti:9720 \| xargs kill -9`, або запусти з `PORT=9721 npm run dev`. |
 | `npm` / `node` не знайдено при автозапуску з Finder | PATH не підхопився | Сервер стартує через `/bin/zsh -l`, тож потрібно щоб `node`/`npm` були у PATH твого `~/.zshrc` / `~/.zprofile`. |
-| iOS-деплой: «ios-deploy not found» | Не встановлено | `brew install ios-deploy`. |
-| Android-деплой не працює | Скелет, не готовий | Див. «У планах / в роботі». |
+| iOS-білд: `No profiles for 'com.example.pixelCode' were found` | Bundle ID плейсхолдер і/або Team ID чужий | Відкрий `ios/Runner.xcworkspace` → `Signing & Capabilities` → заміни `Team` на свій і `Bundle Identifier` на унікальний. |
+| iOS-деплой: `Tailscale Funnel не активний — OTA недоступний з іншої мережі` | Tailscale не запущений або Funnel не ввімкнений | `brew install tailscale && sudo tailscale up`; рестартани сервер — він сам увімкне `tailscale funnel`. |
+| iOS-деплой: сайлент встановлення не працює, одразу OTA | Пристрій не спарений з цим Mac через Xcode | Одноразово під'єднай iPhone по USB, у Xcode → Window → Devices and Simulators прийми pairing. Після цього можна лишатись без кабелю. |
+| Android-деплой: `adb не знайдено` | Відсутній Android SDK чи `platform-tools` | Встанови Android Studio й поставь Platform Tools, або `brew install --cask android-platform-tools`. Виставити `ANDROID_HOME`. |
 
 ## Ліцензія
 
@@ -217,7 +227,9 @@ The Node.js server ([server/](server/)) bridges the Flutter client to the Claude
 - **tsx** — dev runner / watch mode
 
 **Other**
-- **ios-deploy** (Homebrew) — Wi-Fi deployment to iPhone/iPad
+- **Tailscale Funnel** — public HTTPS tunnel to the local server; used for OTA install of `.ipa` / `.apk` onto mobile devices from any network
+- **Xcode `devicectl`** — silent install to iPhone/iPad when the device is already paired with the Mac via Xcode
+- **adb** (Android Platform Tools) — silent `.apk` install when a device is connected via USB or Wi-Fi ADB
 - **LeanKG** — used internally during development for code search ([leankg.yaml](leankg.yaml))
 
 ## Core features
@@ -230,7 +242,7 @@ The Node.js server ([server/](server/)) bridges the Flutter client to the Claude
 - **Office tiers** — Garage → Small Office → Modern Office → Tech Hub → Campus; each tier raises agent capacity and unlocks mechanics.
 - **Claude Agent SDK server** — local Node.js WebSocket server manages sessions, team dispatch, and SDK calls. See [server/src/server.ts](server/src/server.ts).
 - **Multi-project / multi-session** — switch between Git repos; named session profiles persist per project. See [lib/models/session_profile.dart](lib/models/session_profile.dart).
-- **LAN discovery & device deployment** — Bonjour/mDNS auto-discovers the server on the network; built-in iOS deploy over Wi-Fi via `ios-deploy`. See [lib/services/ios_deploy_service.dart](lib/services/ios_deploy_service.dart).
+- **LAN discovery & device deployment** — Bonjour/mDNS auto-discovers the server on the LAN; built-in iOS deploy via `xcrun devicectl` (silent install when the device is paired with the Mac) or OTA over HTTPS through Tailscale Funnel (installs from any network worldwide). See [lib/services/ios_deploy_service.dart](lib/services/ios_deploy_service.dart).
 - **Energy meter** — live cost/usage indicator tied to subagent activity. See [lib/widgets/energy/energy_meter.dart](lib/widgets/energy/energy_meter.dart).
 
 ## Cosmetic & secondary features
@@ -257,7 +269,7 @@ The Node.js server ([server/](server/)) bridges the Flutter client to the Claude
 
 ## Getting started
 
-PixelCode is two processes — a Flutter client and a Node.js server ([server/](server/)) that wraps the Claude Agent SDK. On desktop (macOS / Windows / Linux) the client **auto-starts the server** as a child process via `npm run dev` ([lib/services/server_process_service.dart](lib/services/server_process_service.dart)) — that's the only supported path today. On iOS/Android the app cannot spawn a Node process (OS sandbox), so mobile clients connect to a server already running on a nearby desktop on the same Wi-Fi LAN — auto-discovered over Bonjour/mDNS.
+PixelCode is two processes — a Flutter client and a Node.js server ([server/](server/)) that wraps the Claude Agent SDK. On desktop (macOS / Windows / Linux) the client **auto-starts the server** as a child process via `npm run dev` ([lib/services/server_process_service.dart](lib/services/server_process_service.dart)) — that's the only supported path today. On iOS/Android the app cannot spawn a Node process (OS sandbox), so mobile clients connect to a server already running on a desktop. On the same LAN the client auto-discovers the server over Bonjour/mDNS; if Tailscale is up on the Mac, the server also publishes itself on a public HTTPS endpoint via Funnel, so a mobile client can connect from any Wi-Fi or mobile network.
 
 ### 1. Prerequisites
 
@@ -270,18 +282,23 @@ PixelCode is two processes — a Flutter client and a Node.js server ([server/](
   - **B:** `export ANTHROPIC_API_KEY=sk-ant-…` (key from [console.anthropic.com](https://console.anthropic.com/)).
 
 **Building on macOS or targeting iOS:**
-- Xcode 15+ and Command Line Tools
+- Xcode 15+ and Command Line Tools (`xcode-select --install`)
 - CocoaPods: `brew install cocoapods` (or `sudo gem install cocoapods`)
 
-**Deploying to a physical iPhone / iPad over Wi-Fi:**
-- `brew install ios-deploy`
-- An Apple Developer account (free tier is fine for local deploy), and both Mac and device on the same Wi-Fi
-- Details: [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md)
+**Deploying to a physical iPhone / iPad:**
+- **Apple ID / Apple Developer account.** A free Apple ID works (personal team → sideload, re-sign every 7 days). Paid account — up to 1 year without re-signing.
+- **Configure signing in Xcode — MANDATORY when you fork.** Open `ios/Runner.xcworkspace`, select the `Runner` target → `Signing & Capabilities`:
+  - `Team` — your own. The repo pins a placeholder `DEVELOPMENT_TEAM = YOUR_TEAM_ID` (real format is 10 alphanumeric chars, e.g. `ABCD1234EF`); replace it via Xcode, which rewrites [ios/Runner.xcodeproj/project.pbxproj](ios/Runner.xcodeproj/project.pbxproj).
+  - `Bundle Identifier` — unique (the current `com.example.pixelCode` is a placeholder; Apple won't sign someone else's bundle ID, so use e.g. `com.<your-handle>.pixelcode`).
+  - `Automatically manage signing` — on; Xcode provisions a profile for you.
+- **Tailscale — if you want to install from any network (no USB needed).** `brew install tailscale && sudo tailscale up` on the Mac. The server enables `tailscale funnel` on startup ([server/src/server.ts:1872](server/src/server.ts#L1872)) so the device can install the `.ipa` over public HTTPS from any Wi-Fi or mobile network. Without Tailscale, only the silent-install path via `xcrun devicectl` remains (requires a one-time pairing of the device with this Mac through Xcode).
+- Details & troubleshooting: [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md).
 
-**Android (skeleton, work in progress):**
-- Android Studio + Android SDK (API 34+)
+**Android:**
+- Android Studio + Android SDK (API 34+); `ANDROID_HOME` or `ANDROID_SDK_ROOT` in your environment (or the default `~/Library/Android/sdk` / `~/Android/Sdk`)
 - JDK 17+
-- A USB-debugging device or emulator
+- Tailscale (optional) — if you want to hand a download link to a device on a different network; without it, the fallback install URL points at your LAN IP only
+- The APK is debug-signed by default (Flutter's default) — enough for sideloading via "Install from unknown sources"
 
 ### 2. First run
 
@@ -313,12 +330,13 @@ npm run dev                 # tsx watch, reloads on file changes
 PORT=9720 PROJECT_CWD=/path/to/your/repo npm run dev
 ```
 
-Then launch a mobile client — it will discover the server on the LAN automatically:
+Then launch a mobile client — it will auto-discover the server over Bonjour on the LAN, or connect via the Tailscale Funnel URL if you're on a different network:
 
 ```bash
 flutter run -d <device-id>                # iPhone over USB, or Android device/emulator
-# For iOS over Wi-Fi, use the "Deploy to iOS" button in the hub ([docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md))
 ```
+
+For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the **Deploy to device** popover in the hub (phone icon in the top bar). Pick the iOS or Android tab and hit **Install** — the server builds, tries a silent install via `xcrun devicectl` / `adb`, and falls back to an OTA URL served over the Tailscale Funnel if the device isn't directly reachable. Details: [docs/iOS_DEPLOYMENT.md](docs/iOS_DEPLOYMENT.md).
 
 ### 4. Sanity check after first launch
 
@@ -336,8 +354,10 @@ flutter run -d <device-id>                # iPhone over USB, or Android device/e
 | `pod install` fails | Outdated CocoaPods | `brew upgrade cocoapods` or `sudo gem install cocoapods`. |
 | `EADDRINUSE :9720` | A previous server process is still alive | `lsof -ti:9720 \| xargs kill -9`, or start with `PORT=9721 npm run dev`. |
 | `npm` / `node` not found when launched from Finder | PATH not inherited | Server launches via `/bin/zsh -l`, so `node`/`npm` must be on the PATH set in your `~/.zshrc` / `~/.zprofile`. |
-| iOS deploy: `ios-deploy not found` | Not installed | `brew install ios-deploy`. |
-| Android deploy doesn't work | Skeleton only | See "Planned / in progress". |
+| iOS build: `No profiles for 'com.example.pixelCode' were found` | Placeholder Bundle ID and/or someone else's Team ID | Open `ios/Runner.xcworkspace` → `Signing & Capabilities` → set `Team` to your own and `Bundle Identifier` to something unique. |
+| iOS deploy: `Tailscale Funnel inactive — OTA unavailable from another network` | Tailscale isn't running or Funnel isn't on | `brew install tailscale && sudo tailscale up`; restart the server — it enables `tailscale funnel` itself. |
+| iOS deploy: silent install fails, falls back to OTA | Device not paired with this Mac in Xcode | Connect the iPhone once via USB, accept the pairing prompt in Xcode → Window → Devices and Simulators. After that you can stay cable-free. |
+| Android deploy: `adb not found` | Missing Android SDK or platform-tools | Install Android Studio and Platform Tools, or `brew install --cask android-platform-tools`. Set `ANDROID_HOME`. |
 
 ## License
 
