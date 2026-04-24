@@ -4,6 +4,15 @@
 
 > 🇬🇧 [English version below](#pixelcode-en)
 
+<div style="display: flex; align-items: center; justify-content: center; gap: 10px;">
+  <kbd>
+    <img src="https://github.com/user-attachments/assets/91ab0aa9-68f7-41d0-ba40-86ad9b2683c7" height="500" />
+  </kbd>
+  <kbd>
+    <img src="https://github.com/user-attachments/assets/b8ec3b59-af9c-41d6-b49c-3f06a419e59e" height="400" />
+  </kbd>
+</div>
+
 ---
 
 ## Що вирізняє
