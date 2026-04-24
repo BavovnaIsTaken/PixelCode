@@ -2725,9 +2725,11 @@ function broadcastExcept(sender: WebSocket, msg: ServerMessage): void {
   }
 }
 
-/** Send the full chat history snapshot to a single client (e.g. on connect). */
+/** Send the full chat history snapshot to a single client (e.g. on connect).
+ *  Always sent — even when empty — so the client can transition out of the
+ *  `syncing` state on resumed sessions with no prior messages. */
 function sendChatHistory(ws: WebSocket): void {
-  if (!chatHistory.isEmpty) send(ws, chatHistory.snapshot());
+  send(ws, chatHistory.snapshot());
 }
 
 console.log(`🏗️  PixelCode server listening on ws://localhost:${PORT}`);
