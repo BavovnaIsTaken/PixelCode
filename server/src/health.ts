@@ -7,6 +7,8 @@
 
 import { execFile } from "child_process";
 import { existsSync } from "fs";
+import { request as httpsRequest } from "https";
+import { Resolver } from "dns/promises";
 import type { HealthItem, HealthItemId } from "./protocol.js";
 
 export interface HealthContext {
@@ -45,6 +47,57 @@ function findTailscale(): string | null {
     if (existsSync(p)) return p;
   }
   return null;
+}
+
+/**
+ * End-to-end funnel probe: resolves `dnsName` via public DNS (1.1.1.1 / 8.8.8.8)
+ * to bypass MagicDNS, then does an HTTPS HEAD `/` to the public Tailscale
+ * ingress IP with the correct `Host:` and SNI. This path mirrors what a remote
+ * client would traverse — catches ACL/ingress failures the CLI-config parse
+ * cannot see.
+ */
+async function probeFunnelPublic(dnsName: string): Promise<{ ok: boolean; detail: string }> {
+  const resolver = new Resolver();
+  resolver.setServers(["1.1.1.1", "8.8.8.8"]);
+  let ip: string;
+  try {
+    const ips = await resolver.resolve4(dnsName);
+    if (!ips.length) return { ok: false, detail: `Публічний DNS не резолвить ${dnsName}` };
+    ip = ips[0];
+  } catch (e) {
+    return { ok: false, detail: `Публічний DNS: ${(e as Error).message}` };
+  }
+
+  return new Promise((resolve) => {
+    const req = httpsRequest(
+      {
+        host: ip,
+        port: 443,
+        method: "HEAD",
+        path: "/",
+        headers: { Host: dnsName },
+        servername: dnsName,
+        timeout: 5000,
+      },
+      (res) => {
+        res.resume();
+        const code = res.statusCode ?? 0;
+        // Any response from our Node (incl. 404) means funnel ingress → node works.
+        // 502/503/504 = Tailscale ingress couldn't reach the node (ACL or offline).
+        if (code >= 502 && code <= 504) {
+          resolve({ ok: false, detail: `Tailscale ingress повертає HTTP ${code} (ACL funnel?)` });
+        } else {
+          resolve({ ok: true, detail: `Публічний funnel відповідає (HTTP ${code})` });
+        }
+      }
+    );
+    req.on("error", (e) => resolve({ ok: false, detail: `Funnel probe: ${e.message}` }));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve({ ok: false, detail: "Funnel probe timeout (5s)" });
+    });
+    req.end();
+  });
 }
 
 // ─── Individual checks ──────────────────────────────────────────────────────
@@ -104,23 +157,65 @@ async function checkFunnelActive(port: number): Promise<HealthItem> {
   }
   const { stdout } = await execAsync(binary, ["funnel", "status"]);
   const text = stdout || "";
-  if (text.includes(`http://127.0.0.1:${port}`) || text.includes(`http://localhost:${port}`)) {
-    return { id: "funnelActive", status: "ok", fixable: false, detail: `Порт ${port}` };
-  }
-  if (text.includes("No serve config") || text.trim() === "") {
+  const configBound =
+    text.includes(`http://127.0.0.1:${port}`) || text.includes(`http://localhost:${port}`);
+
+  if (!configBound) {
+    if (text.includes("No serve config") || text.trim() === "") {
+      return {
+        id: "funnelActive",
+        status: "fail",
+        fixable: true,
+        detail: "Funnel не налаштований",
+      };
+    }
     return {
       id: "funnelActive",
       status: "fail",
       fixable: true,
-      detail: "Funnel не налаштований",
+      detail: `Funnel не прив'язаний до порту ${port}`,
     };
+  }
+
+  // Config gate passed. Verify the funnel is actually reachable end-to-end
+  // via public DNS → Tailscale ingress → node → local server.
+  const dnsName = await readTailscaleDnsName(binary);
+  if (!dnsName) {
+    return {
+      id: "funnelActive",
+      status: "fail",
+      fixable: false,
+      detail: "Не вдалось отримати tailscale DNS-імʼя",
+    };
+  }
+  const probe = await probeFunnelPublic(dnsName);
+  if (probe.ok) {
+    return { id: "funnelActive", status: "ok", fixable: false, detail: probe.detail };
   }
   return {
     id: "funnelActive",
     status: "fail",
-    fixable: true,
-    detail: `Funnel не прив'язаний до порту ${port}`,
+    fixable: false,
+    detail: probe.detail,
+    instruction:
+      "Funnel CLI сконфігурований локально, але публічна точка не відповідає.\n" +
+      "Перевір:\n" +
+      "  1. У Tailscale Admin → Access Controls → tagOwners/ACL має бути атрибут `\"funnel\"` для цього node.\n" +
+      "  2. `tailscale funnel status` — що там показано серед ACTIVE.\n" +
+      "  3. Спробуй `curl -I https://<твій>.ts.net/` з клієнтського девайса.",
   };
+}
+
+async function readTailscaleDnsName(binary: string): Promise<string | null> {
+  const { stdout } = await execAsync(binary, ["status", "--json"]);
+  try {
+    const status = JSON.parse(stdout) as { Self?: { DNSName?: string } };
+    const raw = status?.Self?.DNSName;
+    if (!raw) return null;
+    return raw.replace(/\.$/, "");
+  } catch {
+    return null;
+  }
 }
 
 function checkServerListening(ctx: HealthContext): HealthItem {
