@@ -1587,7 +1587,7 @@ class _DeskHeightControl extends StatelessWidget {
         const SizedBox(height: 10),
         // Certification
         Text(
-          'Сертифіковано Комітетом з Віртуальної Ергономіки PixelCode™',
+          'Сертифіковано Комітетом з Віртуальної Ергономіки ПіксельКод™',
           style: TextStyle(
             color: Colors.white.withValues(alpha: 0.15),
             fontSize: 10,
