@@ -20,8 +20,22 @@ export interface StoredChatMessage {
   images?: string[]; // base64-encoded image data
 }
 
+/**
+ * Enhanced chat message with optional metadata for prompt caching and analytics.
+ */
+export interface EnrichedChatMessage extends StoredChatMessage {
+  id?: string; // Unique message identifier
+  metadata?: {
+    tokensUsed?: number;
+    executionTimeMs?: number;
+    hooksFired?: string[];
+    cachedForPrompt?: boolean;
+  };
+}
+
 export class ChatHistory {
   private readonly _messages: StoredChatMessage[] = [];
+  private readonly _enrichedMetadata: Map<string, EnrichedChatMessage["metadata"]> = new Map();
 
   add(msg: StoredChatMessage): void {
     this._messages.push(msg);
@@ -29,6 +43,7 @@ export class ChatHistory {
 
   clear(): void {
     this._messages.length = 0;
+    this._enrichedMetadata.clear();
   }
 
   /** Returns a snapshot message ready to send over WebSocket. */
@@ -61,6 +76,68 @@ export class ChatHistory {
       }
     } catch {
       // File doesn't exist or is corrupt — start fresh
+    }
+  }
+
+  /**
+   * Get recent messages within a token budget.
+   * Returns messages in chronological order (oldest first).
+   * Token estimation: roughly msg.text.length / 4
+   *
+   * @param sessionId Session identifier (currently stored in metadata if available)
+   * @param maxTokens Maximum tokens to include (default 2000)
+   * @returns Array of enriched chat messages within token budget
+   */
+  getContextMessages(sessionId: string, maxTokens: number = 2000): EnrichedChatMessage[] {
+    let tokenCount = 0;
+    const result: EnrichedChatMessage[] = [];
+
+    // Iterate from oldest to newest (reverse iteration then reverse result)
+    for (let i = this._messages.length - 1; i >= 0; i--) {
+      const storedMsg = this._messages[i];
+      const msgTokens = Math.ceil(storedMsg.text.length / 4);
+
+      if (tokenCount + msgTokens > maxTokens) {
+        // Stop if adding this message would exceed budget
+        break;
+      }
+
+      const enrichedMsg: EnrichedChatMessage = {
+        ...storedMsg,
+        id: `msg_${i}_${storedMsg.timestamp}`, // Generate stable ID based on index and timestamp
+        metadata: this._enrichedMetadata.get(`msg_${i}_${storedMsg.timestamp}`),
+      };
+
+      result.unshift(enrichedMsg); // Insert at beginning to maintain chronological order
+      tokenCount += msgTokens;
+    }
+
+    return result;
+  }
+
+  /**
+   * Mark specific messages as cached for prompt injection.
+   * Updates the metadata.cachedForPrompt field for selected messages.
+   *
+   * @param sessionId Session identifier (for future multi-session support)
+   * @param messageIds Array of message IDs to mark as cached
+   */
+  markForCache(sessionId: string, messageIds: string[]): void {
+    const messageIdSet = new Set(messageIds);
+
+    for (let i = 0; i < this._messages.length; i++) {
+      const storedMsg = this._messages[i];
+      const msgId = `msg_${i}_${storedMsg.timestamp}`;
+
+      if (messageIdSet.has(msgId)) {
+        // Get or create metadata for this message
+        let metadata = this._enrichedMetadata.get(msgId);
+        if (!metadata) {
+          metadata = {};
+          this._enrichedMetadata.set(msgId, metadata);
+        }
+        metadata.cachedForPrompt = true;
+      }
     }
   }
 }
