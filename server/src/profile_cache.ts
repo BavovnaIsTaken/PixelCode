@@ -11,6 +11,10 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import * as zlib from "zlib";
+import {
+  computeScore,
+  memoryLifecycleConfig,
+} from "./memory_lifecycle";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -42,13 +46,21 @@ export interface AgentProfile {
     skill: string;
     context: string;
     observedCount: number;
+    appliedCount: number;
     confidence: number; // 0–1
+    lastObservedAt: string; // ISO 8601
+    lastAppliedAt: string; // ISO 8601
+    createdAt: string; // ISO 8601
   }>;
   weaknesses: Array<{
     pitfall: string;
     impact: string;
     observedCount: number;
+    avoidedCount: number;
     avoidanceScore: number; // 0–1
+    lastObservedAt: string; // ISO 8601
+    lastAvoidedAt: string; // ISO 8601
+    createdAt: string; // ISO 8601
   }>;
   contextPatterns: {
     universal: Record<string, unknown>;
@@ -63,8 +75,9 @@ export interface AgentProfile {
 export class ProfileCacheService {
   private readonly profileDir: string;
 
-  constructor() {
-    this.profileDir = join(homedir(), ".pixelcode", "profiles");
+  constructor(profileDirOverride?: string) {
+    this.profileDir =
+      profileDirOverride ?? join(homedir(), ".pixelcode", "profiles");
     this.ensureProfileDirExists();
   }
 
@@ -150,15 +163,32 @@ export class ProfileCacheService {
     agentProfile: AgentProfile,
     currentProject: string
   ): Promise<string> {
+    const affinity = (key: string) =>
+      userProfile.globalPatterns.topicAffinities[key] ??
+      memoryLifecycleConfig.defaultTopicAffinity;
+
+    // Spread before sort — never mutate the caller's arrays.
+    const topStrengths = [...agentProfile.strengths]
+      .sort(
+        (a, b) =>
+          computeScore(b, affinity(b.skill)) -
+          computeScore(a, affinity(a.skill))
+      )
+      .slice(0, 3);
+
+    const topWeaknesses = [...agentProfile.weaknesses]
+      .sort(
+        (a, b) =>
+          computeScore(b, affinity(b.pitfall)) -
+          computeScore(a, affinity(a.pitfall))
+      )
+      .slice(0, 3);
+
     const cacheData = {
       userStyle: userProfile.communicationStyle,
       userPrefs: userProfile.preferences,
-      topStrengths: agentProfile.strengths
-        .sort((a, b) => b.confidence - a.confidence)
-        .slice(0, 3),
-      topWeaknesses: agentProfile.weaknesses
-        .sort((a, b) => b.avoidanceScore - a.avoidanceScore)
-        .slice(0, 3),
+      topStrengths,
+      topWeaknesses,
       universalPatterns: agentProfile.contextPatterns.universal,
       projectPatterns:
         agentProfile.contextPatterns.projectSpecific[currentProject] || {},
@@ -168,6 +198,34 @@ export class ProfileCacheService {
     const json = JSON.stringify(cacheData);
     const compressed = zlib.gzipSync(json).toString("base64");
     return compressed;
+  }
+
+  /**
+   * Periodic compaction — drops entries whose score has decayed below
+   * memoryLifecycleConfig.hardPruneThreshold. Run every ~N sessions or when
+   * the JSON file grows past a soft size threshold.
+   */
+  async compactProfile(
+    agentId: string,
+    userProfile: UserProfile
+  ): Promise<void> {
+    const profile = await this.loadAgentProfile(agentId);
+    const affinity = (key: string) =>
+      userProfile.globalPatterns.topicAffinities[key] ??
+      memoryLifecycleConfig.defaultTopicAffinity;
+
+    profile.strengths = profile.strengths.filter(
+      (s) =>
+        computeScore(s, affinity(s.skill)) >=
+        memoryLifecycleConfig.hardPruneThreshold
+    );
+    profile.weaknesses = profile.weaknesses.filter(
+      (w) =>
+        computeScore(w, affinity(w.pitfall)) >=
+        memoryLifecycleConfig.hardPruneThreshold
+    );
+
+    await this.saveAgentProfile(profile);
   }
 
   /**
