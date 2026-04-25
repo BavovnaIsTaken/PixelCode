@@ -646,10 +646,10 @@ class OfficeGameState {
       // Small offices (garage) can't host all canonical desks, so those
       // characters fall through to a random walkable tile.
       final canonical = isSeatOwner
-          ? kStations.firstWhere(
-              (s) => s.agentId == roleType,
-              orElse: () => kStations.first,
-            )
+          ? kStations
+              .where((s) => s.agentId == roleType)
+              .cast<DeskStation?>()
+              .firstWhere((_) => true, orElse: () => null)
           : null;
       final station = (canonical != null &&
               _stationFitsGrid(canonical))
@@ -688,13 +688,13 @@ class OfficeGameState {
       ch.isHired = true;
       final shouldOwnSeat = seatOwner[ch.roleType] == ch.instanceId;
       if (shouldOwnSeat && (ch.seat == null || ch.seat!.isExtra)) {
-        final canonical = kStations.firstWhere(
-          (s) => s.agentId == ch.roleType,
-          orElse: () => kStations.first,
-        );
-        // Only claim the canonical desk if it fits — otherwise leave seat
-        // null and fall through to the extras loop below.
-        if (_stationFitsGrid(canonical)) {
+        final canonical = kStations
+            .where((s) => s.agentId == ch.roleType)
+            .cast<DeskStation?>()
+            .firstWhere((_) => true, orElse: () => null);
+        // Only claim the canonical desk if it exists and fits — otherwise
+        // leave seat null and fall through to the extras loop below.
+        if (canonical != null && _stationFitsGrid(canonical)) {
           ch.seat = canonical;
         }
       } else if (!shouldOwnSeat && ch.seat != null && !ch.seat!.isExtra) {

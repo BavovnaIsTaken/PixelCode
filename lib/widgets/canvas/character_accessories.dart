@@ -70,6 +70,7 @@ const _canonicalPaletteIndex = <String, int>{
   'tester': 4,
   'security': 5,
   'ui-ux-designer': 0,
+  'llm-specialist': 3,
 };
 
 const _sheetCount = 6;

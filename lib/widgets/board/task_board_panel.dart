@@ -3,6 +3,9 @@
 /// Desktop: side-by-side columns in a Row.
 library;
 
+import 'dart:convert';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -915,29 +918,42 @@ void _showTaskDetailSheet(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (ctx) => _TaskDetailContent(
-      task: task,
+      taskId: task.id,
       agents: agents,
       workLog: workLog,
-      ref: ref,
     ),
   );
 }
 
-class _TaskDetailContent extends StatelessWidget {
-  final TaskCard task;
+class _TaskDetailContent extends ConsumerWidget {
+  final String taskId;
   final Map<String, AgentState> agents;
   final List<WorkLogEntry> workLog;
-  final WidgetRef ref;
 
   const _TaskDetailContent({
-    required this.task,
+    required this.taskId,
     required this.agents,
     required this.workLog,
-    required this.ref,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final boardState = ref.watch(taskBoardProvider);
+    final task = boardState.tasks.firstWhere(
+      (t) => t.id == taskId,
+      orElse: () {
+        // Task was deleted while sheet was open — close it.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted) Navigator.of(context).pop();
+        });
+        return TaskCard(
+          id: taskId,
+          title: '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+      },
+    );
     final themeColors = context.appColors;
     final stickyColors = _stickyColors[task.color]!;
     final priority = _priorityIndicators[task.priority]!;
@@ -1099,6 +1115,12 @@ class _TaskDetailContent extends StatelessWidget {
               child: _WorkHistoryList(workLog: workLog, agents: agents),
             ),
           ],
+          // Attachments
+          const SizedBox(height: 12),
+          _DetailRow(
+            label: 'Файли',
+            child: _AttachmentsSection(task: task),
+          ),
           const SizedBox(height: 20),
           // Move task buttons
           _DetailRow(
@@ -1147,6 +1169,259 @@ class _TaskDetailContent extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─── Attachments ────────────────────────────────────────────────────────────
+
+class _AttachmentsSection extends ConsumerStatefulWidget {
+  final TaskCard task;
+
+  const _AttachmentsSection({required this.task});
+
+  @override
+  ConsumerState<_AttachmentsSection> createState() =>
+      _AttachmentsSectionState();
+}
+
+class _AttachmentsSectionState extends ConsumerState<_AttachmentsSection> {
+  bool _uploading = false;
+
+  Future<void> _pickAndUpload() async {
+    if (_uploading) return;
+    const typeGroup = XTypeGroup(label: 'Файли');
+    final files = await openFiles(acceptedTypeGroups: [typeGroup]);
+    if (files.isEmpty) return;
+    setState(() => _uploading = true);
+    try {
+      for (final file in files) {
+        final bytes = await file.readAsBytes();
+        if (!mounted) return;
+        if (bytes.length > maxAttachmentBytes) {
+          _showError(
+            '«${file.name}» завеликий (${_formatBytes(bytes.length)}). '
+            'Максимум ${_formatBytes(maxAttachmentBytes)}.',
+          );
+          continue;
+        }
+        ref.read(taskBoardProvider.notifier).addAttachment(
+              taskId: widget.task.id,
+              name: file.name,
+              mimeType: file.mimeType ?? _mimeFromName(file.name),
+              sizeBytes: bytes.length,
+              dataBase64: base64Encode(bytes),
+            );
+      }
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _remove(TaskAttachment attachment) {
+    ref.read(taskBoardProvider.notifier).removeAttachment(
+          taskId: widget.task.id,
+          attachmentId: attachment.id,
+        );
+  }
+
+  void _preview(TaskAttachment attachment) {
+    if (!attachment.isImage) return;
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.85),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: GestureDetector(
+          onTap: () => Navigator.of(ctx).pop(),
+          child: InteractiveViewer(
+            child: Image.memory(base64Decode(attachment.dataBase64)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final attachments = widget.task.attachments;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (attachments.isEmpty)
+          Text(
+            'Немає прикріплених файлів',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+            ),
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final a in attachments)
+                _AttachmentTile(
+                  attachment: a,
+                  onTap: () => _preview(a),
+                  onRemove: () => _remove(a),
+                ),
+            ],
+          ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _uploading ? null : _pickAndUpload,
+            icon: _uploading
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.attach_file, size: 16),
+            label: Text(
+              _uploading ? 'Завантаження…' : 'Прикріпити файл',
+              style: const TextStyle(fontSize: 13),
+            ),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white.withValues(alpha: 0.7),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AttachmentTile extends StatelessWidget {
+  final TaskAttachment attachment;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  const _AttachmentTile({
+    required this.attachment,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 240),
+      padding: const EdgeInsets.fromLTRB(6, 6, 4, 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GestureDetector(
+            onTap: onTap,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: attachment.isImage
+                    ? Image.memory(
+                        base64Decode(attachment.dataBase64),
+                        fit: BoxFit.cover,
+                        gaplessPlayback: true,
+                      )
+                    : Container(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        child: Icon(
+                          Icons.insert_drive_file_outlined,
+                          size: 18,
+                          color: Colors.white.withValues(alpha: 0.6),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: GestureDetector(
+              onTap: onTap,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    attachment.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Text(
+                    _formatBytes(attachment.sizeBytes),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.4),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            onPressed: onRemove,
+            icon: Icon(
+              Icons.close,
+              size: 14,
+              color: Colors.white.withValues(alpha: 0.5),
+            ),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(
+              minWidth: 24,
+              minHeight: 24,
+            ),
+            splashRadius: 14,
+            tooltip: 'Видалити',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
+String _mimeFromName(String name) {
+  final ext = name.split('.').last.toLowerCase();
+  return switch (ext) {
+    'png' => 'image/png',
+    'jpg' || 'jpeg' => 'image/jpeg',
+    'gif' => 'image/gif',
+    'webp' => 'image/webp',
+    'pdf' => 'application/pdf',
+    'txt' || 'md' => 'text/plain',
+    'json' => 'application/json',
+    'zip' => 'application/zip',
+    _ => 'application/octet-stream',
+  };
 }
 
 class _DetailRow extends StatelessWidget {
@@ -1494,15 +1769,21 @@ void _showAddTaskDialog(
         backgroundColor: const Color(0xFF1A1A1F),
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Container(
-          width: MediaQuery.sizeOf(ctx).width < 600
-              ? MediaQuery.sizeOf(ctx).width - 48
-              : 400,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(ctx).width < 600
+                ? MediaQuery.sizeOf(ctx).width - 48
+                : 400,
+            maxHeight: MediaQuery.sizeOf(ctx).height -
+                MediaQuery.viewInsetsOf(ctx).bottom -
+                48,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               Text(
                 'Новий стікер',
                 style: TextStyle(
@@ -1701,6 +1982,7 @@ void _showAddTaskDialog(
                 ],
               ),
             ],
+            ),
           ),
         ),
       ),

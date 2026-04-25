@@ -57,6 +57,7 @@ String _agentNickname(WidgetRef ref, String id) {
     'tester' => 'Крашер',
     'security' => 'Страж',
     'ui-ux-designer' => 'Піксельник',
+    'llm-specialist' => 'Промптер',
     _ => id,
   };
 }
@@ -346,6 +347,70 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     });
   }
 
+  Future<void> _copyChatSnippet({int limit = 20}) async {
+    final messages = ref.read(chatProvider);
+    if (messages.isEmpty) {
+      _showSnack('Чат порожній — нічого копіювати.');
+      return;
+    }
+    final tail = messages.length <= limit
+        ? messages
+        : messages.sublist(messages.length - limit);
+    final workDir = ref.read(workingDirectoryProvider);
+    final selectedAgent = ref.read(selectedAgentProvider);
+    final now = DateTime.now();
+
+    String two(int n) => n.toString().padLeft(2, '0');
+    String fmtTime(DateTime t) {
+      final l = t.toLocal();
+      return '${two(l.hour)}:${two(l.minute)}:${two(l.second)}';
+    }
+    String fmtDate(DateTime t) {
+      final l = t.toLocal();
+      return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
+    }
+
+    final buf = StringBuffer()
+      ..writeln('# PixelCode chat snippet — ${fmtDate(now)}')
+      ..writeln()
+      ..writeln('- **Working dir:** `${workDir ?? '(unset)'}`')
+      ..writeln('- **Selected agent:** $selectedAgent (${_agentNickname(ref, selectedAgent)})')
+      ..writeln('- **Messages:** last ${tail.length} of ${messages.length}')
+      ..writeln()
+      ..writeln('---')
+      ..writeln();
+
+    for (final m in tail) {
+      final who = m.role == ChatRole.user
+          ? 'user'
+          : '${m.agentId} (${_agentNickname(ref, m.agentId)})';
+      final streamingTag = m.isStreaming ? ' _[streaming]_' : '';
+      buf
+        ..writeln('**${fmtTime(m.timestamp)} — $who:**$streamingTag')
+        ..writeln(m.text.trim().isEmpty ? '_(empty)_' : m.text.trim());
+      if (m.imageBase64s.isNotEmpty) {
+        buf.writeln('_[+${m.imageBase64s.length} image(s)]_');
+      }
+      buf.writeln();
+    }
+
+    await Clipboard.setData(ClipboardData(text: buf.toString()));
+    _showSnack('Скопійовано ${tail.length} реплік як markdown.');
+  }
+
+  void _showSnack(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(text),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   void _showAgentPicker() {
     final agents = ref.read(agentsProvider);
     final currentAgent = ref.read(selectedAgentProvider);
@@ -549,6 +614,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         'ui-ux-designer' => const LinearGradient(
             colors: [Color(0xFF3498DB), Color(0xFF2980B9)],
           ),
+        'llm-specialist' => const LinearGradient(
+            colors: [Color(0xFF9B59FF), Color(0xFF6C2BD9)],
+          ),
         _ => const LinearGradient(
             colors: [Color(0xFF95A5A6), Color(0xFF7F8C8D)],
           ),
@@ -562,6 +630,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         'tester' => const Color(0xFFFF6B9D),
         'security' => const Color(0xFF8E44AD),
         'ui-ux-designer' => const Color(0xFF3498DB),
+        'llm-specialist' => const Color(0xFF9B59FF),
         _ => const Color(0xFF95A5A6),
       };
 
@@ -573,6 +642,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         'tester' => Icons.bug_report,
         'security' => Icons.security,
         'ui-ux-designer' => Icons.palette,
+        'llm-specialist' => Icons.smart_toy,
         _ => Icons.person,
       };
 
@@ -726,6 +796,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                   ),
                 ),
                 const Spacer(),
+                _CopySnippetButton(onTap: _copyChatSnippet),
+                const SizedBox(width: 8),
                 _BypassToggle(),
               ],
             ),
@@ -1333,6 +1405,30 @@ class _ChoiceButtonState extends State<_ChoiceButton> {
 }
 
 // ─── Bypass Permissions Toggle ───────────────────────────────────────────────
+
+class _CopySnippetButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _CopySnippetButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Скопіювати останні 20 реплік як markdown',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Icon(
+            Icons.ios_share_rounded,
+            size: 16,
+            color: Colors.white.withValues(alpha: 0.45),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _BypassToggle extends ConsumerWidget {
   const _BypassToggle();

@@ -116,6 +116,52 @@ int requiredLevelFor(int difficulty) {
   return const [0, 1, 2, 4, 7, 11][d];
 }
 
+// ─── Task Attachment ────────────────────────────────────────────────────────
+
+/// Per-card file attachment, stored inline as base64 (server keeps the board
+/// in memory). Keep payloads small — see [maxAttachmentBytes].
+class TaskAttachment {
+  final String id;
+  final String name;
+  final String mimeType;
+  final int sizeBytes;
+  final String dataBase64;
+  final DateTime uploadedAt;
+
+  const TaskAttachment({
+    required this.id,
+    required this.name,
+    required this.mimeType,
+    required this.sizeBytes,
+    required this.dataBase64,
+    required this.uploadedAt,
+  });
+
+  bool get isImage => mimeType.startsWith('image/');
+
+  factory TaskAttachment.fromJson(Map<String, dynamic> json) => TaskAttachment(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        mimeType: json['mimeType'] as String? ?? 'application/octet-stream',
+        sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
+        dataBase64: json['dataBase64'] as String? ?? '',
+        uploadedAt: DateTime.parse(json['uploadedAt'] as String),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'mimeType': mimeType,
+        'sizeBytes': sizeBytes,
+        'dataBase64': dataBase64,
+        'uploadedAt': uploadedAt.toIso8601String(),
+      };
+}
+
+/// Hard cap to keep WebSocket frames manageable. Larger files are rejected
+/// client-side before upload.
+const int maxAttachmentBytes = 5 * 1024 * 1024; // 5 MB
+
 // ─── Task Card ──────────────────────────────────────────────────────────────
 
 class TaskCard {
@@ -140,6 +186,8 @@ class TaskCard {
   /// Schema v5+.
   final String taskType;
 
+  final List<TaskAttachment> attachments;
+
   const TaskCard({
     required this.id,
     required this.title,
@@ -153,6 +201,7 @@ class TaskCard {
     this.difficulty = 2,
     this.allowedRoles = const ['coder'],
     this.taskType = 'coding',
+    this.attachments = const [],
   });
 
   /// Derived: minimum agent level required to take this task.
@@ -169,6 +218,7 @@ class TaskCard {
     int? difficulty,
     List<String>? allowedRoles,
     String? taskType,
+    List<TaskAttachment>? attachments,
   }) =>
       TaskCard(
         id: id,
@@ -183,6 +233,7 @@ class TaskCard {
         difficulty: difficulty ?? this.difficulty,
         allowedRoles: allowedRoles ?? this.allowedRoles,
         taskType: taskType ?? this.taskType,
+        attachments: attachments ?? this.attachments,
       );
 
   factory TaskCard.fromJson(Map<String, dynamic> json) => TaskCard(
@@ -205,6 +256,10 @@ class TaskCard {
                 .toList() ??
             const ['coder'],
         taskType: json['taskType'] as String? ?? 'coding',
+        attachments: (json['attachments'] as List?)
+                ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
+                .toList() ??
+            const [],
       );
 
   Map<String, dynamic> toJson() => {
@@ -220,6 +275,7 @@ class TaskCard {
         'difficulty': difficulty,
         'allowedRoles': allowedRoles,
         'taskType': taskType,
+        'attachments': attachments.map((a) => a.toJson()).toList(),
       };
 }
 

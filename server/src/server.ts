@@ -38,7 +38,7 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { runDungeon, getChallenge } from "./dungeon.js";
-import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
+import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
   formatTraitsForPrompt, getAllTraits,
@@ -810,7 +810,7 @@ ${activitySummary}
 ${hasErrors ? "⚠️ The session had errors." : "No errors during session."}
 ${reworkAgents.length > 0 ? `⚠️ Agents with rework: ${reworkAgents.join(", ")}` : "No rework needed."}
 
-Team agents: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer
+Team agents: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer, llm-specialist
 
 Extract 0-3 notable lessons from this session. Each lesson is a pattern that should be remembered for future work.
 - A "strength" is something an agent did notably well (thorough analysis, clean code, good delegation, etc.)
@@ -1339,7 +1339,7 @@ async function processQueue(ws: WebSocket): Promise<void> {
         // Feed the result back to the manager for acknowledgement
         await runQuery(
           ws,
-          `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nBriefly report this completion to the user in 1-2 sentences. If there are more queued tasks or running agents, mention that too.`,
+          `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nMove the matching board card to "done" and post ONE short status line to the user per the Communication policy (e.g. "Готово: {X}." — merge with the next-step line if more work is queued, like "Зробили {A}. Працюємо над {B}."). Do not narrate the board move itself.`,
           resolveRoleInstance(ws, "manager"),
         );
         break;
@@ -1347,7 +1347,7 @@ async function processQueue(ws: WebSocket): Promise<void> {
       case "board":
         await runQuery(
           ws,
-          `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Please plan and dispatch this work to appropriate agents.`,
+          `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work, then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
           resolveRoleInstance(ws, "manager"),
         );
         break;
@@ -1623,6 +1623,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         difficulty: msg.difficulty,
         allowedRoles: msg.allowedRoles,
         taskType: msg.taskType,
+        attachments: [],
       };
       boardTasks.set(id, task);
       dbg("info", "board", `Created task: ${task.title} (${id})`);
@@ -1700,6 +1701,42 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         }
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `${msg.assign ? "Assigned" : "Unassigned"} ${msg.agentId} on task ${msg.taskId}`);
+        broadcastBoardState();
+      }
+      break;
+    }
+
+    case "board_add_attachment": {
+      const task = boardTasks.get(msg.taskId);
+      if (!task) break;
+      const MAX = 5 * 1024 * 1024; // mirror client cap
+      if (msg.sizeBytes > MAX) {
+        dbg("warn", "board", `Rejected attachment ${msg.name} on ${msg.taskId}: ${msg.sizeBytes} > ${MAX}`);
+        break;
+      }
+      const attachment: TaskAttachmentData = {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: msg.name,
+        mimeType: msg.mimeType,
+        sizeBytes: msg.sizeBytes,
+        dataBase64: msg.dataBase64,
+        uploadedAt: new Date().toISOString(),
+      };
+      task.attachments = [...(task.attachments ?? []), attachment];
+      task.updatedAt = attachment.uploadedAt;
+      dbg("info", "board", `Added attachment "${msg.name}" (${msg.sizeBytes}B) to ${msg.taskId}`);
+      broadcastBoardState();
+      break;
+    }
+
+    case "board_remove_attachment": {
+      const task = boardTasks.get(msg.taskId);
+      if (!task || !task.attachments) break;
+      const before = task.attachments.length;
+      task.attachments = task.attachments.filter(a => a.id !== msg.attachmentId);
+      if (task.attachments.length !== before) {
+        task.updatedAt = new Date().toISOString();
+        dbg("info", "board", `Removed attachment ${msg.attachmentId} from ${msg.taskId}`);
         broadcastBoardState();
       }
       break;
