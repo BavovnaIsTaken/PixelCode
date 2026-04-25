@@ -187,7 +187,7 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 | Гілка | Версія | Опис |
 |-------|--------|------|
 | [`alpha-test`](../../tree/alpha-test) | `0.2.1+1` | Поточний реліз-кандидат для тестерів. Артефакти macOS — у [GitHub Releases](../../releases). |
-| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Активна розробка, попереду `alpha-test`. Суфікс `-dev` означає роботу над наступним релізом. |
+| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Активна розробка, попереду `alpha-test`. |
 
 ### v0.2.1-alpha.1 — 2026-04-25
 
@@ -403,7 +403,7 @@ For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the 
 | Branch | Version | Description |
 |--------|---------|-------------|
 | [`alpha-test`](../../tree/alpha-test) | `0.2.1+1` | Current release candidate for testers. macOS artifacts in [GitHub Releases](../../releases). |
-| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Active development, ahead of `alpha-test`. The `-dev` suffix marks work toward the next release. |
+| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Active development, ahead of `alpha-test`. |
 
 ### v0.2.1-alpha.1 — 2026-04-25
 
