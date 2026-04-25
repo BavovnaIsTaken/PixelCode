@@ -44,6 +44,12 @@ final connectionStatusProvider = StreamProvider<bool>((ref) {
   return ref.watch(wsServiceProvider).connectionStatus;
 });
 
+/// Short status token (≤5 chars) for the in-flight connection terminal widget.
+/// `null` = connected/idle (terminal hides itself).
+final connectionPhaseProvider = StreamProvider<String?>((ref) {
+  return ref.watch(wsServiceProvider).phaseStatus;
+});
+
 // ─── All server messages ─────────────────────────────────────────────────────
 
 final serverMessagesProvider = StreamProvider<ServerMessage>((ref) {

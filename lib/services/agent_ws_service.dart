@@ -17,9 +17,19 @@ class AgentWsService {
   final _messageController = StreamController<ServerMessage>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
   final _connLogController = StreamController<String>.broadcast();
+  final _phaseController = StreamController<String?>.broadcast();
   bool _isConnected = false;
   bool _disposed = false;
   Timer? _reconnectTimer;
+
+  /// Short status token (≤5 chars) shown by the connection terminal widget.
+  /// `null` once a session is established — the widget hides itself.
+  String? _phase;
+
+  void _emitPhase(String? phase) {
+    _phase = phase;
+    if (!_phaseController.isClosed) _phaseController.add(phase);
+  }
 
   /// Stable client ID (generated once per app instance).
   late final String clientId = _generateClientId();
@@ -73,18 +83,27 @@ class AgentWsService {
 
   bool get isConnected => _isConnected;
 
+  /// Short status token stream (≤5 chars). `null` means connected/idle.
+  /// Yields current value first so late subscribers see state immediately.
+  Stream<String?> get phaseStatus async* {
+    yield _phase;
+    yield* _phaseController.stream;
+  }
+
   Future<void> connect({required String url}) async {
     if (_disposed) {
       _log('connect($url) — disposed, skipping');
       return;
     }
     _log('Connecting to $url …');
+    _emitPhase('CONN');
     try {
       // For .ts.net hosts: try normal connection first, use DoH custom
       // client only if system DNS can't resolve the hostname.
       HttpClient? customClient;
       final uri = Uri.parse(url);
       if (uri.host.endsWith('.ts.net')) {
+        _emitPhase('DNS');
         final dohIp = await _resolveViaDoHIfNeeded(uri.host);
         if (dohIp != null) {
           _log('Using DoH route → $dohIp:443');
@@ -94,6 +113,7 @@ class AgentWsService {
               return Socket.startConnect(dohIp, 443);
             };
         }
+        _emitPhase('CONN');
       }
 
       _ws = await WebSocket.connect(url, customClient: customClient)
@@ -102,6 +122,7 @@ class AgentWsService {
       if (_disposed) { await _ws?.close(); return; }
       _isConnected = true;
       if (!_connectionController.isClosed) _connectionController.add(true);
+      _emitPhase(null);
       _reconnectTimer?.cancel();
       _log('Connected to $url');
       _sendClientInfo();
@@ -126,6 +147,7 @@ class AgentWsService {
           if (_disposed) return;
           _isConnected = false;
           if (!_connectionController.isClosed) _connectionController.add(false);
+          _emitPhase('DROP');
           _scheduleReconnect(url);
         },
         onError: (e) {
@@ -133,6 +155,7 @@ class AgentWsService {
           if (_disposed) return;
           _isConnected = false;
           if (!_connectionController.isClosed) _connectionController.add(false);
+          _emitPhase('ERR');
           _scheduleReconnect(url);
         },
       );
@@ -141,12 +164,14 @@ class AgentWsService {
       if (_disposed) return;
       _isConnected = false;
       if (!_connectionController.isClosed) _connectionController.add(false);
+      _emitPhase('TMOUT');
       _scheduleReconnect(url);
     } catch (e) {
       _log('Failed to connect: $e');
       if (_disposed) return;
       _isConnected = false;
       if (!_connectionController.isClosed) _connectionController.add(false);
+      _emitPhase('FAIL');
       _scheduleReconnect(url);
     }
   }
@@ -526,8 +551,20 @@ class AgentWsService {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(
       const Duration(seconds: 3),
-      () => connect(url: url),
+      () {
+        _emitPhase('RTRY');
+        connect(url: url);
+      },
     );
+    // While the timer is counting down, surface a WAIT badge — but only if
+    // we're not already showing a more specific terminal phase like FAIL/ERR
+    // (those flip to WAIT after a brief moment so the user sees the cause first).
+    Timer(const Duration(milliseconds: 700), () {
+      if (_disposed) return;
+      if (_isConnected) return;
+      if (_reconnectTimer?.isActive != true) return;
+      _emitPhase('WAIT');
+    });
   }
 
   Future<void> dispose() async {
@@ -543,5 +580,6 @@ class AgentWsService {
     await _messageController.close();
     await _connectionController.close();
     await _connLogController.close();
+    await _phaseController.close();
   }
 }
