@@ -1,12 +1,13 @@
-/// Provider for local server configuration and running-status stream.
+/// Provider for local-server configuration (apiKey, autoStart preference).
+///
+/// The actual server lifecycle (spawn / restart / kill) lives outside the
+/// app — the launcher daemon (server/src/launcher.ts) owns it, the PixelDock
+/// admin app drives it. This file only persists the user's preferences.
 library;
-
-import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/local_server_config.dart';
-import 'agent_provider.dart' show serverProcessProvider;
 import 'settings_provider.dart';
 
 export '../models/local_server_config.dart';
@@ -47,14 +48,3 @@ final localServerProvider =
     NotifierProvider<LocalServerNotifier, LocalServerConfig>(
   LocalServerNotifier.new,
 );
-
-// ─── Running-status stream ────────────────────────────────────────────────────
-
-/// Emits `true` while the local server process is running, `false` otherwise.
-/// Only meaningful on macOS/desktop.
-final serverRunningProvider = StreamProvider<bool>((ref) {
-  if (Platform.isIOS || Platform.isAndroid) {
-    return const Stream.empty();
-  }
-  return ref.watch(serverProcessProvider).runningStatus;
-});
