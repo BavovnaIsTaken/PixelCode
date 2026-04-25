@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'admin_client.dart';
+import 'theme.dart';
 
 void main() {
   runApp(const ServerAdminApp());
@@ -13,16 +14,9 @@ class ServerAdminApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PixelCode Server',
+      title: 'PixelDock',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF5B8CFF),
-          brightness: Brightness.dark,
-        ),
-        cardTheme: const CardThemeData(elevation: 0, margin: EdgeInsets.zero),
-      ),
+      theme: buildPixelTheme(),
       home: const DashboardScreen(),
     );
   }
@@ -42,7 +36,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   late final TextEditingController _urlController;
   LauncherClient _launcher = LauncherClient(_defaultLauncherUrl);
-  AdminClient? _admin; // built dynamically once server.port is known.
+  AdminClient? _admin;
 
   LauncherStatus? _launcherStatus;
   ServerStatus? _serverStatus;
@@ -51,7 +45,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<BootLogEntry> _bootLogs = const [];
   String? _launcherError;
   bool _ready = false;
-  bool _busy = false; // during start/stop/restart
+  bool _busy = false;
 
   Timer? _pollTimer;
 
@@ -125,7 +119,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     if (!mounted || launcher != _launcher) return;
 
-    // Build/refresh the admin client whose port matches launcher's report.
     final adminUrl = launcher.adminBaseUrl(lstatus.serverPort);
     final admin = (_admin == null || _admin!.baseUrl != adminUrl) ? AdminClient(adminUrl) : _admin!;
 
@@ -136,7 +129,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
 
     if (lstatus.serverRunning) {
-      // Server is up — pull /admin/* details and structured logs.
       try {
         final results = await Future.wait([admin.status(), admin.logs(limit: 200)]);
         if (!mounted || launcher != _launcher) return;
@@ -150,7 +142,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() => _serverStatus = null);
       }
     } else {
-      // Server is down — show launcher boot logs instead.
       try {
         final logs = await launcher.bootLogs(limit: 200);
         if (!mounted || launcher != _launcher) return;
@@ -159,9 +150,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _bootLogs = logs;
           _serverLogs = const [];
         });
-      } catch (_) {
-        // ignore
-      }
+      } catch (_) {/* ignore */}
     }
   }
 
@@ -172,9 +161,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final cfg = await admin.getConfig();
       if (!mounted) return;
       setState(() => _config = cfg);
-    } catch (_) {
-      // server probably went down between polls; ignore
-    }
+    } catch (_) {/* ignore */}
   }
 
   Future<void> _saveConfig({required bool thenRestart, required Map<String, dynamic> patch}) async {
@@ -229,11 +216,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(body),
+        backgroundColor: PixelPalette.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: PixelPalette.border),
+        ),
+        title: Text(title, style: pixelFont(size: 11, color: PixelPalette.accent)),
+        content: Text(body, style: const TextStyle(color: PixelPalette.textHigh)),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirm')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('Cancel', style: pixelFont(size: 9, color: PixelPalette.textMed)),
+          ),
+          FilledButton(
+            style: pixelFilledStyle(color: PixelPalette.accent),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Confirm'),
+          ),
         ],
       ),
     );
@@ -242,12 +241,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _toast(String msg, {bool isError = false}) {
     if (!mounted) return;
-    final scheme = Theme.of(context).colorScheme;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isError ? scheme.errorContainer : scheme.surfaceContainerHigh,
+        backgroundColor: isError ? PixelPalette.error.withValues(alpha: 0.85) : PixelPalette.surfaceHi,
         showCloseIcon: true,
       ),
     );
@@ -259,13 +257,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
-      appBar: _ConnectionBar(
+      appBar: _PixelAppBar(
         controller: _urlController,
         onSubmit: _applyUrl,
         launcherStatus: _launcherStatus,
         launcherError: _launcherError,
       ),
       body: RefreshIndicator(
+        color: PixelPalette.accent,
+        backgroundColor: PixelPalette.surface,
         onRefresh: () async { await _pollOnce(); },
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -279,7 +279,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onStop: _stop,
               onRestart: _restart,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _ConfigCard(
               snapshot: _config,
               serverRunning: _launcherStatus?.serverRunning ?? false,
@@ -287,7 +287,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onSaveAndRestart: (patch) => _saveConfig(thenRestart: true, patch: patch),
               onReload: _refreshConfig,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             _LogsCard(
               serverLogs: _serverLogs,
               bootLogs: _bootLogs,
@@ -300,10 +300,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-// ─── App-bar with launcher URL field ────────────────────────────────────────
+// ─── App-bar ────────────────────────────────────────────────────────────────
 
-class _ConnectionBar extends StatelessWidget implements PreferredSizeWidget {
-  const _ConnectionBar({
+class _PixelAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _PixelAppBar({
     required this.controller,
     required this.onSubmit,
     required this.launcherStatus,
@@ -316,55 +316,116 @@ class _ConnectionBar extends StatelessWidget implements PreferredSizeWidget {
   final String? launcherError;
 
   @override
-  Size get preferredSize => const Size.fromHeight(72);
+  Size get preferredSize => const Size.fromHeight(86);
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final launcherUp = launcherStatus != null;
     final serverUp = launcherStatus?.serverRunning ?? false;
 
     Color dotColor;
+    String tag;
     if (!launcherUp) {
-      dotColor = launcherError != null ? scheme.error : scheme.outline;
+      dotColor = launcherError != null ? PixelPalette.error : PixelPalette.textLow;
+      tag = launcherError != null ? 'launcher offline' : 'connecting…';
     } else if (serverUp) {
-      dotColor = Colors.green.shade400;
+      dotColor = PixelPalette.success;
+      tag = 'server :${launcherStatus!.serverPort}';
     } else {
-      dotColor = Colors.amber.shade400; // launcher up, server down
+      dotColor = PixelPalette.gold;
+      tag = 'launcher :${launcherStatus!.launcherPort}  •  server idle';
     }
 
     return AppBar(
+      automaticallyImplyLeading: false,
       titleSpacing: 16,
-      toolbarHeight: 72,
-      backgroundColor: scheme.surface,
-      title: Row(
-        children: [
-          Container(
-            width: 12, height: 12,
-            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 12),
-          const Text('PixelCode Server', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-          const SizedBox(width: 16),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              onSubmitted: onSubmit,
-              style: const TextStyle(fontFamily: 'Menlo', fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                hintText: 'http://localhost:9719  (launcher URL)',
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.arrow_forward, size: 18),
-                  tooltip: 'Connect',
-                  onPressed: () => onSubmit(controller.text),
+      toolbarHeight: 86,
+      backgroundColor: PixelPalette.background,
+      flexibleSpace: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Pixel-art logo (the same icon used for the .app bundle).
+              Container(
+                width: 56, height: 56,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: PixelPalette.border),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: Image.asset(
+                  'assets/logo.png',
+                  filterQuality: FilterQuality.none, // keep pixels crisp
                 ),
               ),
-            ),
+              const SizedBox(width: 14),
+              // Wordmark + status tag.
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      Text('PIXEL', style: pixelFont(size: 14, color: PixelPalette.accent, letterSpacing: 1.5)),
+                      const SizedBox(width: 4),
+                      Text('DOCK', style: pixelFont(size: 14, color: PixelPalette.gold, letterSpacing: 1.5)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      GlowDot(color: dotColor, size: 8),
+                      const SizedBox(width: 8),
+                      Text(
+                        tag,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: PixelPalette.textMed,
+                          fontFamily: 'Menlo',
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const Spacer(),
+              // Launcher URL field (compact).
+              SizedBox(
+                width: 320,
+                child: TextField(
+                  controller: controller,
+                  onSubmitted: onSubmit,
+                  style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textHigh),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    filled: true,
+                    fillColor: PixelPalette.surfaceDim,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: PixelPalette.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: PixelPalette.accent),
+                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    hintText: 'launcher URL',
+                    hintStyle: const TextStyle(color: PixelPalette.textLow, fontFamily: 'Menlo'),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.arrow_forward, size: 16, color: PixelPalette.accent),
+                      tooltip: 'Connect',
+                      onPressed: () => onSubmit(controller.text),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -393,8 +454,7 @@ class _StatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return _Card(
+    return PixelCard(
       title: 'Status',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -402,23 +462,28 @@ class _StatusCard extends StatelessWidget {
           if (launcher == null && launcherError != null)
             _ErrorBlock(error: launcherError!)
           else if (launcher == null)
-            const Padding(padding: EdgeInsets.symmetric(vertical: 12), child: Text('Connecting to launcher…'))
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Text('Connecting to launcher…', style: TextStyle(color: PixelPalette.textMed)),
+            )
           else ...[
-            _StateRow(
-              label: 'Launcher',
+            _ProcRow(
+              label: 'LAUNCHER',
               up: true,
-              detail: ':${launcher!.launcherPort}  PID ${launcher!.launcherPid}  (phase: ${launcher!.phase.name})',
+              detail: ':${launcher!.launcherPort}  PID ${launcher!.launcherPid}  (${launcher!.phase.name})',
             ),
-            const SizedBox(height: 4),
-            _StateRow(
-              label: 'Server',
+            const SizedBox(height: 8),
+            _ProcRow(
+              label: 'SERVER',
               up: launcher!.serverRunning,
               detail: launcher!.serverRunning
                   ? ':${launcher!.serverPort}  PID ${launcher!.serverPid ?? "?"}'
                   : _offlineDetail(launcher!),
             ),
-            const SizedBox(height: 12),
             if (server != null) ...[
+              const SizedBox(height: 16),
+              const Divider(color: PixelPalette.divider, height: 1),
+              const SizedBox(height: 12),
               _kv('Working dir', server!.config.projectCwd, source: server!.sourceOf('projectCwd'), mono: true),
               _kv('OTA hostname', server!.config.otaHostname ?? '(auto)', source: server!.sourceOf('otaHostname')),
               _kv('Connected clients', '${server!.clients}'),
@@ -429,34 +494,40 @@ class _StatusCard extends StatelessWidget {
               _kv('Config file', server!.configPath, mono: true),
             ],
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           Wrap(
-            spacing: 8,
-            runSpacing: 8,
+            spacing: 10,
+            runSpacing: 10,
             children: [
               if (launcher != null && !launcher!.serverRunning)
                 FilledButton.icon(
                   onPressed: busy ? null : onStart,
-                  icon: const Icon(Icons.play_arrow, size: 18),
-                  label: const Text('Start'),
+                  style: pixelFilledStyle(color: PixelPalette.success),
+                  icon: const Icon(Icons.play_arrow, size: 16),
+                  label: const Text('START'),
                 ),
               if (launcher != null && launcher!.serverRunning) ...[
                 OutlinedButton.icon(
                   onPressed: busy ? null : onRestart,
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Restart'),
+                  style: pixelOutlinedStyle(foreground: PixelPalette.accent),
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('RESTART'),
                 ),
                 OutlinedButton.icon(
                   onPressed: busy ? null : onStop,
-                  icon: const Icon(Icons.power_settings_new, size: 18),
-                  label: const Text('Stop'),
-                  style: OutlinedButton.styleFrom(foregroundColor: scheme.error),
+                  style: pixelOutlinedStyle(foreground: PixelPalette.error),
+                  icon: const Icon(Icons.power_settings_new, size: 16),
+                  label: const Text('STOP'),
                 ),
               ],
-              if (busy) const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4),
-                child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-              ),
+              if (busy)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6),
+                  child: SizedBox(
+                    width: 18, height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: PixelPalette.accent),
+                  ),
+                ),
             ],
           ),
         ],
@@ -479,8 +550,9 @@ class _StatusCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 140,
-            child: Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+            width: 150,
+            child: Text(label,
+                style: pixelFont(size: 8, color: PixelPalette.textMed, letterSpacing: 1.2)),
           ),
           Expanded(
             child: Wrap(
@@ -488,7 +560,11 @@ class _StatusCard extends StatelessWidget {
               children: [
                 SelectableText(
                   value,
-                  style: TextStyle(fontSize: 13, fontFamily: mono ? 'Menlo' : null),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: PixelPalette.textHigh,
+                    fontFamily: mono ? 'Menlo' : null,
+                  ),
                 ),
                 if (source != null && source != 'file') _SourceBadge(source: source),
               ],
@@ -510,29 +586,37 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _StateRow extends StatelessWidget {
-  const _StateRow({required this.label, required this.up, required this.detail});
+class _ProcRow extends StatelessWidget {
+  const _ProcRow({required this.label, required this.up, required this.detail});
   final String label;
   final bool up;
   final String detail;
   @override
   Widget build(BuildContext context) {
-    final color = up ? Colors.green.shade400 : Colors.amber.shade400;
-    return Row(
-      children: [
-        Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: 80,
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        ),
-        Expanded(
-          child: SelectableText(
-            detail,
-            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: Colors.white70),
+    final color = up ? PixelPalette.success : PixelPalette.gold;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: PixelPalette.surfaceDim,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: PixelPalette.border),
+      ),
+      child: Row(
+        children: [
+          GlowDot(color: color, size: 9),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 90,
+            child: Text(label, style: pixelFont(size: 9, color: color, letterSpacing: 1.4)),
           ),
-        ),
-      ],
+          Expanded(
+            child: SelectableText(
+              detail,
+              style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textMed),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -542,12 +626,16 @@ class _SourceBadge extends StatelessWidget {
   final String source;
   @override
   Widget build(BuildContext context) {
-    final color = source == 'env' ? Colors.orange : Colors.lightBlue;
+    final color = source == 'env' ? PixelPalette.warn : PixelPalette.accent;
     return Container(
       margin: const EdgeInsets.only(left: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(border: Border.all(color: color), borderRadius: BorderRadius.circular(4)),
-      child: Text(source, style: TextStyle(fontSize: 11, color: color, fontFamily: 'Menlo')),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        border: Border.all(color: color),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(source.toUpperCase(),
+          style: pixelFont(size: 7, color: color, letterSpacing: 1.2)),
     );
   }
 }
@@ -632,54 +720,65 @@ class _ConfigCardState extends State<_ConfigCard> {
   Widget build(BuildContext context) {
     final snap = widget.snapshot;
     final disabled = _saving || snap == null || !widget.serverRunning;
-    return _Card(
+    return PixelCard(
       title: 'Configuration',
+      titleColor: PixelPalette.gold,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!widget.serverRunning)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
+            Container(
+              margin: const EdgeInsets.only(bottom: 14),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: PixelPalette.gold.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: PixelPalette.gold.withValues(alpha: 0.5)),
+              ),
               child: Text(
-                'Server is offline — config edits go through /admin/api/config, which needs the server running. '
-                    'Start it first, then come back.',
-                style: TextStyle(color: Colors.amber.shade300, fontSize: 12),
+                'Server is offline — config edits go through /admin/api/config '
+                    'which needs the server running. Start it first.',
+                style: TextStyle(color: PixelPalette.gold.withValues(alpha: 0.9), fontSize: 12),
               ),
             ),
-          _field(label: 'Port', controller: _portCtrl, hint: '9720', mono: true, disabled: disabled),
-          _field(label: 'Project cwd', controller: _cwdCtrl, hint: '/path/to/project', mono: true, disabled: disabled),
-          _field(label: 'OTA hostname', controller: _otaCtrl, hint: '(optional, e.g. mac.local)', mono: true, disabled: disabled),
-          const SizedBox(height: 4),
+          _field(label: 'PORT', controller: _portCtrl, hint: '9720', disabled: disabled),
+          _field(label: 'PROJECT CWD', controller: _cwdCtrl, hint: '/path/to/project', disabled: disabled),
+          _field(label: 'OTA HOSTNAME', controller: _otaCtrl, hint: '(optional, e.g. mac.local)', disabled: disabled),
+          const SizedBox(height: 6),
           if (snap != null) ...[
             Text('Config file: ${snap.configPath}',
-                style: const TextStyle(color: Colors.white38, fontSize: 12, fontFamily: 'Menlo')),
+                style: const TextStyle(color: PixelPalette.textLow, fontSize: 11, fontFamily: 'Menlo')),
             if (snap.envOverrides.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'env overrides active for: ${snap.envOverrides.join(", ")}',
-                  style: const TextStyle(color: Colors.orange, fontSize: 12),
+                  'env overrides: ${snap.envOverrides.join(", ")}',
+                  style: const TextStyle(color: PixelPalette.warn, fontSize: 11),
                 ),
               ),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Wrap(
-            spacing: 8,
+            spacing: 10,
+            runSpacing: 10,
             children: [
               FilledButton.icon(
                 onPressed: disabled ? null : () => _run(widget.onSave),
-                icon: const Icon(Icons.save_outlined, size: 18),
-                label: const Text('Save'),
+                style: pixelFilledStyle(color: PixelPalette.accent),
+                icon: const Icon(Icons.save_outlined, size: 16),
+                label: const Text('SAVE'),
               ),
               OutlinedButton.icon(
                 onPressed: disabled ? null : () => _run(widget.onSaveAndRestart),
-                icon: const Icon(Icons.restart_alt, size: 18),
-                label: const Text('Save & Restart'),
+                style: pixelOutlinedStyle(foreground: PixelPalette.accent),
+                icon: const Icon(Icons.restart_alt, size: 16),
+                label: const Text('SAVE & RESTART'),
               ),
               OutlinedButton.icon(
                 onPressed: disabled ? null : widget.onReload,
-                icon: const Icon(Icons.download, size: 18),
-                label: const Text('Reload from disk'),
+                style: pixelOutlinedStyle(foreground: PixelPalette.textMed),
+                icon: const Icon(Icons.download, size: 16),
+                label: const Text('RELOAD'),
               ),
             ],
           ),
@@ -692,28 +791,42 @@ class _ConfigCardState extends State<_ConfigCard> {
     required String label,
     required TextEditingController controller,
     required String hint,
-    bool mono = false,
     bool disabled = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           SizedBox(
-            width: 120,
-            child: Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+            width: 140,
+            child: Text(label,
+                style: pixelFont(size: 8, color: PixelPalette.textMed, letterSpacing: 1.4)),
           ),
           Expanded(
             child: TextField(
               controller: controller,
               enabled: !disabled,
-              style: TextStyle(fontFamily: mono ? 'Menlo' : null, fontSize: 13),
+              style: const TextStyle(fontFamily: 'Menlo', fontSize: 13, color: PixelPalette.textHigh),
               decoration: InputDecoration(
                 isDense: true,
+                filled: true,
+                fillColor: PixelPalette.surfaceDim,
                 hintText: hint,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                hintStyle: const TextStyle(color: PixelPalette.textLow, fontFamily: 'Menlo'),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: const BorderSide(color: PixelPalette.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: const BorderSide(color: PixelPalette.accent),
+                ),
+                disabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(4),
+                  borderSide: BorderSide(color: PixelPalette.border.withValues(alpha: 0.5)),
+                ),
               ),
             ),
           ),
@@ -731,41 +844,56 @@ class _LogsCard extends StatelessWidget {
   final List<BootLogEntry> bootLogs;
   final bool showingBoot;
 
-  Color _levelColor(BuildContext context, String level) {
-    final scheme = Theme.of(context).colorScheme;
+  Color _levelColor(String level) {
     switch (level) {
-      case 'warn': return Colors.orange;
-      case 'error': return scheme.error;
-      default: return Colors.white70;
+      case 'warn': return PixelPalette.warn;
+      case 'error': return PixelPalette.error;
+      default: return PixelPalette.textHigh;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final title = showingBoot ? 'Boot logs (server stdout/stderr from launcher)' : 'Server logs';
+    final title = showingBoot ? 'Boot logs' : 'Server logs';
+    final subtitle = showingBoot ? '(stdout/stderr from launcher)' : '(structured log ring)';
     final isEmpty = showingBoot ? bootLogs.isEmpty : serverLogs.isEmpty;
-    return _Card(
+    return PixelCard(
       title: title,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 360),
-        child: isEmpty
-            ? Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                child: Text(
-                  showingBoot ? '(no boot logs yet — try Start)' : '(no log entries yet)',
-                  style: const TextStyle(color: Colors.white38),
-                ),
-              )
-            : showingBoot
-                ? _bootList(context)
-                : _serverList(context),
+      titleColor: showingBoot ? PixelPalette.gold : PixelPalette.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Text(subtitle,
+                style: const TextStyle(color: PixelPalette.textLow, fontSize: 11, fontFamily: 'Menlo')),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF08080B),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: PixelPalette.border),
+            ),
+            constraints: const BoxConstraints(maxHeight: 360, minHeight: 80),
+            child: isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Text(
+                      showingBoot ? '(no boot logs yet — try Start)' : '(no log entries yet)',
+                      style: const TextStyle(color: PixelPalette.textLow),
+                    ),
+                  )
+                : showingBoot ? _bootList() : _serverList(),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _serverList(BuildContext context) {
+  Widget _serverList() {
     return ListView.builder(
       reverse: true,
+      padding: const EdgeInsets.all(10),
       itemCount: serverLogs.length,
       itemBuilder: (context, i) {
         final e = serverLogs[serverLogs.length - 1 - i];
@@ -774,80 +902,41 @@ class _LogsCard extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 1),
           child: SelectableText.rich(
             TextSpan(children: [
-              TextSpan(text: '$ts ', style: const TextStyle(color: Colors.white38)),
-              TextSpan(text: '[${e.category}] ', style: const TextStyle(color: Color(0xFF5B8CFF))),
-              TextSpan(text: e.message, style: TextStyle(color: _levelColor(context, e.level))),
+              TextSpan(text: '$ts ', style: const TextStyle(color: PixelPalette.textLow)),
+              TextSpan(text: '[${e.category}] ', style: const TextStyle(color: PixelPalette.accent)),
+              TextSpan(text: e.message, style: TextStyle(color: _levelColor(e.level))),
             ]),
-            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.4),
+            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.45),
           ),
         );
       },
     );
   }
 
-  Widget _bootList(BuildContext context) {
+  Widget _bootList() {
     return ListView.builder(
       reverse: true,
+      padding: const EdgeInsets.all(10),
       itemCount: bootLogs.length,
       itemBuilder: (context, i) {
         final e = bootLogs[bootLogs.length - 1 - i];
         final ts = e.timestamp.toIso8601String().substring(11, 23);
-        final color = e.stream == 'stderr' ? Colors.orange : Colors.white70;
+        final color = e.stream == 'stderr' ? PixelPalette.warn : PixelPalette.textHigh;
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 1),
           child: SelectableText.rich(
             TextSpan(children: [
-              TextSpan(text: '$ts ', style: const TextStyle(color: Colors.white38)),
-              TextSpan(text: '${e.stream.padRight(6)} ', style: TextStyle(color: color.withValues(alpha: 0.6))),
+              TextSpan(text: '$ts ', style: const TextStyle(color: PixelPalette.textLow)),
+              TextSpan(
+                text: '${e.stream.padRight(6)} ',
+                style: TextStyle(color: color.withValues(alpha: 0.55)),
+              ),
               TextSpan(text: e.line, style: TextStyle(color: color)),
             ]),
-            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.4),
+            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.45),
           ),
         );
       },
-    );
-  }
-}
-
-// ─── Shared widgets ────────────────────────────────────────────────────────
-
-class _Card extends StatelessWidget {
-  const _Card({required this.title, required this.child});
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            decoration: BoxDecoration(
-              color: scheme.surfaceContainerHigh,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-              border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-            ),
-            child: Text(
-              title.toUpperCase(),
-              style: TextStyle(
-                fontSize: 11,
-                letterSpacing: 1.2,
-                fontWeight: FontWeight.w600,
-                color: scheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          Padding(padding: const EdgeInsets.all(16), child: child),
-        ],
-      ),
     );
   }
 }
@@ -857,26 +946,26 @@ class _ErrorBlock extends StatelessWidget {
   final String error;
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: scheme.errorContainer.withValues(alpha: 0.4),
-        border: Border.all(color: scheme.error),
-        borderRadius: BorderRadius.circular(8),
+        color: PixelPalette.error.withValues(alpha: 0.1),
+        border: Border.all(color: PixelPalette.error),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Cannot reach launcher',
-              style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          SelectableText(error, style: const TextStyle(fontFamily: 'Menlo', fontSize: 12)),
+          Text('LAUNCHER UNREACHABLE',
+              style: pixelFont(size: 10, color: PixelPalette.error, letterSpacing: 1.4)),
           const SizedBox(height: 8),
+          SelectableText(error,
+              style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textHigh)),
+          const SizedBox(height: 10),
           const Text(
-            'Hint: launch it with `pixelcode-server start`. It will keep running in the '
-            'background and you can drive start/stop/restart from this app.',
-            style: TextStyle(color: Colors.white60, fontSize: 12),
+            'Hint: open a terminal and run `pixelcode-server start`. The launcher '
+            'stays alive in the background and you drive everything else from here.',
+            style: TextStyle(color: PixelPalette.textMed, fontSize: 12),
           ),
         ],
       ),
