@@ -234,10 +234,6 @@ class AgentWsService {
     });
   }
 
-  void resumeSession(String sessionId) {
-    _send({'type': 'resume_session', 'sessionId': sessionId});
-  }
-
   void newChat() {
     _send({'type': 'new_chat'});
   }

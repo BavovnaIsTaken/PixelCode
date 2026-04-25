@@ -7,7 +7,7 @@
 
 import { WebSocketServer, WebSocket } from "ws";
 import { rmSync, readdirSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
-import { join, extname } from "path";
+import { join, extname, dirname } from "path";
 import { homedir, hostname, networkInterfaces } from "os";
 import { execFile, execFileSync, spawn, ChildProcess } from "child_process";
 import { createServer as createHttpServer, IncomingMessage, ServerResponse } from "http";
@@ -471,10 +471,74 @@ function historyFilePath(projectCwd: string): string {
 const chatHistory = new ChatHistory();
 chatHistory.load(historyFilePath(PROJECT_CWD));
 
-// ─── Per-client shared session ───────────────────────────────────────────────
+// ─── Shared SDK session (one per project, all clients) ───────────────────────
 
-/** One shared session per WebSocket client. All agents share conversation context. */
-const clientSessions = new WeakMap<WebSocket, string>();
+/**
+ * Single SDK session shared across all WebSocket clients of this project.
+ * Persisted to disk so it survives reconnects, app restarts, server restarts,
+ * and device switches (e.g. Mac → iPhone). One conversation per project —
+ * `chat_history` is already shared the same way.
+ */
+let currentSessionId: string | null = null;
+
+/** Serializer for query() calls on the shared session — concurrent queries on
+ *  the same resumed session ID race on `system/init` and tool event order. */
+let sessionInflight: Promise<void> = Promise.resolve();
+
+function sdkSessionFile(projectPath: string): string {
+  const key = projectPath.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".pixelcode", "projects", key, "sdk_session.json");
+}
+
+function loadPersistedSession(): void {
+  const f = sdkSessionFile(PROJECT_CWD);
+  if (!existsSync(f)) {
+    currentSessionId = null;
+    return;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(f, "utf-8")) as { sessionId?: string };
+    if (typeof raw.sessionId === "string" && raw.sessionId.length > 0) {
+      currentSessionId = raw.sessionId;
+      dbg("info", "session", `Loaded persisted SDK session: ${raw.sessionId.slice(0, 12)}…`);
+    } else {
+      currentSessionId = null;
+    }
+  } catch (e) {
+    dbg("warn", "session", `Failed to load sdk_session: ${e}`);
+    currentSessionId = null;
+  }
+}
+
+function persistSession(): void {
+  const f = sdkSessionFile(PROJECT_CWD);
+  try {
+    if (!currentSessionId) {
+      if (existsSync(f)) rmSync(f, { force: true });
+      return;
+    }
+    const dir = dirname(f);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(f, JSON.stringify({ sessionId: currentSessionId, updatedAt: Date.now() }));
+  } catch (e) {
+    dbg("warn", "session", `Failed to persist sdk_session: ${e}`);
+  }
+}
+
+/** Serialize a function on the shared SDK session. Sequential per project. */
+async function withSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prev = sessionInflight;
+  let release!: () => void;
+  sessionInflight = new Promise<void>((r) => { release = r; });
+  try {
+    await prev;
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+loadPersistedSession();
 
 /** Per-client project memory text, injected into system prompts. */
 const clientProjectContext = new WeakMap<WebSocket, string>();
@@ -858,33 +922,36 @@ If nothing notable happened, reply with: []`;
   try {
     dbg("debug", "traits", "Starting post-query reflection…");
 
-    const existingSessionId = clientSessions.get(ws);
-    const q = query({
-      prompt: reflectionPrompt,
-      options: {
-        model: "haiku",
-        cwd: PROJECT_CWD,
-        ...(existingSessionId && existingSessionId !== "pending" ? { resume: existingSessionId } : {}),
-        continue: false,
-        persistSession: false,
-        allowedTools: [],
-        maxTurns: 1,
-      },
-    });
+    const existingSessionId = currentSessionId;
+    const responseText = await withSessionLock(async () => {
+      const q = query({
+        prompt: reflectionPrompt,
+        options: {
+          model: "haiku",
+          cwd: PROJECT_CWD,
+          ...(existingSessionId ? { resume: existingSessionId } : {}),
+          continue: false,
+          persistSession: false,
+          allowedTools: [],
+          maxTurns: 1,
+        },
+      });
 
-    let responseText = "";
-    for await (const message of q) {
-      if (message.type === "assistant") {
-        const content = (message as SDKAssistantMessage).message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === "text") {
-              responseText += block.text;
+      let text = "";
+      for await (const message of q) {
+        if (message.type === "assistant") {
+          const content = (message as SDKAssistantMessage).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === "text") {
+                text += block.text;
+              }
             }
           }
         }
       }
-    }
+      return text;
+    });
 
     // Parse the JSON response
     const trimmed = responseText.trim();
@@ -1362,28 +1429,32 @@ async function processQueue(ws: WebSocket): Promise<void> {
   managerBusy.set(ws, true);
 
   try {
-    switch (task.type) {
-      case "chat":
-        await runQuery(ws, task.userMessage!, task.targetAgentId!, task.images);
-        break;
+    // Serialize on the shared SDK session — concurrent queries on the same
+    // resumed sessionId race on `system/init` and tool event order.
+    await withSessionLock(async () => {
+      switch (task.type) {
+        case "chat":
+          await runQuery(ws, task.userMessage!, task.targetAgentId!, task.images);
+          break;
 
-      case "subagent_result":
-        // Feed the result back to the manager for acknowledgement
-        await runQuery(
-          ws,
-          `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nMove the matching board card to "done" and post ONE short status line to the user per the Communication policy (e.g. "Готово: {X}." — merge with the next-step line if more work is queued, like "Зробили {A}. Працюємо над {B}."). Do not narrate the board move itself.`,
-          resolveRoleInstance(ws, "manager"),
-        );
-        break;
+        case "subagent_result":
+          // Feed the result back to the manager for acknowledgement
+          await runQuery(
+            ws,
+            `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nMove the matching board card to "done" and post ONE short status line to the user per the Communication policy (e.g. "Готово: {X}." — merge with the next-step line if more work is queued, like "Зробили {A}. Працюємо над {B}."). Do not narrate the board move itself.`,
+            resolveRoleInstance(ws, "manager"),
+          );
+          break;
 
-      case "board":
-        await runQuery(
-          ws,
-          `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work, then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
-          resolveRoleInstance(ws, "manager"),
-        );
-        break;
-    }
+        case "board":
+          await runQuery(
+            ws,
+            `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work, then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
+            resolveRoleInstance(ws, "manager"),
+          );
+          break;
+      }
+    });
   } catch (err) {
     dbg("error", "queue", `processQueue error: ${err}`);
   } finally {
@@ -1478,9 +1549,9 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       );
     }
 
-    // Resume from existing session if available, persist for future resume.
-    const existingSessionId = clientSessions.get(ws);
-    const hasSession = existingSessionId && existingSessionId !== "pending";
+    // Resume from existing shared session if available, persist for future resume.
+    const existingSessionId = currentSessionId;
+    const hasSession = !!existingSessionId;
 
     // Create Dispatch MCP server for delegating agents
     const mcpServers = canDelegate
@@ -1535,7 +1606,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       }
       contentBlocks.push({ type: "text", text: prefixedPrompt });
 
-      const sessionId = existingSessionId && existingSessionId !== "pending" ? existingSessionId : "";
+      const sessionId = existingSessionId ?? "";
       async function* imageMessageStream(): AsyncGenerator<SDKUserMessage> {
         yield {
           type: "user" as const,
@@ -1562,13 +1633,26 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     for await (const message of q) {
       messageCount++;
 
-      // Capture session ID for logging
+      // Capture session ID — persist + broadcast to all connected clients so
+      // every device records the live shared session in its SharedPreferences.
       if (
         message.type === "system" &&
         (message as SDKSystemMessage).subtype === "init"
       ) {
         const sid = (message as SDKSystemMessage).session_id;
-        clientSessions.set(ws, sid);
+        if (currentSessionId !== sid) {
+          currentSessionId = sid;
+          persistSession();
+          for (const c of wss.clients) {
+            if (c.readyState !== WebSocket.OPEN) continue;
+            send(c as WebSocket, {
+              type: "init",
+              sessionId: sid,
+              agents: agentInfoForClient(c as WebSocket),
+              workingDirectory: PROJECT_CWD,
+            });
+          }
+        }
         dbg("info", "session", `Session ID: ${sid}`);
         sendDebug(ws, "info", "session", `Session: ${sid.slice(0, 12)}…`);
       }
@@ -1597,15 +1681,22 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
 
     dbg("info", "session", `Query finished. ${messageCount} SDK messages processed.`);
     sendDebug(ws, "info", "session",
-      `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${clientSessions.get(ws)?.slice(0, 12) ?? "?"}…`
+      `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${currentSessionId?.slice(0, 12) ?? "?"}…`
     );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     dbg("error", "session", `Query failed: ${errMsg}`);
     sendDebug(ws, "error", "session", `Query FAILED: ${errMsg}`);
-    // Clear the broken session so the next message starts fresh instead of
-    // repeatedly trying to resume a session that the binary can't recover.
-    clientSessions.delete(ws);
+    // If the persisted session is unrecoverable (binary deleted the JSONL,
+    // version drift, etc.), drop it so the next query starts fresh. We detect
+    // this by message text since the SDK doesn't expose a typed error.
+    const looksStale = /session.*not.*found|no such session|cannot.*resume/i.test(errMsg);
+    if (looksStale && currentSessionId) {
+      dbg("warn", "session", `Dropping stale session ${currentSessionId.slice(0, 12)}…`);
+      sendDebug(ws, "warn", "session", "Stale session dropped — next message will start fresh");
+      currentSessionId = null;
+      persistSession();
+    }
     send(ws, {
       type: "error",
       message: errMsg,
@@ -1779,8 +1870,8 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
 // ─── Session summary generation ─────────────────────────────────────────────
 
 async function generateSessionSummary(ws: WebSocket): Promise<void> {
-  const existingSessionId = clientSessions.get(ws);
-  if (!existingSessionId || existingSessionId === "pending") {
+  const existingSessionId = currentSessionId;
+  if (!existingSessionId) {
     send(ws, { type: "summary_result", summary: "" });
     return;
   }
@@ -1789,32 +1880,35 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
   sendDebug(ws, "info", "project", "Generating session summary…");
 
   try {
-    const q = query({
-      prompt: "Summarize what was accomplished in this conversation in 2-3 concise sentences. Focus on concrete changes made and decisions taken. Be specific about files and features. Reply ONLY with the summary, nothing else.",
-      options: {
-        model: "haiku",
-        cwd: PROJECT_CWD,
-        resume: existingSessionId,
-        continue: false,
-        persistSession: false,
-        allowedTools: [],
-        maxTurns: 1,
-      },
-    });
+    const summaryText = await withSessionLock(async () => {
+      const q = query({
+        prompt: "Summarize what was accomplished in this conversation in 2-3 concise sentences. Focus on concrete changes made and decisions taken. Be specific about files and features. Reply ONLY with the summary, nothing else.",
+        options: {
+          model: "haiku",
+          cwd: PROJECT_CWD,
+          resume: existingSessionId,
+          continue: false,
+          persistSession: false,
+          allowedTools: [],
+          maxTurns: 1,
+        },
+      });
 
-    let summaryText = "";
-    for await (const message of q) {
-      if (message.type === "assistant") {
-        const content = (message as SDKAssistantMessage).message?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === "text") {
-              summaryText += block.text;
+      let text = "";
+      for await (const message of q) {
+        if (message.type === "assistant") {
+          const content = (message as SDKAssistantMessage).message?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === "text") {
+                text += block.text;
+              }
             }
           }
         }
       }
-    }
+      return text;
+    });
 
     dbg("info", "project", `Summary generated: ${summaryText.slice(0, 100)}…`);
     send(ws, { type: "summary_result", summary: summaryText.trim() });
@@ -2864,10 +2958,11 @@ wss.on("connection", (ws, request) => {
     ws,
   });
 
-  // Send initial agent list immediately
+  // Send initial agent list immediately. Real shared sessionId is propagated
+  // when known so reconnecting clients can resume context transparently.
   send(ws, {
     type: "init",
-    sessionId: "pending",
+    sessionId: currentSessionId ?? "pending",
     agents: agentInfoForClient(ws),
     workingDirectory: PROJECT_CWD,
   });
@@ -2982,32 +3077,23 @@ wss.on("connection", (ws, request) => {
           break;
 
         case "new_chat": {
-          const oldSession = clientSessions.get(ws);
+          const oldSession = currentSessionId;
           dbg("info", "ws", `New chat requested. Old session: ${oldSession ?? "none"}`);
           sendDebug(ws, "warn", "session", `New chat. Dropped session=${oldSession?.slice(0, 12) ?? "none"}`);
-          clientSessions.delete(ws);
+          currentSessionId = null;
+          persistSession();
           chatHistory.clear();
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          send(ws, {
-            type: "init",
-            sessionId: "pending",
-            agents: agentInfoForClient(ws),
-            workingDirectory: PROJECT_CWD,
-          });
-          break;
-        }
-
-        case "resume_session": {
-          const requestedId = msg.sessionId as string;
-          dbg("info", "ws", `Resume session requested: ${requestedId}`);
-          clientSessions.set(ws, requestedId);
-          sendDebug(ws, "info", "session", `Resumed session: ${requestedId.slice(0, 12)}…`);
-          send(ws, {
-            type: "init",
-            sessionId: requestedId,
-            agents: agentInfoForClient(ws),
-            workingDirectory: PROJECT_CWD,
-          });
+          // Broadcast cleared init to all clients so every device resets.
+          for (const c of wss.clients) {
+            if (c.readyState !== WebSocket.OPEN) continue;
+            send(c as WebSocket, {
+              type: "init",
+              sessionId: "pending",
+              agents: agentInfoForClient(c as WebSocket),
+              workingDirectory: PROJECT_CWD,
+            });
+          }
           break;
         }
 
@@ -3034,15 +3120,19 @@ wss.on("connection", (ws, request) => {
               }
             }
 
-            clientSessions.delete(ws);
+            currentSessionId = null;
+            persistSession();
             dbg("info", "ws", `Cleared ${cleared} session entries`);
             sendDebug(ws, "info", "session", `Cleared ${cleared} session entries from disk`);
-            send(ws, {
-              type: "init",
-              sessionId: "pending",
-              agents: agentInfoForClient(ws),
-              workingDirectory: PROJECT_CWD,
-            });
+            for (const c of wss.clients) {
+              if (c.readyState !== WebSocket.OPEN) continue;
+              send(c as WebSocket, {
+                type: "init",
+                sessionId: "pending",
+                agents: agentInfoForClient(c as WebSocket),
+                workingDirectory: PROJECT_CWD,
+              });
+            }
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             dbg("error", "ws", `Failed to clear sessions: ${errMsg}`);
@@ -3066,8 +3156,9 @@ wss.on("connection", (ws, request) => {
           traitStore = loadTraits(PROJECT_CWD);
           chatHistory.load(historyFilePath(PROJECT_CWD));
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
-          // Clear all per-client state
-          clientSessions.delete(ws);
+          // Load shared SDK session for the new project (per-project file).
+          loadPersistedSession();
+          // Clear per-client UI/state
           clientProjectContext.delete(ws);
           clientGameState.delete(ws);
           getCommLog(ws).length = 0;
@@ -3075,10 +3166,10 @@ wss.on("connection", (ws, request) => {
           getActiveTasks(ws).clear();
           getAgentMap(ws).clear();
           getEmittedTools(ws).clear();
-          // Send fresh init
+          // Send fresh init with the resolved session for this project
           send(ws, {
             type: "init",
-            sessionId: "pending",
+            sessionId: currentSessionId ?? "pending",
             agents: agentInfoForClient(ws),
             workingDirectory: PROJECT_CWD,
           });
@@ -3445,10 +3536,9 @@ wss.on("connection", (ws, request) => {
   });
 
   ws.on("close", () => {
-    const session = clientSessions.get(ws);
     const clientInfo = connectedClients.get(ws);
     const disconnectLabel = clientInfo?.nickname || clientInfo?.deviceName || "unknown";
-    dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Session was: ${session ?? "none"}`);
+    dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Shared session: ${currentSessionId ?? "none"}`);
     // Clean up task queue and running agents for this client
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
