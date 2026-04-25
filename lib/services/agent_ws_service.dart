@@ -34,10 +34,9 @@ class AgentWsService {
   /// Stable client ID (generated once per app instance).
   late final String clientId = _generateClientId();
 
-  /// Identity sent in the `client_info` handshake. Updated from the outside
-  /// via [setIdentity] whenever nickname/deviceName change; re-sent on every
-  /// (re)connect.
-  String _nickname = '';
+  /// Device label sent in the `client_info` handshake — auto-derived from the
+  /// OS hostname. Re-sent on every (re)connect. Surfaced to the host via the
+  /// admin HTTP API; main clients no longer display a connected-devices list.
   String _deviceName = sanitizeDeviceName(
     Platform.localHostname,
     currentPlatformName(),
@@ -494,25 +493,21 @@ class AgentWsService {
 
   // ─── Client identification ───────────────────────────────────────────────
 
-  /// Set the identity sent in the `client_info` handshake. Safe to call at any
-  /// time: if already connected, the server is notified immediately; otherwise
-  /// the new values are used on the next (re)connect.
-  void setIdentity({required String nickname, String? deviceName}) {
+  /// Override the device label sent in the `client_info` handshake. Safe to
+  /// call at any time: if already connected, the server is notified
+  /// immediately; otherwise the new value is used on the next (re)connect.
+  void setDeviceName(String deviceName) {
     final platform = currentPlatformName();
-    final resolvedDeviceName = deviceName != null
-        ? sanitizeDeviceName(deviceName, platform)
-        : _deviceName;
-    final changed = nickname != _nickname || resolvedDeviceName != _deviceName;
-    _nickname = nickname;
-    _deviceName = resolvedDeviceName;
-    if (changed && _isConnected) _sendClientInfo();
+    final resolved = sanitizeDeviceName(deviceName, platform);
+    if (resolved == _deviceName) return;
+    _deviceName = resolved;
+    if (_isConnected) _sendClientInfo();
   }
 
   void _sendClientInfo() {
     _send({
       'type': 'client_info',
       'clientId': clientId,
-      'nickname': _nickname,
       'deviceName': _deviceName,
       'platform': currentPlatformName(),
     });

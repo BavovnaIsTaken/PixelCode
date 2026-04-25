@@ -23,14 +23,6 @@ final wsServiceProvider = Provider<AgentWsService>((ref) {
   return service;
 });
 
-/// Side-effect provider: pushes the user's current nickname into the ws service
-/// whenever it changes. The ws service re-sends `client_info` on every reconnect,
-/// so mounting this provider once (at app root) is enough to keep identity in sync.
-final clientIdentityProvider = Provider<void>((ref) {
-  final nickname = ref.watch(gameEconomyProvider.select((g) => g.nickname));
-  ref.read(wsServiceProvider).setIdentity(nickname: nickname);
-});
-
 // ─── Connection Status ───────────────────────────────────────────────────────
 
 final connectionStatusProvider = StreamProvider<bool>((ref) {

@@ -113,7 +113,6 @@ sealed class ServerMessage {
       'game_state_sync' => GameStateSyncMessage.fromJson(json),
       'positions_sync' => PositionsSyncMessage.fromJson(json),
       'server_info' => ServerInfoMessage.fromJson(json),
-      'clients_updated' => ClientsUpdatedMessage.fromJson(json),
       'task_dispatched' => TaskDispatchedMessage.fromJson(json),
       'subagent_result' => SubagentResultMessage.fromJson(json),
       'queue_status' => QueueStatusMessage.fromJson(json),
@@ -703,63 +702,6 @@ class ServerInfoMessage implements ServerMessage {
         localIps: (json['localIps'] as List?)?.cast<String>() ?? const [],
         port: json['port'] as int? ?? 9720,
         tunnelUrl: json['tunnelUrl'] as String?,
-      );
-}
-
-// ─── Connected devices ─────────────────────────────────────────────────────
-
-class ConnectedClient {
-  final String clientId;
-  final String nickname;
-  final String deviceName;
-  final String platform; // "macos", "ios", "android", "web", "unknown"
-  final DateTime connectedAt;
-  final bool isHostMachine;
-
-  const ConnectedClient({
-    required this.clientId,
-    required this.nickname,
-    required this.deviceName,
-    required this.platform,
-    required this.connectedAt,
-    required this.isHostMachine,
-  });
-
-  /// Primary display label — nickname if set, else deviceName, else a platform fallback.
-  String get displayName {
-    if (nickname.isNotEmpty) return nickname;
-    if (deviceName.isNotEmpty) return deviceName;
-    return switch (platform) {
-      'ios' => 'iPhone',
-      'android' => 'Android',
-      'macos' => 'Mac',
-      'linux' => 'Linux',
-      'windows' => 'Windows',
-      _ => 'Device',
-    };
-  }
-
-  factory ConnectedClient.fromJson(Map<String, dynamic> json) =>
-      ConnectedClient(
-        clientId: json['clientId'] as String? ?? '',
-        nickname: json['nickname'] as String? ?? '',
-        deviceName: json['deviceName'] as String? ?? '',
-        platform: json['platform'] as String? ?? 'unknown',
-        connectedAt: DateTime.tryParse(json['connectedAt'] as String? ?? '') ??
-            DateTime.now(),
-        isHostMachine: json['isHostMachine'] as bool? ?? false,
-      );
-}
-
-class ClientsUpdatedMessage implements ServerMessage {
-  final List<ConnectedClient> clients;
-  ClientsUpdatedMessage({required this.clients});
-  factory ClientsUpdatedMessage.fromJson(Map<String, dynamic> json) =>
-      ClientsUpdatedMessage(
-        clients: (json['clients'] as List?)
-                ?.map((c) => ConnectedClient.fromJson(c as Map<String, dynamic>))
-                .toList() ??
-            const [],
       );
 }
 

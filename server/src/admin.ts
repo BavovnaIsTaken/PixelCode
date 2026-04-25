@@ -19,6 +19,7 @@ import {
   defaultConfigPath,
   type ServerConfig,
 } from "./config.js";
+import type { ConnectedClientInfo } from "./protocol.js";
 
 // ─── Log ring buffer ────────────────────────────────────────────────────────
 
@@ -56,6 +57,8 @@ export interface AdminContext {
   };
   /** Number of currently connected WebSocket clients. */
   getClientCount: () => number;
+  /** Snapshot of currently connected clients (for the admin UI). */
+  getConnectedClients: () => ConnectedClientInfo[];
   /** mDNS advertisement state. */
   getMdnsActive: () => boolean;
   /** Tailscale Funnel URL (or null if not configured). */
@@ -176,6 +179,10 @@ async function handlePostConfig(
   });
 }
 
+function handleClients(ctx: AdminContext, res: ServerResponse): void {
+  sendJson(res, 200, { clients: ctx.getConnectedClients() });
+}
+
 function handleLogs(req: IncomingMessage, res: ServerResponse): void {
   const url = new URL(req.url ?? "/", "http://localhost");
   const limitRaw = url.searchParams.get("n") ?? url.searchParams.get("limit") ?? "200";
@@ -237,6 +244,7 @@ export async function handleAdminRequest(
         "GET /admin/api/status",
         "GET /admin/api/config",
         "POST /admin/api/config",
+        "GET /admin/api/clients",
         "POST /admin/api/restart",
         "POST /admin/api/stop",
         "GET /admin/api/logs?n=N",
@@ -255,6 +263,10 @@ export async function handleAdminRequest(
   }
   if (path === "/admin/api/config" && method === "POST") {
     await handlePostConfig(ctx, req, res);
+    return { handled: true };
+  }
+  if (path === "/admin/api/clients" && method === "GET") {
+    handleClients(ctx, res);
     return { handled: true };
   }
   if (path === "/admin/api/logs" && method === "GET") {

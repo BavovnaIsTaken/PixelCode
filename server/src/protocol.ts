@@ -104,7 +104,7 @@ export type ClientMessage =
   | { type: "health_check_request" }
   | { type: "health_fix_request"; id: HealthItemId }
   // Client identification (sent on connect)
-  | { type: "client_info"; clientId: string; nickname: string; deviceName: string; platform: string }
+  | { type: "client_info"; clientId: string; deviceName: string; platform: string }
   // Dungeon training
   | { type: "start_dungeon"; agentId: string; skillType: number; difficulty: 1 | 2 | 3 };
 
@@ -385,11 +385,6 @@ export type ServerMessage =
   // Network diagnostics
   | { type: "health_check_result"; items: HealthItem[] }
   | { type: "health_item_update"; item: HealthItem }
-  // Connected devices list
-  | {
-      type: "clients_updated";
-      clients: ConnectedClientInfo[];
-    }
   // Task dispatch (non-blocking agent coordination)
   | {
       type: "task_dispatched";
@@ -464,11 +459,12 @@ export interface AndroidDeviceInfo {
   state: string; // "device" | "unauthorized" | "offline" | etc.
 }
 
-/** Info about a connected client device. */
+/** Info about a connected client device. Surfaced via the admin HTTP API
+ *  (GET /admin/api/clients) and consumed by PixelDock — main clients no
+ *  longer see the connected-devices list. */
 export interface ConnectedClientInfo {
   clientId: string;
-  nickname: string; // user-chosen display name (primary)
-  deviceName: string; // OS hostname, sanitized (secondary detail)
+  deviceName: string; // OS hostname, sanitized
   platform: string; // "macos" | "ios" | "android" | "web" | "unknown"
   connectedAt: string; // ISO 8601
   isHostMachine: boolean; // true if client connects via loopback — shares machine with the server

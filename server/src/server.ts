@@ -613,7 +613,6 @@ const managerBusy = new WeakMap<WebSocket, boolean>();
 
 interface TrackedClient {
   clientId: string;
-  nickname: string;
   deviceName: string;
   platform: string;
   connectedAt: string; // ISO 8601
@@ -628,13 +627,12 @@ function isLoopback(addr: string): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
-/** Build the clients list for broadcasting. */
+/** Build the clients list for the admin HTTP API. */
 function buildClientsList(): ConnectedClientInfo[] {
   const list: ConnectedClientInfo[] = [];
   for (const client of connectedClients.values()) {
     list.push({
       clientId: client.clientId,
-      nickname: client.nickname,
       deviceName: client.deviceName,
       platform: client.platform,
       connectedAt: client.connectedAt,
@@ -642,13 +640,6 @@ function buildClientsList(): ConnectedClientInfo[] {
     });
   }
   return list;
-}
-
-/** Broadcast updated client list to all connected clients. */
-function broadcastClientsList(): void {
-  const clients = buildClientsList();
-  broadcastAll({ type: "clients_updated", clients } as any);
-  dbg("info", "clients", `Broadcast clients list: ${clients.length} device(s)`);
 }
 
 // ─── Team metrics tracking ──────────────────────────────────────────────────
@@ -2900,6 +2891,7 @@ adminContext = {
     flagOverrides: Object.keys(__configSource.flagOverrides) as Array<keyof ServerConfig>,
   }),
   getClientCount: () => connectedClients.size,
+  getConnectedClients: () => buildClientsList(),
   getMdnsActive: () => mdnsActive,
   getTailscaleUrl: () => tailscaleUrl,
   scheduleExit: (code, reason) => {
@@ -2950,7 +2942,6 @@ wss.on("connection", (ws, request) => {
   // Register with placeholder info until client_info arrives
   connectedClients.set(ws, {
     clientId: `anon-${Date.now()}`,
-    nickname: "",
     deviceName: "",
     platform: "unknown",
     connectedAt: new Date().toISOString(),
@@ -2998,9 +2989,6 @@ wss.on("connection", (ws, request) => {
     } as any);
     dbg("info", "game", `Sent stored game state to new client (updatedAt=${latestStateUpdatedAt})`);
   }
-  // Send current clients list to the new client + broadcast updated list to all
-  broadcastClientsList();
-
   ws.on("message", async (data) => {
     try {
       const msg = JSON.parse(data.toString()) as ClientMessage;
@@ -3483,20 +3471,18 @@ wss.on("connection", (ws, request) => {
 
         // ─── Client identification ──────────────────────────────────────
         case "client_info": {
-          const info = msg as { type: "client_info"; clientId: string; nickname: string; deviceName: string; platform: string };
+          const info = msg as { type: "client_info"; clientId: string; deviceName: string; platform: string };
           const existing = connectedClients.get(ws);
           connectedClients.set(ws, {
             clientId: info.clientId,
-            nickname: info.nickname,
             deviceName: info.deviceName,
             platform: info.platform,
             connectedAt: existing?.connectedAt ?? new Date().toISOString(),
             remoteAddress: existing?.remoteAddress ?? "unknown",
             ws,
           });
-          const label = info.nickname || info.deviceName || "unknown";
+          const label = info.deviceName || "unknown";
           dbg("info", "clients", `Client identified: ${label} (${info.platform}) [${info.clientId.slice(0, 8)}]`);
-          broadcastClientsList();
           break;
         }
 
@@ -3537,13 +3523,12 @@ wss.on("connection", (ws, request) => {
 
   ws.on("close", () => {
     const clientInfo = connectedClients.get(ws);
-    const disconnectLabel = clientInfo?.nickname || clientInfo?.deviceName || "unknown";
+    const disconnectLabel = clientInfo?.deviceName || "unknown";
     dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Shared session: ${currentSessionId ?? "none"}`);
     // Clean up task queue and running agents for this client
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
     agentRunner.cancelAll(ws);
     connectedClients.delete(ws);
-    broadcastClientsList();
   });
 });
