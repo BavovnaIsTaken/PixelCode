@@ -23,6 +23,7 @@ import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
 import '../../widgets/project/project_selector.dart';
+import '../../widgets/session/connection_terminal.dart';
 import '../../widgets/session/party_counter.dart';
 import '../../widgets/session/session_picker.dart';
 import '../../widgets/settings/settings_dialog.dart';
@@ -767,6 +768,11 @@ class _HubScreenState extends ConsumerState<HubScreen>
           ),
           const SizedBox(width: 8),
           const SessionPicker(compact: true),
+          const SizedBox(width: 8),
+          // Tiny terminal-style indicator shown only while a session is being
+          // established. Hides itself once connected, restoring the regular
+          // header layout (coins/devices) below.
+          if (!isConnected) const ConnectionTerminal(),
           const Spacer(),
           // Connected devices indicator (landscape only on iPhone)
           if (isConnected &&
