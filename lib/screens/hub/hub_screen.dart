@@ -289,15 +289,15 @@ class _HubScreenState extends ConsumerState<HubScreen>
     });
   }
 
-  /// Disposes WebSocket and server process so native exit doesn't leave orphans.
-  /// Capped at 4 seconds to avoid hanging indefinitely (the server process kill
-  /// tree uses a 2-second SIGTERM grace period internally).
+  /// Closes the WebSocket cleanly so a native exit doesn't leave a half-open
+  /// connection. The server itself is owned by the external launcher daemon,
+  /// so we don't kill it here.
   Future<void> _performCleanup() async {
     try {
-      await Future.wait([
-        ref.read(wsServiceProvider).dispose(),
-        ref.read(serverProcessProvider).dispose(),
-      ]).timeout(const Duration(seconds: 4));
+      await ref
+          .read(wsServiceProvider)
+          .dispose()
+          .timeout(const Duration(seconds: 4));
     } catch (_) {
       // Best-effort — we're shutting down regardless.
     }

@@ -12,15 +12,8 @@ import '../models/agent_trait.dart';
 import '../models/game_economy.dart';
 import '../services/agent_ws_service.dart';
 import '../services/chat_persistence_service.dart';
-import '../services/server_process_service.dart';
 import 'game_economy_provider.dart';
 import 'settings_provider.dart';
-
-// ─── Server Process ─────────────────────────────────────────────────────────
-
-final serverProcessProvider = Provider<ServerProcessService>((ref) {
-  throw UnimplementedError('Must be overridden in ProviderScope');
-});
 
 // ─── WebSocket Service ───────────────────────────────────────────────────────
 
@@ -718,7 +711,6 @@ final commGraphProvider =
 class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
   static const _maxEntries = 500;
   StreamSubscription<ServerMessage>? _wsSub;
-  StreamSubscription<ServerProcessLog>? _procSub;
   StreamSubscription<String>? _connSub;
 
   @override
@@ -730,13 +722,8 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
     _connSub?.cancel();
     _connSub = ws.connectionLog.listen(_onConnLog);
 
-    final proc = ref.watch(serverProcessProvider);
-    _procSub?.cancel();
-    _procSub = proc.logs.listen(_onProcessLog);
-
     ref.onDispose(() {
       _wsSub?.cancel();
-      _procSub?.cancel();
       _connSub?.cancel();
     });
     // Preserve existing logs across reconnections (state may not exist on first build)
@@ -755,15 +742,6 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
       level: 'info',
       category: 'ws',
       message: line,
-    ));
-  }
-
-  void _onProcessLog(ServerProcessLog log) {
-    _add(DebugLogMessage(
-      timestamp: log.timestamp,
-      level: log.level,
-      category: 'process',
-      message: log.message,
     ));
   }
 

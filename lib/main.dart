@@ -11,10 +11,6 @@ import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/hub/hub_screen.dart';
 import 'services/agent_ws_service.dart';
-import 'services/project_persistence_service.dart';
-import 'services/server_process_service.dart';
-
-final serverProcess = ServerProcessService();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,7 +21,6 @@ void main() async {
       child: ProviderScope(
         overrides: [
           sharedPrefsProvider.overrideWithValue(prefs),
-          serverProcessProvider.overrideWithValue(serverProcess),
         ],
         child: const PixelCodeApp(),
       ),
@@ -72,7 +67,6 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: () async {
         await _wsService.dispose();
-        await serverProcess.dispose();
         return AppExitResponse.exit;
       },
     );
@@ -85,20 +79,15 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
       final session = ref.read(sessionProvider.notifier);
       await session.migrateFromLegacy();
 
-      // Auto-start local server on desktop
       if (!Platform.isIOS && !Platform.isAndroid) {
-        // Ensure a default local session exists on macOS
+        // Make sure desktop has a default profile pointing at the local
+        // launcher-managed server. Spawning the server itself is now the
+        // launcher daemon's job (see server/src/launcher.ts) — this app is
+        // a pure WebSocket client.
         await session.ensureDefaultDesktopProfile();
-
-        final savedPath = ProjectPersistenceService.loadCurrentProjectPath(
-          ref.read(sharedPrefsProvider),
-        );
-        await serverProcess.start(projectPath: savedPath);
-        // Wait for server to boot before connecting
-        await Future<void>.delayed(const Duration(seconds: 2));
       }
 
-      // Connect WebSocket to the active session, or fallback to local server
+      // Connect WebSocket to the active session, or fallback to local server.
       final profile = ref.read(sessionProvider).activeProfile;
       final wsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
       await ref.read(wsServiceProvider).connect(url: wsUrl);
@@ -110,11 +99,7 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   @override
   void dispose() {
     _lifecycleListener.dispose();
-    // Fallback cleanup — onExitRequested may not have fired (e.g. if the
-    // native side terminated the app directly). The _disposed guards inside
-    // both services make double-dispose safe.
     _wsService.dispose();
-    serverProcess.dispose();
     super.dispose();
   }
 
