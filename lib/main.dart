@@ -106,8 +106,6 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   @override
   Widget build(BuildContext context) {
     final theme = ref.watch(appThemeDataProvider);
-    // Keep ws identity (nickname) in sync with game economy state.
-    ref.watch(clientIdentityProvider);
 
     return MaterialApp(
       title: 'ПіксельКод',

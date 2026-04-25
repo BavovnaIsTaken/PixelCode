@@ -41,6 +41,15 @@ class AdminClient {
     return ConfigSaveResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  Future<List<ConnectedClientInfo>> clients() async {
+    final res = await http.get(_u('/admin/api/clients')).timeout(const Duration(seconds: 4));
+    _ensureOk(res);
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return (body['clients'] as List<dynamic>)
+        .map((e) => ConnectedClientInfo.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<LogEntry>> logs({int limit = 200}) async {
     final res = await http
         .get(_u('/admin/api/logs', {'n': '$limit'}))
@@ -196,6 +205,30 @@ class ConfigSaveResult {
         file: ServerConfig.fromJson(j['file'] as Map<String, dynamic>),
         restartRequired: j['restartRequired'] as bool? ?? false,
         note: j['note'] as String?,
+      );
+}
+
+class ConnectedClientInfo {
+  ConnectedClientInfo({
+    required this.clientId,
+    required this.deviceName,
+    required this.platform,
+    required this.connectedAt,
+    required this.isHostMachine,
+  });
+
+  final String clientId;
+  final String deviceName;
+  final String platform;
+  final DateTime connectedAt;
+  final bool isHostMachine;
+
+  factory ConnectedClientInfo.fromJson(Map<String, dynamic> j) => ConnectedClientInfo(
+        clientId: j['clientId'] as String? ?? '',
+        deviceName: j['deviceName'] as String? ?? '',
+        platform: j['platform'] as String? ?? 'unknown',
+        connectedAt: DateTime.tryParse(j['connectedAt'] as String? ?? '') ?? DateTime.now(),
+        isHostMachine: j['isHostMachine'] as bool? ?? false,
       );
 }
 
