@@ -4,10 +4,16 @@
   "description": "WebSocket server wrapping Claude Agent SDK for PixelCode",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
+  "bin": {
+    "pixelcode-server": "./bin/pixelcode-server.mjs"
+  },
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
-    "test": "tsx --test test/**/*.test.ts"
+    "cli": "tsx src/cli.ts",
+    "server": "tsx src/cli.ts start",
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",

@@ -49,9 +49,39 @@ import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
 import { ChatHistory } from "./chat_history.js";
 import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./health.js";
 import type { HealthItemId } from "./protocol.js";
+import { loadConfig, type ServerConfig } from "./config.js";
+import { handleAdminRequest, recordLog, type AdminContext } from "./admin.js";
 
-const PORT = parseInt(process.env.PORT ?? "9720", 10);
-let PROJECT_CWD = process.env.PROJECT_CWD ?? process.cwd();
+// ─── Config (file → env → CLI flags, highest precedence last) ───────────────
+
+function parseCliFlags(argv: string[]): { flags: Partial<ServerConfig>; configPath?: string } {
+  const flags: Partial<ServerConfig> = {};
+  let configPath: string | undefined;
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    const eq = arg.indexOf("=");
+    const key = eq === -1 ? arg : arg.slice(0, eq);
+    const value = eq === -1 ? argv[++i] : arg.slice(eq + 1);
+    if (value === undefined) continue;
+    switch (key) {
+      case "--port": case "-p": {
+        const n = parseInt(value, 10);
+        if (Number.isFinite(n)) flags.port = n;
+        break;
+      }
+      case "--cwd": case "--project-cwd": flags.projectCwd = value; break;
+      case "--ota-hostname": flags.otaHostname = value; break;
+      case "--config": configPath = value; break;
+    }
+  }
+  return { flags, configPath };
+}
+
+const __cli = parseCliFlags(process.argv);
+const __configSource = loadConfig({ configPath: __cli.configPath, flags: __cli.flags });
+const PORT = __configSource.effective.port;
+let PROJECT_CWD = __configSource.effective.projectCwd;
+const __bootedAtMs = Date.now();
 
 // ─── Debug logging ──────────────────────────────────────────────────────────
 
@@ -70,9 +100,11 @@ function dbg(level: DebugLevel, category: string, message: string, data?: unknow
   } else {
     console.log(line);
   }
+  const isoTs = new Date().toISOString();
+  recordLog({ level, category, message, timestamp: isoTs });
   // Buffer early logs so they can be replayed when the first client connects
   if (!wsClientsReady) {
-    earlyLogBuffer.push({ level, category, message, timestamp: new Date().toISOString() });
+    earlyLogBuffer.push({ level, category, message, timestamp: isoTs });
   } else {
     for (const client of wss.clients) {
       if ((client as WebSocket).readyState === WebSocket.OPEN) {
@@ -1795,7 +1827,7 @@ async function generateSessionSummary(ws: WebSocket): Promise<void> {
 
 // ─── iOS OTA deploy ────────────────────────────────────────────────────────
 
-const OTA_HOSTNAME = process.env.OTA_HOSTNAME; // optional local hostname override for LAN fallback
+const OTA_HOSTNAME = __configSource.effective.otaHostname ?? undefined; // optional local hostname override for LAN fallback
 
 /** Track active build process per client so we can cancel it. */
 const activeDeployProcess = new WeakMap<WebSocket, ChildProcess>();
@@ -1829,10 +1861,17 @@ function getOtaHost(): string {
 /** Public Tailscale Funnel URL (set once at startup, null if unavailable). */
 let tailscaleUrl: string | null = null;
 
-/** Shared HTTP request handler — serves OTA artifacts (IPA + manifest). */
+/** Shared HTTP request handler — serves /admin/* and OTA artifacts (IPA + manifest). */
 function makeOtaHandler() {
-  return (req: IncomingMessage, res: ServerResponse) => {
+  return async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
+
+    // Admin UI + API takes precedence over OTA. Loopback-only inside the handler.
+    if (url.startsWith("/admin")) {
+      const result = await handleAdminRequest(adminContext, req, res);
+      if (result.handled) return;
+    }
+
     dbg("debug", "ota", `${req.method} ${url}`);
 
     const safeName = url.split("/").pop()?.replace(/[^a-zA-Z0-9._-]/g, "");
@@ -2678,6 +2717,9 @@ async function captureIosScreenshot(ws: WebSocket): Promise<void> {
 
 // ─── HTTP + WebSocket server (single port for WS and OTA file serving) ───────
 
+// Forward-declared so makeOtaHandler's closure can find it; populated below.
+let adminContext: AdminContext;
+
 const httpServer = createHttpServer(makeOtaHandler());
 const wss = new WebSocketServer({ server: httpServer });
 httpServer.listen(PORT);
@@ -2729,18 +2771,48 @@ function buildHealthContext(): HealthContext {
   };
 }
 
-/** Unpublish mDNS and give the "goodbye" packets a moment to fly before exit. */
-function shutdownMdns(signal: string): void {
-  dbg("info", "mDNS", `Shutting down (signal=${signal}) — unpublishing…`);
+/** Unpublish mDNS, give "goodbye" packets a moment to fly, then exit with `code`. */
+function gracefulExit(code: number, reason: string): void {
+  dbg("info", "shutdown", `${reason} (exit=${code}) — unpublishing mDNS…`);
+  let exited = false;
+  const doExit = () => { if (!exited) { exited = true; process.exit(code); } };
   bonjour.unpublishAll(() => {
-    bonjour.destroy();
-    process.exit(0);
+    try { bonjour.destroy(); } catch { /* already destroyed */ }
+    doExit();
   });
-  setTimeout(() => process.exit(0), 1500);
+  setTimeout(doExit, 1500);
+}
+
+function shutdownMdns(signal: string): void {
+  gracefulExit(0, `signal=${signal}`);
 }
 
 process.on("SIGINT", () => shutdownMdns("SIGINT"));
 process.on("SIGTERM", () => shutdownMdns("SIGTERM"));
+
+// ─── Admin context (status / config / restart / stop / logs) ────────────────
+
+adminContext = {
+  configPath: __configSource.filePath,
+  bootedAtMs: __bootedAtMs,
+  getEffectiveConfig: () => ({
+    port: PORT,
+    projectCwd: PROJECT_CWD,
+    otaHostname: OTA_HOSTNAME ?? null,
+    launcherPort: __configSource.effective.launcherPort,
+  }),
+  getConfigSources: () => ({
+    envOverrides: Object.keys(__configSource.envOverrides) as Array<keyof ServerConfig>,
+    flagOverrides: Object.keys(__configSource.flagOverrides) as Array<keyof ServerConfig>,
+  }),
+  getClientCount: () => connectedClients.size,
+  getMdnsActive: () => mdnsActive,
+  getTailscaleUrl: () => tailscaleUrl,
+  scheduleExit: (code, reason) => {
+    // Defer slightly so the HTTP response flushes before we tear down.
+    setTimeout(() => gracefulExit(code, reason), 100);
+  },
+};
 process.on("exit", () => {
   bonjour.unpublishAll();
   bonjour.destroy();
@@ -2771,8 +2843,10 @@ function sendChatHistory(ws: WebSocket): void {
 
 console.log(`🏗️  PixelCode server listening on ws://localhost:${PORT}`);
 console.log(`   Working directory: ${PROJECT_CWD}`);
+console.log(`   Admin UI:        http://localhost:${PORT}/admin/  (loopback only)`);
+console.log(`   Config file:     ${__configSource.filePath}`);
 console.log(`   Roles available: ${Object.keys(roleCatalog).join(", ")}`);
-console.log(`   Trait memory: ${getAllTraits(traitStore).length} lessons loaded`);
+console.log(`   Trait memory:    ${getAllTraits(traitStore).length} lessons loaded`);
 
 wss.on("connection", (ws, request) => {
   wsClientsReady = true;
