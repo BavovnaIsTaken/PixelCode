@@ -606,6 +606,23 @@ const roleCatalog = <RoleCatalogEntry>[
           'Бачить кожен піксель — інтерфейси виходять бездоганними з першого разу.',
     ),
   ),
+  RoleCatalogEntry(
+    roleType: 'llm-specialist',
+    baseName: 'Промптер',
+    role: 'LLM-спеціаліст',
+    specialization:
+        'Claude Code та Claude Agent SDK — архітектура агентів, prompt engineering, tool use, prompt caching, MCP сервери, hooks та slash commands.',
+    weakness: 'Без LLM-задач у беклозі простоює — звичайний CRUD не його профіль.',
+    hireCost: 1200,
+    salary: 100,
+    passive: AgentPassive(
+      icon: '🤖',
+      name: 'Prompt Whisperer',
+      nameUk: 'Шептун промптів',
+      description:
+          'Знає Claude SDK напамʼять — оптимізує токени, кеш та інструменти, скорочуючи цикли інтеграції AI-фіч.',
+    ),
+  ),
 ];
 
 RoleCatalogEntry? roleCatalogFor(String roleType) {
@@ -674,6 +691,13 @@ Map<SkillType, int> initialSkillsForRole(String roleType) {
         SkillType.precision: 2,
         SkillType.creativity: 2,
         SkillType.insight: 3,
+        SkillType.reliability: 3,
+      },
+    'llm-specialist' => const {
+        SkillType.speed: 2,
+        SkillType.precision: 4,
+        SkillType.creativity: 4,
+        SkillType.insight: 5,
         SkillType.reliability: 3,
       },
     _ => const {

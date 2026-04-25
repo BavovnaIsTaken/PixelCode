@@ -422,6 +422,15 @@ const agentPalettes = <String, AgentPalette>{
     pants: Color(0xFF3F3F46),
     boots: Color(0xFF27272A),
   ),
+  'llm-specialist': AgentPalette(
+    hair: Color(0xFF2A1B4D),
+    skin: Color(0xFFE8B89D),
+    skinLight: Color(0xFFF5CDB8),
+    eye: Color(0xFF9B59FF),
+    clothes: Color(0xFF6C2BD9),
+    pants: Color(0xFF1E1B2E),
+    boots: Color(0xFF0F0E1A),
+  ),
 };
 
 /// Agent accent colors for UI elements.
@@ -433,6 +442,7 @@ Color agentAccentColor(String id) => switch (id) {
       'tester' => const Color(0xFFEC4899),
       'security' => const Color(0xFFEF4444),
       'ui-ux-designer' => const Color(0xFF3B82F6),
+      'llm-specialist' => const Color(0xFF9B59FF),
       _ => const Color(0xFF6B7280),
     };
 

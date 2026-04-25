@@ -1045,6 +1045,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
         'tester' => ('Крашер', 'контроль якості'),
         'security' => ('Страж', 'безпека'),
         'ui-ux-designer' => ('Піксельник', 'UI/UX'),
+        'llm-specialist' => ('Промптер', 'LLM-спеціаліст'),
         _ => (id, ''),
       };
 
@@ -1430,6 +1431,7 @@ class _TeamMetricsBar extends StatelessWidget {
     'tester': 'QA',
     'security': 'SEC',
     'ui-ux-designer': 'UI',
+    'llm-specialist': 'LLM',
   };
 
   @override

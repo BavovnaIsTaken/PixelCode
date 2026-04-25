@@ -37,6 +37,15 @@ export type ClientMessage =
   | { type: "board_update_task"; taskId: string; updates: Partial<TaskCardData> }
   | { type: "board_delete_task"; taskId: string }
   | { type: "board_assign_agent"; taskId: string; agentId: string; assign: boolean }
+  | {
+      type: "board_add_attachment";
+      taskId: string;
+      name: string;
+      mimeType: string;
+      sizeBytes: number;
+      dataBase64: string;
+    }
+  | { type: "board_remove_attachment"; taskId: string; attachmentId: string }
   // Project management
   | { type: "set_project"; path: string }
   | { type: "set_project_context"; memories: string }
@@ -131,6 +140,15 @@ export type TaskColumnKey = "backlog" | "in_progress" | "testing" | "done";
 export type TaskPriorityKey = "low" | "normal" | "high" | "urgent";
 export type StickyColorKey = "yellow" | "pink" | "blue" | "green" | "orange" | "purple";
 
+export interface TaskAttachmentData {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  dataBase64: string;
+  uploadedAt: string;
+}
+
 export interface TaskCardData {
   id: string;
   title: string;
@@ -146,6 +164,8 @@ export interface TaskCardData {
   allowedRoles?: string[];
   /** Task-type identifier (e.g. `'coding'`, `'review'`, `'testing'`). v5+. */
   taskType?: string;
+  /** Inline file attachments. Server keeps base64 in memory; clients enforce size cap. */
+  attachments?: TaskAttachmentData[];
 }
 
 // ─── Server → Client ────────────────────────────────────────────────────────

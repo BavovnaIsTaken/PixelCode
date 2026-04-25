@@ -28,11 +28,12 @@ const _agents = [
   'tester',
   'security',
   'ui-ux-designer',
+  'llm-specialist',
 ];
 
 Map<String, SkinPalette> _buildPalettes(List<SkinPalette> list) {
-  assert(list.length == 7);
-  return {for (int i = 0; i < 7; i++) _agents[i]: list[i]};
+  assert(list.length == _agents.length);
+  return {for (int i = 0; i < _agents.length; i++) _agents[i]: list[i]};
 }
 
 // ─── 1. Default ─────────────────────────────────────────────────────────────
@@ -90,6 +91,13 @@ final skinDefault = CharacterSkin(
       skinLight: Color(0xFFFBE8DC), eye: Color(0xFF3B82F6),
       clothes: Color(0xFF2563EB), pants: Color(0xFF3F3F46),
       boots: Color(0xFF27272A),
+    ),
+    // llm-specialist — neon violet
+    SkinPalette(
+      hair: Color(0xFF2A1B4D), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF9B59FF),
+      clothes: Color(0xFF6C2BD9), pants: Color(0xFF1E1B2E),
+      boots: Color(0xFF0F0E1A),
     ),
   ]),
 );
@@ -150,6 +158,13 @@ final skinCasual = CharacterSkin(
       clothes: Color(0xFF4488CC), pants: Color(0xFF3F4550),
       boots: Color(0xFF353535),
     ),
+    // llm-specialist — purple hoodie
+    SkinPalette(
+      hair: Color(0xFF2A1B4D), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF9B59FF),
+      clothes: Color(0xFF5B2EAF), pants: Color(0xFF2E2A48),
+      boots: Color(0xFF1A1825),
+    ),
   ]),
 );
 
@@ -208,6 +223,13 @@ final skinCorporate = CharacterSkin(
       skinLight: Color(0xFFFBE8DC), eye: Color(0xFF3B82F6),
       clothes: Color(0xFF283848), pants: Color(0xFF222E3C),
       boots: Color(0xFF0E1218),
+    ),
+    // llm-specialist — deep violet suit
+    SkinPalette(
+      hair: Color(0xFF2A1B4D), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF9B59FF),
+      clothes: Color(0xFF2A1F3D), pants: Color(0xFF221833),
+      boots: Color(0xFF0E0A14),
     ),
   ]),
 );
@@ -268,6 +290,13 @@ final skinHacker = CharacterSkin(
       clothes: Color(0xFF0E0C14), pants: Color(0xFF0A080E),
       boots: Color(0xFF060408),
     ),
+    // llm-specialist — neural net violet glow
+    SkinPalette(
+      hair: Color(0xFF14081E), skin: Color(0xFFD0A888),
+      skinLight: Color(0xFFE0BCA0), eye: Color(0xFFBE6BFF),
+      clothes: Color(0xFF100A18), pants: Color(0xFF0C0810),
+      boots: Color(0xFF050308),
+    ),
   ]),
 );
 
@@ -326,6 +355,13 @@ final skinCreative = CharacterSkin(
       skinLight: Color(0xFFFBE8DC), eye: Color(0xFF448AFF),
       clothes: Color(0xFF1565C0), pants: Color(0xFF0D47A1),
       boots: Color(0xFF0A2E6B),
+    ),
+    // llm-specialist — vivid amethyst
+    SkinPalette(
+      hair: Color(0xFF4527A0), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFD500F9),
+      clothes: Color(0xFF7B1FA2), pants: Color(0xFF311B92),
+      boots: Color(0xFF1A0E55),
     ),
   ]),
 );
@@ -386,6 +422,13 @@ final skinRetro = CharacterSkin(
       clothes: Color(0xFF5870A0), pants: Color(0xFF484858),
       boots: Color(0xFF303040),
     ),
+    // llm-specialist — dusty mauve
+    SkinPalette(
+      hair: Color(0xFF483050), skin: Color(0xFFD4B898),
+      skinLight: Color(0xFFE4CCA8), eye: Color(0xFF9078B8),
+      clothes: Color(0xFF6A4878), pants: Color(0xFF403448),
+      boots: Color(0xFF2C2434),
+    ),
   ]),
 );
 
@@ -445,6 +488,13 @@ final skinCyberpunk = CharacterSkin(
       clothes: Color(0xFF002C60), pants: Color(0xFF0A0A12),
       boots: Color(0xFF04040A),
     ),
+    // llm-specialist — synth violet glow
+    SkinPalette(
+      hair: Color(0xFF1A0830), skin: Color(0xFFC8A088),
+      skinLight: Color(0xFFD8B098), eye: Color(0xFFC000FF),
+      clothes: Color(0xFF400070), pants: Color(0xFF0E0818),
+      boots: Color(0xFF06030C),
+    ),
   ]),
 );
 
@@ -503,6 +553,13 @@ final skinCozy = CharacterSkin(
       skinLight: Color(0xFFFCE4D0), eye: Color(0xFF5888C0),
       clothes: Color(0xFF5878A8), pants: Color(0xFF484448),
       boots: Color(0xFF303034),
+    ),
+    // llm-specialist — lavender turtleneck
+    SkinPalette(
+      hair: Color(0xFF302048), skin: Color(0xFFE8C0A0),
+      skinLight: Color(0xFFF8D4B4), eye: Color(0xFFA888D0),
+      clothes: Color(0xFF6A4890), pants: Color(0xFF463848),
+      boots: Color(0xFF2E2434),
     ),
   ]),
 );

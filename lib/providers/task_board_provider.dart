@@ -135,6 +135,32 @@ class TaskBoardNotifier extends Notifier<BoardState> {
           assign: assign,
         );
   }
+
+  void addAttachment({
+    required String taskId,
+    required String name,
+    required String mimeType,
+    required int sizeBytes,
+    required String dataBase64,
+  }) {
+    ref.read(wsServiceProvider).boardAddAttachment(
+          taskId: taskId,
+          name: name,
+          mimeType: mimeType,
+          sizeBytes: sizeBytes,
+          dataBase64: dataBase64,
+        );
+  }
+
+  void removeAttachment({
+    required String taskId,
+    required String attachmentId,
+  }) {
+    ref.read(wsServiceProvider).boardRemoveAttachment(
+          taskId: taskId,
+          attachmentId: attachmentId,
+        );
+  }
 }
 
 final taskBoardProvider =

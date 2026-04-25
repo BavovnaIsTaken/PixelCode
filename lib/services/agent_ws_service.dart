@@ -284,6 +284,34 @@ class AgentWsService {
     });
   }
 
+  void boardAddAttachment({
+    required String taskId,
+    required String name,
+    required String mimeType,
+    required int sizeBytes,
+    required String dataBase64,
+  }) {
+    _send({
+      'type': 'board_add_attachment',
+      'taskId': taskId,
+      'name': name,
+      'mimeType': mimeType,
+      'sizeBytes': sizeBytes,
+      'dataBase64': dataBase64,
+    });
+  }
+
+  void boardRemoveAttachment({
+    required String taskId,
+    required String attachmentId,
+  }) {
+    _send({
+      'type': 'board_remove_attachment',
+      'taskId': taskId,
+      'attachmentId': attachmentId,
+    });
+  }
+
   // ─── Project management ───────────────────────────────────────────────────
 
   void setProject(String path) {
