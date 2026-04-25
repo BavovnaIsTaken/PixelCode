@@ -1,6 +1,6 @@
 {
   "name": "pixel-code-server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "WebSocket server wrapping Claude Agent SDK for PixelCode",
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
