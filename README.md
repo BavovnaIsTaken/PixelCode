@@ -182,6 +182,36 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 | iOS-деплой: сайлент встановлення не працює, одразу OTA | Пристрій не спарений з цим Mac через Xcode | Одноразово під'єднай iPhone по USB, у Xcode → Window → Devices and Simulators прийми pairing. Після цього можна лишатись без кабелю. |
 | Android-деплой: `adb не знайдено` | Відсутній Android SDK чи `platform-tools` | Встанови Android Studio й поставь Platform Tools, або `brew install --cask android-platform-tools`. Виставити `ANDROID_HOME`. |
 
+## Версії
+
+| Гілка | Версія | Опис |
+|-------|--------|------|
+| [`alpha-test`](../../tree/alpha-test) | `0.2.1+1` | Поточний реліз-кандидат для тестерів. Артефакти macOS — у [GitHub Releases](../../releases). |
+| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Активна розробка, попереду `alpha-test`. Суфікс `-dev` означає роботу над наступним релізом. |
+
+### v0.2.1-alpha.1 — 2026-04-25
+
+**Features**
+- Agent-level XP + `skillCap` progression — замінює per-skill XP, кап на 20-му рівні.
+- Capability-oriented 5-stat skill model: `precision` / `insight` / `reliability` / `creativity` / `speed` — визначає маршрутизацію на Haiku / Sonnet / Opus.
+- Energy meter — daily token meter як явний ігровий ресурс, прив'язаний до витрат субагентів.
+- Task outcome: roll bug / crit / incomplete на testing-done з XP та crit-бонусом.
+- Board assign gating — перевірка ролі + рівня агента при призначенні задачі (з SnackBar-фідбеком).
+- Role-biased initial skills при наймі — замість рівномірних 1/1/1/1/1.
+- Diegetic build / upgrade entry — вхід у магазин апгрейдів через ігровий світ.
+
+**Fixes**
+- Server: завжди надсилає `chat_history` snapshot при підключенні клієнта.
+- Energy коректно прив'язано до subagent cost, виправлено copy у тостах.
+- Chat merge fix, переробка контуру notch.
+- `difficulty` / `roles` тепер пробрасуються в task creation на сервер.
+
+**Docs / Infra**
+- OSS readiness: `LICENSE` (PolyForm Noncommercial 1.0.0), `CONTRIBUTING.md`, розширений README.
+- Переписана документація з iOS deployment.
+- Tailscale Funnel health-probe на сервері.
+- Pod checksum refresh для macOS.
+
 ## Ліцензія
 
 PixelCode розповсюджується під [PolyForm Noncommercial License 1.0.0](LICENSE) — source-available ліцензія, яка дозволяє будь-яке **некомерційне** використання. Коротко це означає:
@@ -367,6 +397,36 @@ For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the 
 | iOS deploy: `Tailscale Funnel inactive — OTA unavailable from another network` | Tailscale isn't running or Funnel isn't on | `brew install tailscale && sudo tailscale up`; restart the server — it enables `tailscale funnel` itself. |
 | iOS deploy: silent install fails, falls back to OTA | Device not paired with this Mac in Xcode | Connect the iPhone once via USB, accept the pairing prompt in Xcode → Window → Devices and Simulators. After that you can stay cable-free. |
 | Android deploy: `adb not found` | Missing Android SDK or platform-tools | Install Android Studio and Platform Tools, or `brew install --cask android-platform-tools`. Set `ANDROID_HOME`. |
+
+## Versions
+
+| Branch | Version | Description |
+|--------|---------|-------------|
+| [`alpha-test`](../../tree/alpha-test) | `0.2.1+1` | Current release candidate for testers. macOS artifacts in [GitHub Releases](../../releases). |
+| [`develop`](../../tree/develop) | `0.2.2-dev+2` | Active development, ahead of `alpha-test`. The `-dev` suffix marks work toward the next release. |
+
+### v0.2.1-alpha.1 — 2026-04-25
+
+**Features**
+- Agent-level XP + `skillCap` progression — replaces per-skill XP, capped at level 20.
+- Capability-oriented 5-stat skill model: `precision` / `insight` / `reliability` / `creativity` / `speed` — drives routing to Haiku / Sonnet / Opus.
+- Energy meter — daily token meter as an explicit game resource, wired to subagent cost.
+- Task outcome: bug / crit / incomplete rolls at testing-done, with XP and crit bonus.
+- Board assign gating — role + level checks at task assignment (with SnackBar feedback).
+- Role-biased initial skills at hire — instead of uniform 1/1/1/1/1.
+- Diegetic build / upgrade entry — upgrade shop accessed through the in-game world.
+
+**Fixes**
+- Server: always sends `chat_history` snapshot on client connect.
+- Energy properly wired to subagent cost, toast copy fixed.
+- Chat merge fix, notch outline rework.
+- `difficulty` / `roles` now piped through to server task creation.
+
+**Docs / Infra**
+- OSS readiness: `LICENSE` (PolyForm Noncommercial 1.0.0), `CONTRIBUTING.md`, expanded README.
+- iOS deployment doc rewrite.
+- Tailscale Funnel health probe on the server.
+- Pod checksum refresh for macOS.
 
 ## License
 
