@@ -19,9 +19,14 @@ migrate_working_dir/
 .idea/
 
 # The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
+# VS Code. We ignore .vscode/ everywhere by default, then surgically un-ignore
+# only the root .vscode/launch.json so the PixelCode / PixelDock launch
+# configs travel with the repo. The 4-line dance is needed because git can't
+# un-exclude a file whose parent directory is fully ignored.
 .vscode/
+!/.vscode/
+/.vscode/*
+!/.vscode/launch.json
 
 # Flutter/Dart/Pub related
 **/doc/api/
