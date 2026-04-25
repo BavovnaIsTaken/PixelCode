@@ -144,7 +144,6 @@ final chatSyncStateProvider = StateProvider<ChatSyncState>((ref) {
 
 class ChatNotifier extends Notifier<List<ChatMessage>> {
   StreamSubscription<ServerMessage>? _sub;
-  StreamSubscription<bool>? _connSub;
   Timer? _saveTimer;
 
   /// All messages across all agents.
@@ -161,7 +160,6 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() {
       _sub?.cancel();
-      _connSub?.cancel();
       _saveTimer?.cancel();
     });
 
@@ -178,21 +176,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
       ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     }
 
-    // Resume server session if we have a stored session ID
-    final sessionId = ChatPersistenceService.loadSessionId(prefs);
-    if (sessionId != null) {
-      _connSub?.cancel();
-      if (ws.isConnected) {
-        ws.resumeSession(sessionId);
-      } else {
-        _connSub = ws.connectionStatus.listen((connected) {
-          if (connected) {
-            _connSub?.cancel();
-            ws.resumeSession(sessionId);
-          }
-        });
-      }
-    }
+    // Server is the source of truth for the shared SDK sessionId — it
+    // auto-resumes on every query and broadcasts updates via InitMessage.
+    // We just record the latest id locally for diagnostics.
 
     return _allMessages[selectedAgent] ?? [];
   }
