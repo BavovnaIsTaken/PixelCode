@@ -21,6 +21,7 @@ import '../../widgets/canvas/agent_canvas.dart';
 import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
+import '../../widgets/facilitator/facilitator_auto_onboarder.dart';
 import '../../widgets/project/project_selector.dart';
 import '../../widgets/session/connection_terminal.dart';
 import '../../widgets/session/session_picker.dart';
@@ -464,7 +465,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
     return Scaffold(
       backgroundColor: tc.background,
-      body: AnimatedBuilder(
+      body: FacilitatorAutoOnboarder(
+        child: AnimatedBuilder(
         animation: Listenable.merge([_shutdownCtrl, _openCtrl, _iconMoveCtrl]),
         builder: (context, child) {
           final sy = _isShuttingDown
@@ -518,6 +520,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
         child: _isMobile
             ? _buildMobileLayout(isConnected)
             : _buildDesktopLayout(isConnected),
+      ),
       ),
     );
   }

@@ -9,7 +9,6 @@ import '../../models/agent_message.dart';
 import '../../models/project.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/project_provider.dart';
-import '../facilitator/launch_facilitator_onboarding.dart';
 
 class ProjectSelector extends ConsumerStatefulWidget {
   const ProjectSelector({super.key});
@@ -62,12 +61,8 @@ class _ProjectSelectorState extends ConsumerState<ProjectSelector> {
     } finally {
       if (mounted) setState(() => _isSwitching = false);
     }
-    if (!mounted) return;
-    await launchFacilitatorOnboarding(
-      context: context,
-      ref: ref,
-      projectPath: project.path,
-    );
+    // Onboarding is auto-triggered by FacilitatorAutoOnboarder once the
+    // project change + WS-connected pair is satisfied. No explicit call here.
   }
 
   Future<void> _pickFolder() async {
@@ -82,12 +77,7 @@ class _ProjectSelectorState extends ConsumerState<ProjectSelector> {
     } finally {
       if (mounted) setState(() => _isSwitching = false);
     }
-    if (!mounted) return;
-    await launchFacilitatorOnboarding(
-      context: context,
-      ref: ref,
-      projectPath: result,
-    );
+    // Onboarding is auto-triggered by FacilitatorAutoOnboarder.
   }
 
   Future<void> _rename(String newName) async {
