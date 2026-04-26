@@ -103,7 +103,7 @@ type DebugLevel = "debug" | "info" | "warn" | "error";
 const earlyLogBuffer: Array<{ level: DebugLevel; category: string; message: string; timestamp: string }> = [];
 let wsClientsReady = false;
 
-function dbg(level: DebugLevel, category: string, message: string, data?: unknown): void {
+export function dbg(level: DebugLevel, category: string, message: string, data?: unknown): void {
   const ts = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
   const prefix = { debug: "🔍", info: "ℹ️ ", warn: "⚠️ ", error: "❌" }[level];
   const line = `${ts} ${prefix} [${category}] ${message}`;
