@@ -65,3 +65,4 @@ leankg.yaml
 
 # Claude Code local instructions
 CLAUDE.md
+.claude/worktrees/
