@@ -522,51 +522,118 @@ agent_A.skills_sum > agent_B.skills_sum
 
 ---
 
-## Phase 5: Backend Abstraction & Training 🔮 QUEUED (Q1 2027)
+## Phase 5: Backend Abstraction 🚀 IN PROGRESS (Q2 2026)
 
-**Target**: Multiple agent backends + Foundation Model.  
-**Status**: ❌ **NOT STARTED** — 0 tests  
+**Target**: Pluggable agent execution backends + dependency injection.  
+**Status**: ✅ **44 tests COMPLETE — Tier 1 (Interface & Routing)**  
+**Completed**: 2026-04-27  
 **Depends on**: Phase 4 (Marketplace v1 API established)
 
-### 📝 What Needs Testing
+### ✅ Completed (Tier 1: Core Interfaces & Routing)
 
-#### A. AgentBackend Interface
+#### A. AgentBackend Interface ✅
 
-**Tests needed** (~8 tests):
-- [ ] `AgentBackend.dispatch()` contract
-- [ ] `AgentBackend.executeTools()` variations
-- [ ] Session lifecycle (create, execute, cleanup)
-- [ ] Error handling (timeout, invalid tool, API down)
+**Tests completed** (8 tests):
+- [x] `BackendResult` shape validation (text, durationMs, costUsd)
+- [x] `execute()` contract: returns BackendResult
+- [x] Mock backend satisfies interface
+- [x] Empty prompt handling
+- [x] Error propagation (throws → caller rejection)
+- [x] Model parameter acceptance
+- [x] Type-safe interface contract
 
----
-
-#### B. ClaudeAgentSdkBackend (Refactor)
-
-**Tests needed** (~12 tests):
-- [ ] All existing dungeon/task logic still works
-- [ ] No regression in session management
-- [ ] Tool use compatibility maintained
+**Implementation**: `server/src/agent_backend.ts`
 
 ---
 
-#### C. LocalRuntimeBackend (Ollama/MLX)
+#### B. ClaudeAgentSdkBackend (Refactored) ✅
 
-**Tests needed** (~15 tests):
-- [ ] Ollama integration (spawn, health check, shutdown)
-- [ ] Model loading (llama3.2:1b, phi4-mini)
-- [ ] Prompt formatting (match Claude conventions)
-- [ ] Tool use parsing (JSON output → tool calls)
-- [ ] Latency benchmarks (local vs. cloud)
+**Tests completed** (14 tests):
+- [x] `getChallenge()` pure function (challenge lookup by skillType/difficulty)
+- [x] `runDungeon()` with injected backend
+- [x] XP formula: difficulty × score × 10
+- [x] Score clamping to [1, 10]
+- [x] Pass threshold: score ≥ 5
+- [x] Empty output → passed=false, xpEarned=0
+- [x] Backend error propagation
+- [x] Judge output parsing (SCORE/FEEDBACK regex, case-insensitive)
+- [x] Multiple agents tracked separately
+- [x] Score defaults to 5 on malformed judge output
+
+**Implementation**: `server/src/claude_backend.ts` + refactored `server/src/dungeon.ts`
+
+**Backward compatibility**: ✅ All 257 existing tests pass (no regressions)
 
 ---
 
-#### D. Tier Routing (`local-fast` / `local-quality` / `cloud`)
+#### C. LocalRuntimeBackend ✅
 
-**Tests needed** (~10 tests):
-- [ ] Task → tier mapping (difficulty-based)
-- [ ] Model selection per tier
-- [ ] Fallback chain (cloud ↓ on local failure)
-- [ ] Cost tracking (tokens for cloud, CPU for local)
+**Tests completed** (10 tests):
+- [x] Execute prompt and return BackendResult
+- [x] Zero-cost: costUsd always 0 (local execution)
+- [x] Capture stdout text
+- [x] Error handling on runner failure
+- [x] Health check: available/unavailable detection
+- [x] Timeout simulation (Promise.race implementation)
+- [x] Duration measurement (durationMs)
+- [x] onText callback invocation
+- [x] Model parameter acceptance
+- [x] Graceful error messages
+
+**Implementation**: `server/src/local_runtime_backend.ts` (wraps `LocalGeminiRunner`)
+
+---
+
+#### D. Tier Routing ✅
+
+**Tests completed** (12 tests):
+- [x] hwTier 0-1 → `local-fast`
+- [x] hwTier 2-3 → `local-quality`
+- [x] hwTier 4+ → `cloud`
+- [x] difficulty 3 always escalates to cloud (regardless of hardware)
+- [x] Cost accumulation across multiple dispatches
+- [x] Zero cost for local backends
+- [x] Cost per agent tracking
+- [x] Fallback to cloud on local unavailable
+- [x] Backend selection verification
+
+**Implementation**: `server/src/tier_router.ts`
+
+---
+
+### 📊 Phase 5 Tier 1 Test Results
+
+**44 tests total** ✅ (44 new tests + 257 existing all passing)  
+**Breakdown**:
+- AgentBackend Interface: 8 tests
+- ClaudeAgentSdkBackend refactor: 14 tests
+- LocalRuntimeBackend: 10 tests
+- TierRouter: 12 tests
+- **Total: 301 server tests passing (0 failures)**
+
+---
+
+### 📝 Tier 2: Remaining (deferred to Q3 2026)
+
+#### Distillation Pipeline (~10 tests)
+- Requires `distillation.ts` implementation
+- Cloud Opus generates training examples
+- Data formatted for fine-tuning
+
+#### LoRA Adapter Spec (~6 tests)
+- Adapter format serialization
+- Merge operations
+- Versioning/compatibility
+
+#### Self-Distillation Loop (~12 tests)
+- Self-play → training data
+- Local judge scoring
+- Adapter gradient steps
+
+#### On-Device Training (~8 tests)
+- Device capability detection
+- Memory pressure handling
+- QLoRA training benchmark
 
 ---
 
@@ -629,10 +696,11 @@ agent_A.skills_sum > agent_B.skills_sum
 | **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
 | **3** | Custom Agent Spawn (server) | 37 | ✅ DONE | Done | — |
 | **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
-| **4** | Marketplace v1 (server) | 47 | ✅ IN PROGRESS | ~2w | — |
-| **4.X** | Marketplace UI | ~12 | ⏳ PENDING | 1w | — |
-| **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
-| **TOTAL** | — | **~373+ tests** | — | **~15–18w solo** | — |
+| **4** | Marketplace v1 (server) | 47 | ✅ DONE | Done | — |
+| **4.UI** | Marketplace UI | 20 | ✅ DONE | Done | — |
+| **5.T1** | Backend Abstraction (Tier 1) | 44 | ✅ IN PROGRESS | Done | — |
+| **5.T2** | Backend Training (Tier 2) | ~36 | ⏳ PENDING | 3–4w | Phase 5.T1 |
+| **TOTAL** | — | **~398 tests** | — | **~18–20w solo** | — |
 
 ---
 

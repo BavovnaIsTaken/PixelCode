@@ -3,10 +3,13 @@
  *
  * Runs a real challenge task for an agent, then uses a haiku judge to score
  * the output (1-10). XP awarded = difficulty × score × 10.
+ *
+ * Supports dependency injection of AgentBackend for testing and multi-backend support.
  */
 
-import { query, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import { hardwareToModel, type GameStateData } from "./agents.js";
+import type { AgentBackend } from "./agent_backend.js";
+import { ClaudeAgentSdkBackend } from "./claude_backend.js";
 
 // ─── Challenge definitions ─────────────────────────────────────────────────
 
@@ -240,6 +243,9 @@ export interface DungeonResult {
  * 1. Sends the challenge to the agent (using its hardware-tier model)
  * 2. Evaluates the output with a haiku judge
  * 3. Returns XP earned and feedback
+ *
+ * @param backend Optional AgentBackend for testing/multi-backend support.
+ *                Defaults to ClaudeAgentSdkBackend if not provided.
  */
 export async function runDungeon(
   agentId: string,
@@ -247,6 +253,7 @@ export async function runDungeon(
   difficulty: 1 | 2 | 3,
   gameState: GameStateData | undefined,
   projectCwd: string,
+  backend?: AgentBackend,
 ): Promise<DungeonResult> {
   const challenge = getChallenge(skillType, difficulty);
 
@@ -254,42 +261,16 @@ export async function runDungeon(
   const hwTier = gameState?.instances[agentId]?.hardware ?? 0;
   const agentModel = hardwareToModel(hwTier);
 
+  // Use provided backend or create a default Claude backend
+  const executor = backend ?? new ClaudeAgentSdkBackend(projectCwd);
+
   // ── Step 1: Run the agent on the challenge ─────────────────────────────
-  let agentOutput = "";
-
-  const agentQuery = query({
-    prompt: challenge.prompt,
-    options: {
-      systemPrompt: `You are an expert software engineer completing a training exercise.
+  const agentPrompt = `You are an expert software engineer completing a training exercise.
 Answer directly and concisely. Focus on correctness and quality.
-Do not introduce yourself. Do not explain what you are about to do. Just answer.`,
-      model: agentModel,
-      allowedTools: [],
-      cwd: projectCwd,
-      includePartialMessages: false,
-      permissionMode: "acceptEdits",
-      maxTurns: 3,
-      persistSession: false,
-    },
-  });
+Do not introduce yourself. Do not explain what you are about to do. Just answer.`;
 
-  for await (const msg of agentQuery) {
-    if (msg.type === "assistant") {
-      const asst = msg as SDKAssistantMessage;
-      if (!asst.parent_tool_use_id) {
-        for (const block of asst.message.content) {
-          if (block.type === "text") {
-            agentOutput += (block as { type: "text"; text: string }).text;
-          }
-        }
-      }
-    }
-    if (msg.type === "result") {
-      const res = msg as SDKResultMessage;
-      const resText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
-      if (resText && !agentOutput) agentOutput = resText;
-    }
-  }
+  const agentResult = await executor.execute(challenge.prompt, agentPrompt, agentModel);
+  const agentOutput = agentResult.text;
 
   if (!agentOutput.trim()) {
     return { agentId, skillType, xpEarned: 0, score: 0, feedback: "Agent produced no output.", passed: false };
@@ -317,39 +298,12 @@ Respond in this EXACT format (no other text):
 SCORE: <number 1-10>
 FEEDBACK: <one or two sentences explaining the score>`;
 
-  let judgeOutput = "";
-
-  const judgeQuery = query({
-    prompt: judgePrompt,
-    options: {
-      systemPrompt: "You are a precise code evaluator. Always respond in the exact requested format.",
-      model: "haiku",
-      allowedTools: [],
-      cwd: projectCwd,
-      includePartialMessages: false,
-      permissionMode: "acceptEdits",
-      maxTurns: 1,
-      persistSession: false,
-    },
-  });
-
-  for await (const msg of judgeQuery) {
-    if (msg.type === "assistant") {
-      const asst = msg as SDKAssistantMessage;
-      if (!asst.parent_tool_use_id) {
-        for (const block of asst.message.content) {
-          if (block.type === "text") {
-            judgeOutput += (block as { type: "text"; text: string }).text;
-          }
-        }
-      }
-    }
-    if (msg.type === "result") {
-      const res = msg as SDKResultMessage;
-      const resText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
-      if (resText && !judgeOutput) judgeOutput = resText;
-    }
-  }
+  const judgeResult = await executor.execute(
+    judgePrompt,
+    "You are a precise code evaluator. Always respond in the exact requested format.",
+    "haiku"
+  );
+  const judgeOutput = judgeResult.text;
 
   // ── Step 3: Parse judge output ─────────────────────────────────────────
   const scoreMatch = judgeOutput.match(/SCORE:\s*(\d+)/i);
