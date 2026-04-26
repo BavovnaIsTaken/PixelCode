@@ -417,12 +417,14 @@ test('agent export/import preserves skills', () {
 
 ---
 
-## Phase 4: Marketplace v1 🎯 QUEUED (Q4 2026)
+## Phase 4: Marketplace v1 🎯 IN PROGRESS (Q4 2026)
 
 **Target**: Agent trading infrastructure.  
-**Status**: ❌ **NOT STARTED** — 0 tests  
+**Status**: ✅ **CORE SERVER COMPLETE** — 24 tests passing  
+**Server**: Quality Scoring (10) + Backend (14)  
 **Blocking**: Phase 5+ (real-money economics)  
-**Depends on**: Phase 3 (Custom Agent Spawn)
+**Depends on**: Phase 3 (Custom Agent Spawn)  
+**Pending**: Commission calculations (~6), Crowdsourced data pool (~8), UI tests (~12)
 
 ### 📝 What Needs Testing
 
@@ -597,9 +599,10 @@ agent_A.skills_sum > agent_B.skills_sum
 | **1** | Core Game State | 91 | ✅ DONE | Done | — |
 | **2** | Personalization (server) | 68 | ✅ DONE | Done | Phase 1 |
 | **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
-| **3** | Custom Agent Spawn (server) | 37 | ✅ IN PROGRESS | ~1w | — |
+| **3** | Custom Agent Spawn (server) | 37 | ✅ DONE | Done | — |
 | **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
-| **4** | Marketplace v1 | ~50 | ❌ TODO | 3–4w | Phase 3 UI |
+| **4** | Marketplace v1 (server) | 24 | ✅ IN PROGRESS | ~1w | — |
+| **4.X** | Commission + Data Pool + UI | ~26 | ⏳ PENDING | 2w | — |
 | **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
 | **TOTAL** | — | **~350+ tests** | — | **~15–18w solo** | — |
 
