@@ -13,6 +13,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../models/facilitator_style.dart';
+import '../../services/localization_service.dart';
 
 /// Returned from `Navigator.pop` on submit. Always includes the
 /// project description; per-question answers keyed by `IntakeQuestion.id`.
@@ -114,7 +115,7 @@ class _FacilitatorIntakeScreenState extends State<FacilitatorIntakeScreen> {
 
                 // Project description — always asked, style-agnostic field.
                 Text(
-                  'Describe the project',
+                  localization.t('facilitator.intake.projectTitle'),
                   style: theme.textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
@@ -122,13 +123,13 @@ class _FacilitatorIntakeScreenState extends State<FacilitatorIntakeScreen> {
                   key: const Key('intake-description'),
                   controller: _descriptionCtrl,
                   maxLines: 3,
-                  decoration: const InputDecoration(
-                    hintText: 'A few sentences about what you want to build…',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    hintText: localization.t('facilitator.intake.projectHint'),
+                    border: const OutlineInputBorder(),
                   ),
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) {
-                      return 'Describe the project to continue';
+                      return localization.t('facilitator.intake.projectValidator');
                     }
                     return null;
                   },
@@ -151,7 +152,7 @@ class _FacilitatorIntakeScreenState extends State<FacilitatorIntakeScreen> {
                   key: const Key('intake-submit'),
                   onPressed: _submit,
                   icon: const Icon(Icons.arrow_forward_rounded),
-                  label: const Text('Start'),
+                  label: Text(localization.t('facilitator.intake.submit')),
                 ),
               ],
             ),

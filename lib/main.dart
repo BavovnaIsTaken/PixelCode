@@ -11,9 +11,11 @@ import 'providers/settings_provider.dart';
 import 'providers/theme_provider.dart';
 import 'screens/hub/hub_screen.dart';
 import 'services/agent_ws_service.dart';
+import 'services/localization_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await localization.initialize();
   final prefs = await SharedPreferences.getInstance();
 
   runApp(
