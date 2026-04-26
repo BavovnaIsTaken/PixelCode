@@ -2007,6 +2007,30 @@ function makeOtaHandler() {
       if (result.handled) return;
     }
 
+    // Discovery metadata: lets LAN-discovered clients learn the public Funnel
+    // URL before opening a session, so the SessionProfile is created with the
+    // remote-reachable address instead of the LAN IP.
+    if (url === "/metadata.json" || url === "/metadata") {
+      const localIps: string[] = [];
+      for (const ifaces of Object.values(networkInterfaces())) {
+        for (const iface of ifaces ?? []) {
+          if (iface.family === "IPv4" && !iface.internal) localIps.push(iface.address);
+        }
+      }
+      const body = JSON.stringify({
+        hostname: hostname(),
+        localIps,
+        port: PORT,
+        tunnelUrl: tailscaleUrl,
+      });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
+
     dbg("debug", "ota", `${req.method} ${url}`);
 
     const safeName = url.split("/").pop()?.replace(/[^a-zA-Z0-9._-]/g, "");

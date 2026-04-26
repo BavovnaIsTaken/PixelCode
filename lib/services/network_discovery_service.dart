@@ -8,9 +8,75 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:bonsoir/bonsoir.dart';
 import 'package:flutter/foundation.dart';
+
+/// Server-published discovery metadata. The server returns this from
+/// `GET /metadata.json` so a LAN-discovered client can learn its public
+/// Tailscale Funnel URL and create a session profile that works off-LAN too.
+class ServerMetadata {
+  final String hostname;
+  final List<String> localIps;
+  final int port;
+  final String? tunnelUrl;
+
+  const ServerMetadata({
+    required this.hostname,
+    required this.localIps,
+    required this.port,
+    this.tunnelUrl,
+  });
+
+  factory ServerMetadata.fromJson(Map<String, dynamic> json) => ServerMetadata(
+        hostname: json['hostname'] as String? ?? '',
+        localIps: ((json['localIps'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toList(),
+        port: json['port'] as int? ?? 9720,
+        tunnelUrl: (json['tunnelUrl'] as String?)?.trim().isEmpty == true
+            ? null
+            : json['tunnelUrl'] as String?,
+      );
+}
+
+/// Fetch `/metadata.json` from a discovered LAN server. Short timeout — this
+/// is a best-effort lookup; callers fall back to the plain LAN host on null.
+Future<ServerMetadata?> fetchServerMetadata({
+  required String host,
+  required int port,
+  Duration timeout = const Duration(milliseconds: 1500),
+  void Function(String)? onLog,
+}) async {
+  void log(String msg) {
+    debugPrint('[metadata] $msg');
+    onLog?.call('[metadata] $msg');
+  }
+
+  final client = HttpClient()..connectionTimeout = timeout;
+  try {
+    final uri = Uri.parse('http://$host:$port/metadata.json');
+    log('GET $uri');
+    final req = await client.getUrl(uri).timeout(timeout);
+    final resp = await req.close().timeout(timeout);
+    if (resp.statusCode != 200) {
+      log('non-200: ${resp.statusCode}');
+      return null;
+    }
+    final body = await resp.transform(utf8.decoder).join().timeout(timeout);
+    final json = jsonDecode(body) as Map<String, dynamic>;
+    final meta = ServerMetadata.fromJson(json);
+    log('tunnelUrl=${meta.tunnelUrl ?? "(none)"}');
+    return meta;
+  } catch (e) {
+    log('failed: $e');
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
 
 class DiscoveredServer {
   final String name;

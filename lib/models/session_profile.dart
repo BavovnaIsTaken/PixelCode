@@ -13,11 +13,17 @@ class SessionProfile {
   final String host;
   final int port;
 
+  /// Optional Tailscale Funnel URL learned from the server during discovery.
+  /// When set, [wsUrl] prefers it so the profile remains reachable off-LAN.
+  /// LAN [host]/[port] are kept as a fallback for offline / tunnel-down cases.
+  final String? tunnelUrl;
+
   const SessionProfile({
     required this.id,
     required this.name,
     required this.host,
     this.port = 9720,
+    this.tunnelUrl,
   });
 
   /// Whether this host requires a secure WebSocket (tunnel or known secure domain).
@@ -27,6 +33,12 @@ class SessionProfile {
       host.startsWith('wss://');
 
   String get wsUrl {
+    // Prefer the public Funnel URL when available — works on and off LAN.
+    final tunnel = tunnelUrl;
+    if (tunnel != null && tunnel.isNotEmpty) {
+      if (tunnel.startsWith('ws://') || tunnel.startsWith('wss://')) return tunnel;
+      return 'wss://$tunnel';
+    }
     // If the host is already a full wss:// URL (e.g. from tunnel), use directly
     if (host.startsWith('wss://')) return host;
     if (host.startsWith('ws://')) return host;
@@ -39,12 +51,14 @@ class SessionProfile {
     String? name,
     String? host,
     int? port,
+    String? tunnelUrl,
   }) =>
       SessionProfile(
         id: id,
         name: name ?? this.name,
         host: host ?? this.host,
         port: port ?? this.port,
+        tunnelUrl: tunnelUrl ?? this.tunnelUrl,
       );
 
   Map<String, dynamic> toJson() => {
@@ -52,6 +66,7 @@ class SessionProfile {
         'name': name,
         'host': host,
         'port': port,
+        if (tunnelUrl != null) 'tunnelUrl': tunnelUrl,
       };
 
   factory SessionProfile.fromJson(Map<String, dynamic> json) => SessionProfile(
@@ -59,6 +74,7 @@ class SessionProfile {
         name: json['name'] as String,
         host: json['host'] as String,
         port: json['port'] as int? ?? 9720,
+        tunnelUrl: json['tunnelUrl'] as String?,
       );
 
   static String encodeList(List<SessionProfile> profiles) =>
