@@ -1,0 +1,17 @@
+{
+  "facilitator.picker.title": "Choose your facilitator",
+  "facilitator.picker.subtitle": "Pick a style that matches how you want to lead this project. You can switch later.",
+  "facilitator.picker.choose": "Choose",
+  "facilitator.output.questLine": "Quest line",
+  "facilitator.output.missionBriefing": "Mission briefing",
+  "facilitator.output.milestoneTree": "Milestone tree",
+  "facilitator.output.sprintBacklog": "Sprint backlog",
+  "facilitator.output.koanEntry": "Reflection journal",
+  "facilitator.ceremony.none": "No ceremonies",
+  "facilitator.ceremony.scheduled": "scheduled",
+  "facilitator.ceremony.eventDriven": "event-driven",
+  "facilitator.intake.projectTitle": "Describe the project",
+  "facilitator.intake.projectHint": "A few sentences about what you want to build…",
+  "facilitator.intake.projectValidator": "Describe the project to continue",
+  "facilitator.intake.submit": "Start"
+}
