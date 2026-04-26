@@ -64,6 +64,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   int _lastExpansions = -1;
   List<PlacedRoom>? _lastRooms;
   List<FurniturePlacement>? _lastFurniture;
+  List<PlacedCorridor>? _lastCorridors;
 
   StreamSubscription<ServerMessage>? _msgSub;
   Timer? _posSyncTimer;
@@ -175,20 +176,23 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final commEvents = ref.watch(commGraphProvider);
     final gameEconomy = ref.watch(gameEconomyProvider);
 
-    // Rebuild tile map when office level, expansions, rooms, or furniture change
+    // Rebuild tile map when office level, expansions, rooms, furniture, or corridors change
     final level = gameEconomy.officeLevel;
     final expansions = gameEconomy.officeExpansions;
     final rooms = gameEconomy.placedRooms;
     final furniture = gameEconomy.placedFurniture;
+    final corridors = gameEconomy.placedCorridors;
     if (!identical(rooms, _lastRooms) ||
         !identical(furniture, _lastFurniture) ||
+        !identical(corridors, _lastCorridors) ||
         level != _lastLevel ||
         expansions != _lastExpansions) {
       _lastLevel = level;
       _lastExpansions = expansions;
       _lastRooms = rooms;
       _lastFurniture = furniture;
-      _gameState.rebuildLayout(level, expansions, rooms, furniture);
+      _lastCorridors = corridors;
+      _gameState.rebuildLayout(level, expansions, rooms, furniture, corridors);
     }
 
     // Sync agent states and hired status into game engine
@@ -368,6 +372,14 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                   ghostRoomRotation: buildMode.ghostRotation,
                                   ghostIsValid: _ghostIsValid(
                                       buildMode, gameEconomy.placedRooms),
+                                  adjacencyLabel: _adjacencyLabel(
+                                      buildMode, gameEconomy.placedRooms),
+                                  placedCorridors:
+                                      gameEconomy.placedCorridors,
+                                  corridorAnchorCol:
+                                      buildMode.corridorAnchorCol,
+                                  corridorAnchorRow:
+                                      buildMode.corridorAnchorRow,
                                 ),
                               ),
                             ),
@@ -465,15 +477,30 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               onPlace: () {
                 final mode = ref.read(buildModeProvider);
                 final rooms = ref.read(gameEconomyProvider).placedRooms;
-                if (mode.ghostCol != null && _ghostIsValid(mode, rooms)) {
-                  ref.read(gameEconomyProvider.notifier).placeRoom(
-                        mode.selectedRoomType!,
-                        mode.ghostCol!,
-                        mode.ghostRow!,
-                        rotation: mode.ghostRotation,
-                      );
-                  ref.read(buildModeProvider.notifier).clearGhost();
+                if (mode.ghostCol == null || !_ghostIsValid(mode, rooms)) {
+                  return;
                 }
+                final econ = ref.read(gameEconomyProvider.notifier);
+                final templateId = mode.selectedTemplateId;
+                if (templateId != null) {
+                  final template = roomTemplateById(templateId);
+                  if (template != null) {
+                    econ.placeRoomTemplate(
+                      template,
+                      mode.ghostCol!,
+                      mode.ghostRow!,
+                      rotation: mode.ghostRotation,
+                    );
+                  }
+                } else {
+                  econ.placeRoom(
+                    mode.selectedRoomType!,
+                    mode.ghostCol!,
+                    mode.ghostRow!,
+                    rotation: mode.ghostRotation,
+                  );
+                }
+                ref.read(buildModeProvider.notifier).clearGhost();
               },
             ),
           ),
@@ -758,6 +785,17 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     return true;
   }
 
+  /// Returns the adjacency bonus/penalty label for the current ghost, or null.
+  String? _adjacencyLabel(BuildModeState mode, List<PlacedRoom> rooms) {
+    final rt = mode.selectedRoomType;
+    final gc = mode.ghostCol;
+    final gr = mode.ghostRow;
+    if (rt == null || gc == null || gr == null) return null;
+    final pct = computeAdjacencyBonusPercent(rt, gc, gr, mode.ghostRotation, rooms);
+    if (pct == null) return null;
+    return pct > 0 ? '+$pct%' : '−${pct.abs()}%';
+  }
+
   void _handleBuildModeTap(Offset screenPos, BoxConstraints constraints,
       List<PlacedRoom> rooms) {
     final world = _screenToWorld(screenPos, constraints);
@@ -767,9 +805,25 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final mode = ref.read(buildModeProvider);
     final notifier = ref.read(buildModeProvider.notifier);
 
-    // Two-step placement: the first tap positions the ghost (preview only),
-    // the second tap on the same tile commits. Tapping a different tile
-    // moves the ghost without placing.
+    // ── Corridor placement — two-tap: anchor then endpoint ──────────────────
+    if (mode.section == BuildSection.corridors) {
+      final ac = mode.corridorAnchorCol;
+      final ar = mode.corridorAnchorRow;
+      if (ac == null || ar == null) {
+        // First tap — set anchor.
+        notifier.setCorridorAnchor(col, row);
+        notifier.setGhost(col: col, row: row);
+      } else {
+        // Second tap — compute L-path and place.
+        final path = _computeCorridorPath(ac, ar, col, row);
+        final econ = ref.read(gameEconomyProvider.notifier);
+        econ.placeCorridor(path, wide: mode.corridorWide);
+        notifier.clearCorridorAnchor();
+      }
+      return;
+    }
+
+    // ── Room / template placement — two-step ghost ───────────────────────────
     final isRepeatTap = mode.ghostCol == col && mode.ghostRow == row;
     if (!isRepeatTap) {
       notifier.setGhost(col: col, row: row);
@@ -778,14 +832,37 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
     final rt = mode.selectedRoomType;
     if (rt == null) return;
-    // Re-read mode here in case ghost was just set above and we need fresh
-    // values; this branch only runs on a repeat-tap so the values are stable.
     if (!_ghostIsValid(mode, rooms)) return;
 
-    ref
-        .read(gameEconomyProvider.notifier)
-        .placeRoom(rt, col, row, rotation: mode.ghostRotation);
+    final econ = ref.read(gameEconomyProvider.notifier);
+    final templateId = mode.selectedTemplateId;
+    if (templateId != null) {
+      final template = roomTemplateById(templateId);
+      if (template != null) {
+        econ.placeRoomTemplate(template, col, row, rotation: mode.ghostRotation);
+      }
+    } else {
+      econ.placeRoom(rt, col, row, rotation: mode.ghostRotation);
+    }
     notifier.clearGhost();
+  }
+
+  /// Computes the L-shaped tile path (horizontal first, then vertical) from
+  /// anchor to endpoint. No duplicate tiles — the corner is included once.
+  List<({int col, int row})> _computeCorridorPath(
+      int ac, int ar, int gc, int gr) {
+    final tiles = <String, ({int col, int row})>{};
+    final cMin = ac < gc ? ac : gc;
+    final cMax = ac < gc ? gc : ac;
+    for (int c = cMin; c <= cMax; c++) {
+      tiles['$c,$ar'] = (col: c, row: ar);
+    }
+    final rMin = ar < gr ? ar : gr;
+    final rMax = ar < gr ? gr : ar;
+    for (int r = rMin; r <= rMax; r++) {
+      tiles['$gc,$r'] = (col: gc, row: r);
+    }
+    return tiles.values.toList();
   }
 
   void _updateBuildGhost(Offset screenPos, BoxConstraints constraints) {

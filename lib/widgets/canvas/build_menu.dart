@@ -7,9 +7,10 @@
 ///    a horizontal chip row across the top and the content list below.
 ///
 /// Six sections: Rooms / Templates / Corridors / Walls / Floors / Decor.
-/// Stage 1 ships meaningful content only for **Rooms**; the other sections
-/// render a "Скоро в Stage 2" placeholder so the navigation IA is honest
-/// about what's available now and what's coming.
+/// Stage 1 shipped **Rooms**; Stage 2 added **Decor** (migrated from the
+/// Shop's "Меблі" tab). Templates / Corridors / Walls / Floors still render
+/// a "Скоро в Stage 2" placeholder so the IA stays honest about what's
+/// available now and what's coming.
 library;
 
 import 'dart:math' as math;
@@ -23,6 +24,7 @@ import '../../models/resource_pack.dart';
 import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import 'build_decor_section.dart';
 import 'office_game_state.dart';
 import 'room_sprites.dart';
 import 'room_themes.dart';
@@ -48,8 +50,15 @@ extension BuildSectionDisplay on BuildSection {
         BuildSection.decor => Icons.local_florist_outlined,
       };
 
-  /// Sections without Stage 1 content show a "coming soon" panel.
-  bool get isStage1Ready => this == BuildSection.rooms;
+  /// Sections without Stage 1/2 content show a "coming soon" panel.
+  /// Stage 2 added Templates and Decor; Walls/Floors/Corridors still pending.
+  bool get isStage1Ready =>
+      this == BuildSection.rooms ||
+      this == BuildSection.decor ||
+      this == BuildSection.templates ||
+      this == BuildSection.corridors ||
+      this == BuildSection.walls ||
+      this == BuildSection.floors;
 }
 
 /// Viewport-width breakpoint that decides the layout. Note: this is the
@@ -356,7 +365,303 @@ class BuildMenu extends ConsumerWidget {
     if (mode.section == BuildSection.rooms) {
       return _roomsList(ref, economy, mode.selectedRoomType, tick);
     }
+    if (mode.section == BuildSection.templates) {
+      return _templatesList(ref, economy, mode.selectedTemplateId, tick);
+    }
+    if (mode.section == BuildSection.corridors) {
+      return _corridorSection(context, ref, economy, mode);
+    }
+    if (mode.section == BuildSection.walls) {
+      return _skinPackSection(
+        context,
+        ref,
+        economy,
+        mode.selectedPlacedRoomId,
+        isWall: true,
+      );
+    }
+    if (mode.section == BuildSection.floors) {
+      return _skinPackSection(
+        context,
+        ref,
+        economy,
+        mode.selectedPlacedRoomId,
+        isWall: false,
+      );
+    }
+    if (mode.section == BuildSection.decor) {
+      return const BuildDecorSection();
+    }
     return const SizedBox.shrink();
+  }
+
+  Widget _corridorSection(
+    BuildContext context,
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+  ) {
+    final c = context.appColors;
+    final notifier = ref.read(buildModeProvider.notifier);
+    final hasAnchor = mode.corridorAnchorCol != null;
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        // ── Wide / Narrow toggle ──────────────────────────────────────────
+        Text(
+          'Тип коридору:',
+          style: TextStyle(
+              color: c.textLow, fontSize: 10, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _CorridorTypeChip(
+                label: 'Вузький',
+                subtitle: '₲50/тайл',
+                icon: Icons.remove,
+                selected: !mode.corridorWide,
+                onTap: () {
+                  if (mode.corridorWide) notifier.toggleCorridorWide();
+                },
+                colors: c,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _CorridorTypeChip(
+                label: 'Широкий',
+                subtitle: '₲90/тайл  +3% швид.',
+                icon: Icons.remove_road,
+                selected: mode.corridorWide,
+                onTap: () {
+                  if (!mode.corridorWide) notifier.toggleCorridorWide();
+                },
+                colors: c,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // ── Placement instructions / status ───────────────────────────────
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 200),
+          child: hasAnchor
+              ? _CorridorStatus(
+                  key: const ValueKey('anchor-set'),
+                  icon: Icons.adjust,
+                  color: c.gold,
+                  title: 'Якір встановлено',
+                  subtitle:
+                      '(${mode.corridorAnchorCol}, ${mode.corridorAnchorRow}) → натисніть другу точку на канвасі',
+                  trailing: TextButton(
+                    onPressed: notifier.clearCorridorAnchor,
+                    child: Text('Скасувати',
+                        style: TextStyle(color: c.error, fontSize: 11)),
+                  ),
+                  colors: c,
+                )
+              : _CorridorStatus(
+                  key: const ValueKey('no-anchor'),
+                  icon: Icons.touch_app_outlined,
+                  color: c.textMedium,
+                  title: 'Крок 1',
+                  subtitle: 'Натисніть першу точку на канвасі щоб встановити якір',
+                  trailing: null,
+                  colors: c,
+                ),
+        ),
+        const SizedBox(height: 8),
+        if (!hasAnchor)
+          _CorridorStatus(
+            icon: Icons.place_outlined,
+            color: c.textMedium,
+            title: 'Крок 2',
+            subtitle: 'Натисніть другу точку — коридор відмалюється автоматично (Г-форма)',
+            trailing: null,
+            colors: c,
+          ),
+        const SizedBox(height: 16),
+        // ── Balance hint ─────────────────────────────────────────────────
+        Row(
+          children: [
+            Icon(Icons.account_balance_wallet_outlined,
+                size: 13, color: c.textLow),
+            const SizedBox(width: 4),
+            Text(
+              'Баланс: ₲${economy.grymni}',
+              style: TextStyle(color: c.textLow, fontSize: 11),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _skinPackSection(
+    BuildContext context,
+    WidgetRef ref,
+    GameState economy,
+    String? selectedRoomId, {
+    required bool isWall,
+  }) {
+    final c = context.appColors;
+    final notifier = ref.read(gameEconomyProvider.notifier);
+    final ownedIds =
+        isWall ? economy.ownedWallSkinPacks : economy.ownedFloorSkinPacks;
+
+    final selectedRoom = selectedRoomId != null
+        ? economy.placedRooms
+            .where((r) => r.id == selectedRoomId)
+            .firstOrNull
+        : null;
+    final activeSkinId = isWall
+        ? (selectedRoom?.wallSkinId ?? kWallSkinFreeId)
+        : (selectedRoom?.floorSkinId ?? kFloorSkinFreeId);
+
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (economy.placedRooms.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'Спочатку розмістіть кімнату на канвасі.',
+              style: TextStyle(color: c.textLow, fontSize: 11),
+              textAlign: TextAlign.center,
+            ),
+          )
+        else ...[
+          Text(
+            'Вибрати кімнату:',
+            style: TextStyle(
+                color: c.textLow, fontSize: 10, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final room in economy.placedRooms)
+                GestureDetector(
+                  onTap: () => ref
+                      .read(buildModeProvider.notifier)
+                      .selectPlacedRoom(room.id),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: room.id == selectedRoomId
+                          ? c.accent.withValues(alpha: 0.25)
+                          : c.surface.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: room.id == selectedRoomId
+                            ? c.accent
+                            : c.border,
+                      ),
+                    ),
+                    child: Text(
+                      room.type.nameUk,
+                      style: TextStyle(
+                        color: room.id == selectedRoomId
+                            ? c.accent
+                            : c.textHigh,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (selectedRoom != null) ...[
+            Text(
+              isWall ? 'Оздоблення стін:' : 'Покриття підлоги:',
+              style: TextStyle(
+                  color: c.textLow,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            if (isWall)
+              for (final pack in wallSkinPackCatalog)
+                _SkinPackCard(
+                  packId: pack.id,
+                  packName: pack.name,
+                  packDescription: pack.description,
+                  packCost: pack.cost,
+                  previewColors: [
+                    Color(pack.wallBase),
+                    Color(pack.wallTop),
+                    Color(pack.wallInner),
+                  ],
+                  isOwned: pack.cost == 0 || ownedIds.contains(pack.id),
+                  isActive: pack.id == activeSkinId,
+                  economy: economy,
+                  onBuy: () => notifier.purchaseWallSkinPack(pack),
+                  onApply: () =>
+                      notifier.applyRoomWallSkin(selectedRoom.id, pack.id),
+                )
+            else
+              for (final pack in floorSkinPackCatalog)
+                _SkinPackCard(
+                  packId: pack.id,
+                  packName: pack.name,
+                  packDescription: pack.description,
+                  packCost: pack.cost,
+                  previewColors: [
+                    Color(pack.floorDark),
+                    Color(pack.floorLight),
+                    Color(pack.floorGrid),
+                  ],
+                  isOwned: pack.cost == 0 || ownedIds.contains(pack.id),
+                  isActive: pack.id == activeSkinId,
+                  economy: economy,
+                  onBuy: () => notifier.purchaseFloorSkinPack(pack),
+                  onApply: () =>
+                      notifier.applyRoomFloorSkin(selectedRoom.id, pack.id),
+                ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Виберіть кімнату вище щоб застосувати скін.',
+                style: TextStyle(color: c.textLow, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
+  Widget _templatesList(
+    WidgetRef ref,
+    GameState economy,
+    String? selectedTemplateId,
+    int tick,
+  ) {
+    final available = roomTemplateCatalog
+        .where((t) => _isRoomAvailable(t.baseRoom, economy))
+        .toList();
+    return ListView.separated(
+      padding: const EdgeInsets.all(12),
+      itemCount: available.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      itemBuilder: (context, i) => _TemplateCard(
+        template: available[i],
+        economy: economy,
+        tick: tick,
+        isSelected: selectedTemplateId == available[i].id,
+        onTap: () =>
+            ref.read(buildModeProvider.notifier).toggleTemplate(available[i]),
+      ),
+    );
   }
 
   Widget _comingSoonStub(BuildContext context, BuildSection section) {
@@ -586,4 +891,458 @@ class _RoomPreviewPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RoomPreviewPainter old) =>
       old.type != type || old.theme != theme || old.tick != tick;
+}
+
+
+// ─── Template card ──────────────────────────────────────────────────────────
+
+class _TemplateCard extends StatelessWidget {
+  final RoomTemplate template;
+  final GameState economy;
+  final int tick;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _TemplateCard({
+    required this.template,
+    required this.economy,
+    required this.tick,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    final raw = template.rawCost(furnitureCatalog);
+    final bundle = template.bundleCost(furnitureCatalog);
+    final saved = raw - bundle;
+    final canAfford = economy.grymni >= bundle;
+    final placedCount =
+        economy.placedRooms.where((r) => r.type == template.baseRoom).length;
+    final atCap = placedCount >= template.baseRoom.maxPerOffice;
+    final available = canAfford && !atCap;
+    final roomTheme = roomThemeForLevel(economy.officeLevel);
+
+    return InkWell(
+      onTap: available ? onTap : null,
+      borderRadius: BorderRadius.circular(8),
+      child: Opacity(
+        opacity: available ? 1.0 : 0.5,
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.surfaceDim,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isSelected ? c.accent : c.border,
+              width: isSelected ? 2 : 1,
+            ),
+          ),
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 64,
+                    height: 56,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: CustomPaint(
+                        painter: _RoomPreviewPainter(
+                          type: template.baseRoom,
+                          theme: roomTheme,
+                          tick: tick,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${template.baseRoom.icon} ${template.name}',
+                          style: TextStyle(
+                            color: c.textHigh,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          template.description,
+                          style: TextStyle(color: c.textMedium, fontSize: 10),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Меблів: ${template.furniture.length} · '
+                          'до ${template.baseRoom.maxPerOffice} шт.',
+                          style: TextStyle(color: c.textLow, fontSize: 9),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // Pricing breakdown — base + furniture − bundle discount.
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: c.surface,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'База ₲${template.baseRoom.cost} + меблі '
+                        '₲${raw - template.baseRoom.cost} − ${template.discountPercent}%',
+                        style: TextStyle(color: c.textMedium, fontSize: 10),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '₲$bundle',
+                      style: TextStyle(
+                        color: canAfford ? c.gold : c.error,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (saved > 0) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: c.success.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '−₲$saved',
+                          style: TextStyle(
+                            color: c.success,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (atCap) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Досягнуто ліміту базової кімнати',
+                  style: TextStyle(
+                    color: c.error,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Skin pack card ──────────────────────────────────────────────────────────
+
+class _SkinPackCard extends StatelessWidget {
+  const _SkinPackCard({
+    required this.packId,
+    required this.packName,
+    required this.packDescription,
+    required this.packCost,
+    required this.previewColors,
+    required this.isOwned,
+    required this.isActive,
+    required this.economy,
+    required this.onBuy,
+    required this.onApply,
+  });
+
+  final String packId;
+  final String packName;
+  final String packDescription;
+  final int packCost;
+  final List<Color> previewColors;
+  final bool isOwned;
+  final bool isActive;
+  final GameState economy;
+  final VoidCallback onBuy;
+  final VoidCallback onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    final canAfford = economy.grymni >= packCost;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        decoration: BoxDecoration(
+          color: isActive
+              ? c.accent.withValues(alpha: 0.12)
+              : c.surface.withValues(alpha: 0.7),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isActive ? c.accent : c.border,
+            width: isActive ? 1.5 : 1,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: [
+              // Color swatch preview — 3 stacked rects
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: SizedBox(
+                  width: 36,
+                  height: 36,
+                  child: Column(
+                    children: [
+                      for (final col in previewColors)
+                        Expanded(
+                          child: Container(color: col),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // Name + description
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      packName,
+                      style: TextStyle(
+                        color: c.textHigh,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      packDescription,
+                      style: TextStyle(color: c.textLow, fontSize: 9),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Action button
+              if (isActive)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: c.accent.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'Активно',
+                    style: TextStyle(
+                        color: c.accent,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700),
+                  ),
+                )
+              else if (isOwned)
+                GestureDetector(
+                  onTap: onApply,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: c.accent,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Застосувати',
+                      style: TextStyle(
+                          color: c.background,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                )
+              else
+                GestureDetector(
+                  onTap: canAfford ? onBuy : null,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: canAfford
+                          ? c.gold.withValues(alpha: 0.15)
+                          : c.surface,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: canAfford ? c.gold : c.border,
+                      ),
+                    ),
+                    child: Text(
+                      '₲$packCost',
+                      style: TextStyle(
+                        color: canAfford ? c.gold : c.textLow,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Corridor type chip ──────────────────────────────────────────────────────
+
+class _CorridorTypeChip extends StatelessWidget {
+  const _CorridorTypeChip({
+    required this.label,
+    required this.subtitle,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+    required this.colors,
+  });
+
+  final String label;
+  final String subtitle;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+  final ThemeColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? c.accent.withValues(alpha: 0.18)
+              : c.surface.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? c.accent : c.border,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 14, color: selected ? c.accent : c.textMedium),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: selected ? c.accent : c.textHigh,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: TextStyle(color: c.textLow, fontSize: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Corridor status row ─────────────────────────────────────────────────────
+
+class _CorridorStatus extends StatelessWidget {
+  const _CorridorStatus({
+    super.key,
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.trailing,
+    required this.colors,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final ThemeColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = colors;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: c.surfaceDim,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: c.textHigh,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                      color: c.textLow, fontSize: 10, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
+    );
+  }
 }

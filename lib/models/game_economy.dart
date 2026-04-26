@@ -1508,6 +1508,180 @@ FurnitureItem? _findFurniture(List<FurnitureItem> catalog, String id) {
   return null;
 }
 
+/// Pre-furnished room bundles. Each template ships a base [RoomType] with a
+/// curated set of furniture pre-positioned inside, sold at a single price
+/// with a small bundle discount. Picked from a section in BuildMenu and
+/// placed onto the grid as one atomic transaction.
+const roomTemplateCatalog = <RoomTemplate>[
+  RoomTemplate(
+    id: 'tpl_cozy_workstation',
+    name: 'Затишне робоче місце',
+    description: 'Базове робоче місце з кавовим столиком, рослиною і постером.',
+    baseRoom: RoomType.workstation,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'coffee_table_basic', colOffset: 0, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_small', colOffset: 1, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'poster_motivational', colOffset: 0, rowOffset: 0),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_productive_pod',
+    name: 'Продуктивний підрозділ',
+    description: 'Робоче місце для глибокої роботи: преміум-стіл, шафа, велика рослина.',
+    baseRoom: RoomType.workstation,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'coffee_table_premium', colOffset: 0, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'bookshelf', colOffset: 1, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_large', colOffset: 1, rowOffset: 0),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_snack_lounge',
+    name: 'Снек-зона',
+    description: 'Куток відпочинку зі смачним столом, кріслом-мішком і рослиною.',
+    baseRoom: RoomType.breakRoom,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'snack_table_basic', colOffset: 0, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'beanbag', colOffset: 1, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_small', colOffset: 1, rowOffset: 0),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_boardroom_classic',
+    name: 'Класична переговорна',
+    description: 'Переговорний пункт із преміум-столом, постером і рослиною.',
+    baseRoom: RoomType.meetingRoom,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'coffee_table_premium', colOffset: 1, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'poster_code', colOffset: 0, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_large', colOffset: 2, rowOffset: 0),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_server_sanctuary',
+    name: 'Серверне святилище',
+    description: 'Серверна з картотекою для документації і коробками для запчастин.',
+    baseRoom: RoomType.serverRoom,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'filing_cabinet', colOffset: 0, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'cardboard_boxes', colOffset: 1, rowOffset: 0),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_skater_lounge',
+    name: 'Скейт-куток',
+    description: 'Зона відпочинку з диваном, кріслом-мішком і рослиною.',
+    baseRoom: RoomType.lounge,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'couch_small', colOffset: 0, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'beanbag', colOffset: 2, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_small', colOffset: 2, rowOffset: 0),
+    ],
+  ),
+];
+
+RoomTemplate? roomTemplateById(String id) {
+  for (final t in roomTemplateCatalog) {
+    if (t.id == id) return t;
+  }
+  return null;
+}
+
+// ─── Adjacency engine ─────────────────────────────────────────────────────
+
+/// True when [a] and [b] share at least one wall tile (bounding boxes touch
+/// edge-to-edge, not corner-to-corner).
+bool areRoomsAdjacent(PlacedRoom a, PlacedRoom b) {
+  final xOverlap = a.col < b.right && b.col < a.right;
+  final yOverlap = a.row < b.bottom && b.row < a.bottom;
+  return (a.right == b.col || b.right == a.col) && yOverlap ||
+      (a.bottom == b.row || b.bottom == a.row) && xOverlap;
+}
+
+/// Returns the net adjacency bonus [%] that placing [newType] at ([col],[row])
+/// with [rotation] would earn from [existingRooms].
+///
+/// Positive = speed/morale boost, negative = penalty. Returns null when there
+/// is no adjacency effect (callers can skip rendering the label).
+///
+/// Pairs from `docs/office_design.md §4`:
+/// - workstation ↔ serverRoom  → +5 % speed
+/// - breakRoom   ↔ lounge      → +5 % morale synergy (displayed as bonus)
+/// - meetingRoom ↔ workstation → +5 % efficiency (manager latency −10 %)
+/// - serverRoom placed >8 tiles from every workstation → −5 % penalty
+int? computeAdjacencyBonusPercent(
+  RoomType newType,
+  int col,
+  int row,
+  int rotation,
+  List<PlacedRoom> existingRooms,
+) {
+  final ghost = PlacedRoom(
+    id: '__ghost__',
+    type: newType,
+    col: col,
+    row: row,
+    rotation: rotation,
+  );
+
+  int bonus = 0;
+
+  for (final existing in existingRooms) {
+    if (!areRoomsAdjacent(ghost, existing)) continue;
+
+    if ((newType == RoomType.workstation &&
+            existing.type == RoomType.serverRoom) ||
+        (newType == RoomType.serverRoom &&
+            existing.type == RoomType.workstation)) {
+      bonus += 5;
+    }
+
+    if ((newType == RoomType.breakRoom && existing.type == RoomType.lounge) ||
+        (newType == RoomType.lounge && existing.type == RoomType.breakRoom)) {
+      bonus += 5;
+    }
+
+    if ((newType == RoomType.meetingRoom &&
+            existing.type == RoomType.workstation) ||
+        (newType == RoomType.workstation &&
+            existing.type == RoomType.meetingRoom)) {
+      bonus += 5;
+    }
+  }
+
+  // serverRoom far from every workstation → cable-cost penalty.
+  if (newType == RoomType.serverRoom && existingRooms.isNotEmpty) {
+    final ghostCx = col + ghost.footprintWidth / 2.0;
+    final ghostCy = row + ghost.footprintHeight / 2.0;
+    final hasNearbyWorkstation = existingRooms.any((r) {
+      if (r.type != RoomType.workstation) return false;
+      final rcx = r.col + r.footprintWidth / 2.0;
+      final rcy = r.row + r.footprintHeight / 2.0;
+      return (rcx - ghostCx).abs() + (rcy - ghostCy).abs() <= 8;
+    });
+    if (!hasNearbyWorkstation) bonus -= 5;
+  }
+
+  return bonus == 0 ? null : bonus;
+}
+
 // ─── Wall / floor skin packs ───────────────────────────────────────────────
 
 /// A purchasable cosmetic pack that overrides the tier-default wall colours
@@ -1554,6 +1728,104 @@ class FloorSkinPack {
     required this.floorLight,
     required this.floorGrid,
   });
+}
+
+/// Free "Classic" wall skin — matches each tier's default palette.
+const kWallSkinFreeId = 'classic_wall';
+
+/// Free "Classic" floor skin — matches each tier's default palette.
+const kFloorSkinFreeId = 'classic_floor';
+
+const wallSkinPackCatalog = <WallSkinPack>[
+  WallSkinPack(
+    id: 'classic_wall',
+    name: 'Класик',
+    description: 'Стандартне оздоблення стін вашого офісного рівня.',
+    cost: 0,
+    wallBase: 0xFF1A1A26,
+    wallTop: 0xFF252538,
+    wallInner: 0xFF161624,
+  ),
+  WallSkinPack(
+    id: 'brick_wall',
+    name: 'Цегляна кладка',
+    description: 'Індустріальний стиль — оголена цегла з патиною.',
+    cost: 500,
+    wallBase: 0xFF3D1A0A,
+    wallTop: 0xFF5C2B14,
+    wallInner: 0xFF2A1008,
+  ),
+  WallSkinPack(
+    id: 'concrete_wall',
+    name: 'Бетон',
+    description: 'Мінімалістичний raw-бетон — лофт-атмосфера.',
+    cost: 700,
+    wallBase: 0xFF2E2E2E,
+    wallTop: 0xFF404040,
+    wallInner: 0xFF1E1E1E,
+  ),
+  WallSkinPack(
+    id: 'cyberpunk_wall',
+    name: 'Кіберпанк',
+    description: 'Неонові акцентні смуги на вугільно-чорній підлозі.',
+    cost: 1000,
+    wallBase: 0xFF0D0D1A,
+    wallTop: 0xFF1A003A,
+    wallInner: 0xFF060610,
+  ),
+];
+
+const floorSkinPackCatalog = <FloorSkinPack>[
+  FloorSkinPack(
+    id: 'classic_floor',
+    name: 'Класик',
+    description: 'Стандартна підлога вашого офісного рівня.',
+    cost: 0,
+    floorDark: 0xFF131318,
+    floorLight: 0xFF17171E,
+    floorGrid: 0xFF1C1C26,
+  ),
+  FloorSkinPack(
+    id: 'parquet_floor',
+    name: 'Паркет',
+    description: 'Тепле деревʼяне покриття — затишний стиль.',
+    cost: 500,
+    floorDark: 0xFF2A1A0A,
+    floorLight: 0xFF3A2414,
+    floorGrid: 0xFF1E1008,
+  ),
+  FloorSkinPack(
+    id: 'marble_floor',
+    name: 'Мармур',
+    description: 'Елегантна мармурова плитка — преміум-відчуття.',
+    cost: 800,
+    floorDark: 0xFF1E2228,
+    floorLight: 0xFF2A3038,
+    floorGrid: 0xFF141820,
+  ),
+  FloorSkinPack(
+    id: 'neon_floor',
+    name: 'Неонова сітка',
+    description: 'Матова підлога з яскравими неоновими лініями.',
+    cost: 1100,
+    floorDark: 0xFF080818,
+    floorLight: 0xFF0C0C20,
+    floorGrid: 0xFF001A40,
+  ),
+];
+
+WallSkinPack? wallSkinPackById(String id) {
+  for (final p in wallSkinPackCatalog) {
+    if (p.id == id) return p;
+  }
+  return null;
+}
+
+FloorSkinPack? floorSkinPackById(String id) {
+  for (final p in floorSkinPackCatalog) {
+    if (p.id == id) return p;
+  }
+  return null;
 }
 
 // ─── Game state ────────────────────────────────────────────────────────────

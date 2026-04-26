@@ -395,6 +395,7 @@ class OfficeGameState {
   int _gridRows;
   List<PlacedRoom> _placedRooms;
   List<FurniturePlacement> _placedFurniture;
+  List<PlacedCorridor> _placedCorridors;
   double _chatScanAccum = 0;
 
   int get gridCols => _gridCols;
@@ -419,15 +420,21 @@ class OfficeGameState {
   double _seatRestMultiplier = 1.0; // break room: 1.5× seat rest timer
   TilePos? _loungeCenterTile;       // lounge: skate/wander target bias
 
+  double get speedBonus => _speedBonus;
+  double get seatRestMultiplier => _seatRestMultiplier;
+  TilePos? get loungeCenterTile => _loungeCenterTile;
+
   OfficeGameState({
     OfficeLevel level = OfficeLevel.garage,
     int expansions = 0,
     List<PlacedRoom> placedRooms = const [],
     List<FurniturePlacement> placedFurniture = const [],
+    List<PlacedCorridor> placedCorridors = const [],
   })  : _gridCols = level.effectiveCols(expansions),
         _gridRows = level.effectiveRows(expansions),
         _placedRooms = placedRooms,
-        _placedFurniture = placedFurniture {
+        _placedFurniture = placedFurniture,
+        _placedCorridors = placedCorridors {
     _buildAll();
     cat = OfficeCat();
   }
@@ -441,20 +448,72 @@ class OfficeGameState {
   }
 
   void _buildRoomEffects() {
-    _speedBonus = _placedRooms.any((r) => r.type == RoomType.serverRoom)
-        ? 1.1
-        : 1.0;
+    // ── Global effects ──────────────────────────────────────────────────────
+    final hasServer = _placedRooms.any((r) => r.type == RoomType.serverRoom);
+    _speedBonus = hasServer ? 1.1 : 1.0;
+
     _seatRestMultiplier =
         _placedRooms.any((r) => r.type == RoomType.breakRoom) ? 1.5 : 1.0;
-    final lounge = _placedRooms
-        .where((r) => r.type == RoomType.lounge)
-        .firstOrNull;
+
+    final lounge =
+        _placedRooms.where((r) => r.type == RoomType.lounge).firstOrNull;
     _loungeCenterTile = lounge != null
         ? TilePos(
             lounge.col + lounge.type.widthTiles ~/ 2,
             lounge.row + lounge.type.heightTiles ~/ 2,
           )
         : null;
+
+    // ── Adjacency effects (office_design.md §4) ─────────────────────────────
+    if (hasServer) {
+      // Penalty: serverRoom far from every workstation → speed −5 pp.
+      final servers = _placedRooms.where((r) => r.type == RoomType.serverRoom);
+      final workstations =
+          _placedRooms.where((r) => r.type == RoomType.workstation).toList();
+      if (workstations.isEmpty) {
+        _speedBonus -= 0.05;
+      } else {
+        for (final srv in servers) {
+          final srvCx = srv.col + srv.footprintWidth / 2.0;
+          final srvCy = srv.row + srv.footprintHeight / 2.0;
+          final hasNearby = workstations.any((ws) {
+            final rcx = ws.col + ws.footprintWidth / 2.0;
+            final rcy = ws.row + ws.footprintHeight / 2.0;
+            return (rcx - srvCx).abs() + (rcy - srvCy).abs() <= 8;
+          });
+          if (!hasNearby) _speedBonus -= 0.05;
+        }
+      }
+      // Clamp to a sensible floor so stacking penalties can't go negative.
+      if (_speedBonus < 0.9) _speedBonus = 0.9;
+    }
+
+    // workstation ↔ serverRoom adjacent → +5 % speed (global accumulation).
+    for (int i = 0; i < _placedRooms.length; i++) {
+      for (int j = i + 1; j < _placedRooms.length; j++) {
+        final a = _placedRooms[i];
+        final b = _placedRooms[j];
+        if (!areRoomsAdjacent(a, b)) continue;
+
+        if ((a.type == RoomType.workstation &&
+                b.type == RoomType.serverRoom) ||
+            (a.type == RoomType.serverRoom &&
+                b.type == RoomType.workstation)) {
+          _speedBonus += 0.05;
+        }
+
+        // breakRoom ↔ lounge synergy doubles the morale multiplier.
+        if ((a.type == RoomType.breakRoom && b.type == RoomType.lounge) ||
+            (a.type == RoomType.lounge && b.type == RoomType.breakRoom)) {
+          _seatRestMultiplier = _seatRestMultiplier * 2.0;
+        }
+      }
+    }
+
+    // Wide corridors give a global +3 % speed bonus (one applies regardless of count).
+    if (_placedCorridors.any((c) => c.wide)) {
+      _speedBonus += 0.03;
+    }
   }
 
   /// Rebuild layout after an office upgrade, expansion purchase, or Build
@@ -465,11 +524,13 @@ class OfficeGameState {
     int newExpansions,
     List<PlacedRoom> newRooms, [
     List<FurniturePlacement> newFurniture = const [],
+    List<PlacedCorridor> newCorridors = const [],
   ]) {
     _gridCols = newLevel.effectiveCols(newExpansions);
     _gridRows = newLevel.effectiveRows(newExpansions);
     _placedRooms = newRooms;
     _placedFurniture = newFurniture;
+    _placedCorridors = newCorridors;
     _buildAll();
   }
 

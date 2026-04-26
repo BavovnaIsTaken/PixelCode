@@ -67,10 +67,10 @@
 | Multi-project / session profiles | `[DONE]` | [lib/models/session_profile.dart](../lib/models/session_profile.dart) |
 | Easter eggs (Arkanoid, dungeon crawler) | `[DONE]` | [lib/widgets/easter_eggs/](../lib/widgets/easter_eggs/) |
 | Logo Path DSL (анімація логотипу) | `[DONE]` | [lib/services/logo_path_program.dart](../lib/services/logo_path_program.dart) |
-| **Room adjacency bonuses** (Workstation↔Server Room і т.д.) | `[PARTIAL]` | [docs/office_design.md](office_design.md) — фреймворк є, проводка часткова |
-| **Break Room morale system** (+20% при відпочинку) | `[TODO]` | Q2–Q3 2026 |
-| **Server Room cable proximity penalty** | `[TODO]` | Q2–Q3 2026 |
-| **Manager Meeting Room dispatch boost** | `[TODO]` | Q2–Q3 2026 |
+| **Room adjacency bonuses** (Workstation↔Server Room і т.д.) | `[DONE]` | Per-pair engine: `areRoomsAdjacent` + `computeAdjacencyBonusPercent` — [lib/models/game_economy.dart](../lib/models/game_economy.dart). `_buildRoomEffects()` застосовує глобальні модифікатори + adjacency пари. Ghost overlay `+N%` / `−N%` label — [lib/widgets/canvas/pixel_office_painter.dart](../lib/widgets/canvas/pixel_office_painter.dart) + [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). 23 нових тести. |
+| **Break Room morale system** (+20% при відпочинку) | `[DONE]` | `seatRestMultiplier` — вбудовано у `_buildRoomEffects()`; breakRoom↔lounge synergy doubles multiplier |
+| **Server Room cable proximity penalty** | `[DONE]` | `−5%` speed when serverRoom placed >8 tiles від всіх workstations — `_buildRoomEffects()` |
+| **Manager Meeting Room dispatch boost** | `[TODO]` | Q2–Q3 2026 — adjacency pair обчислюється (`meetingRoom↔workstation → +5%`), hook до task-dispatch latency ще не зроблено |
 | **Diagnostics panel polish** | `[DONE]` | [lib/widgets/debug/](../lib/widgets/debug/) |
 | **Game Designer hireable role** (мета-роль для дизайну механік/економіки/F2P-петель) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)); обґрунтування: meta-loop "гра дизайнить себе" + контент-хук. |
 | **Strategy Keeper hireable role** ("Неповертайло" — reality-check голос проти drift від плану) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2); обґрунтування: solo-dev needs скептика проти wishful thinking, інакше план дрейфує. |
@@ -95,11 +95,11 @@
 
 | Компонент | Статус | Notes |
 |---|---|---|
-| Room Templates каталог (6–8 hardcode шт., snap-to-existing-edge placement, прозоре pricing breakdown `₲X = base + furniture − N%`) | `[TODO]` | Q2–Q3 2026 |
-| Corridors (drag A→B, 1-tile @ ₲50/tile, 2-tile @ ₲90/tile + speed bonus, успадковує тему сусідньої кімнати) | `[TODO]` | Q2–Q3 2026; залежить від pathfinding-роботи (агенти ходять реально, не телепортуються) |
-| Wall/Floor skin packs (Classic Free default + 3 paid паки на старті, per-room swatch picker з live canvas preview) | `[TODO]` | Q2–Q3 2026 |
-| Shop → BuildMenu furniture/plants migration (видалити таб `Меблі` з shop_panel, redirect deeplink, лишити tier upgrade у Shop) | `[TODO]` | переводить рядок "Shop panel" вище у `[PARTIAL]` |
-| Adjacency bonuses fully wired (live `+%` label на ghost preview) | переводить рядок [Room adjacency bonuses] у `[DONE]` | завершує `[PARTIAL]` що зараз вище |
+| Room Templates каталог (6–8 hardcode шт., snap-to-existing-edge placement, прозоре pricing breakdown `₲X = base + furniture − N%`) | `[PARTIAL]` | Каталог з 6 шаблонів + `placeRoomTemplate()` + UI секція + pricing breakdown — [lib/models/game_economy.dart](../lib/models/game_economy.dart) (`roomTemplateCatalog`), [lib/providers/game_economy_provider.dart](../lib/providers/game_economy_provider.dart) (`placeRoomTemplate`), [lib/widgets/canvas/build_menu.dart](../lib/widgets/canvas/build_menu.dart) (`_TemplateCard`). Snap-to-edge — follow-up. |
+| Corridors (drag A→B, 1-tile @ ₲50/tile, 2-tile @ ₲90/tile + speed bonus, успадковує тему сусідньої кімнати) | `[DONE]` | Two-tap A→B placement, L-path via Map dedup, wide/narrow toggle (+3% speed), gold/orange tile render, anchor dot, `PlacedCorridor` model, `placeCorridor` + guards в провайдері, Corridors секція у BuildMenu з інструкцією. 14 нових тестів. Pathfinding (агенти реально ходять) — follow-up. |
+| Wall/Floor skin packs (Classic Free default + 3 paid паки на старті, per-room swatch picker з live canvas preview) | `[DONE]` | `wallSkinPackCatalog` / `floorSkinPackCatalog` (4+4 паки) — [lib/models/game_economy.dart](../lib/models/game_economy.dart). `purchaseWallSkinPack/purchaseFloorSkinPack/applyRoomWallSkin/applyRoomFloorSkin` — [lib/providers/game_economy_provider.dart](../lib/providers/game_economy_provider.dart). Per-room `_themeForRoom()` у painter — [lib/widgets/canvas/pixel_office_painter.dart](../lib/widgets/canvas/pixel_office_painter.dart). Swatch picker + room selector у BuildMenu Walls/Floors — [lib/widgets/canvas/build_menu.dart](../lib/widgets/canvas/build_menu.dart). `selectedPlacedRoomId` у BuildModeState. 16 нових тестів (672 total). |
+| Shop → BuildMenu furniture/plants migration (видалити таб `Меблі` з shop_panel, redirect deeplink, лишити tier upgrade у Shop) | `[DONE]` | [lib/widgets/canvas/build_decor_section.dart](../lib/widgets/canvas/build_decor_section.dart) + `BuildSection.decor` у [build_menu.dart](../lib/widgets/canvas/build_menu.dart). Shop тепер 5 табів, `shopTabFurniture` видалено, `shopTabDonation = 4` |
+| Adjacency bonuses fully wired (live `+%` label на ghost preview) | `[DONE]` | `areRoomsAdjacent` + `computeAdjacencyBonusPercent` у game_economy.dart; `_buildRoomEffects()` з per-pair engine; ghost label у PixelOfficePainter + agent_canvas._adjacencyLabel(); 23 нових тести (656 total) |
 
 **Залежності:** Stage 2 corridors залежать від pathfinding-системи "агенти реально ходять" (зараз `[TODO]` неявно — позначено в [office_design.md](office_design.md)). Якщо pathfinding ще не готовий до моменту stage 2, corridors поки що декоративні (без speed bonus), але візуально присутні.
 

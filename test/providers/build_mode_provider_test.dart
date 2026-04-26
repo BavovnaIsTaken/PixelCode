@@ -187,4 +187,47 @@ void main() {
     n.clearSelection();
     expect(c.read(buildModeProvider).ghostRotation, 0);
   });
+
+  // ─── Templates ───────────────────────────────────────────────────────────
+
+  test('toggleTemplate sets template id and base room', () {
+    final n = c.read(buildModeProvider.notifier)..enter();
+    final tpl = roomTemplateCatalog.first;
+
+    n.toggleTemplate(tpl);
+    final s = c.read(buildModeProvider);
+    expect(s.selectedTemplateId, tpl.id);
+    expect(s.selectedRoomType, tpl.baseRoom);
+  });
+
+  test('toggleTemplate twice clears the selection', () {
+    final n = c.read(buildModeProvider.notifier)..enter();
+    final tpl = roomTemplateCatalog.first;
+
+    n.toggleTemplate(tpl);
+    n.toggleTemplate(tpl);
+    final s = c.read(buildModeProvider);
+    expect(s.selectedTemplateId, isNull);
+    expect(s.selectedRoomType, isNull);
+  });
+
+  test('toggleRoom clears any active template — exclusive intents', () {
+    final n = c.read(buildModeProvider.notifier)..enter();
+    final tpl = roomTemplateCatalog
+        .firstWhere((t) => t.baseRoom == RoomType.workstation);
+
+    n.toggleTemplate(tpl);
+    n.toggleRoom(RoomType.serverRoom);
+    final s = c.read(buildModeProvider);
+    expect(s.selectedTemplateId, isNull);
+    expect(s.selectedRoomType, RoomType.serverRoom);
+  });
+
+  test('setSection clears any active template', () {
+    final n = c.read(buildModeProvider.notifier)..enter();
+    n.toggleTemplate(roomTemplateCatalog.first);
+
+    n.setSection(BuildSection.decor);
+    expect(c.read(buildModeProvider).selectedTemplateId, isNull);
+  });
 }

@@ -8,10 +8,10 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Tab indices in ShopPanel.
+/// Tab indices in ShopPanel. Furniture tab was migrated to BuildMenu's
+/// Decor section in Stage 2 of the Build System rework — its index is gone.
 const shopTabOffice = 2;
-const shopTabFurniture = 3;
-const shopTabDonation = 5;
+const shopTabDonation = 4;
 
 /// When non-null, consumers should navigate to the given shop tab index
 /// and then reset this back to null.

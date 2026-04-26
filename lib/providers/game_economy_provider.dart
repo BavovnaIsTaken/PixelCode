@@ -701,6 +701,58 @@ class GameEconomyNotifier extends Notifier<GameState> {
     ));
   }
 
+  /// Final price (after the bundle discount) of a room template.
+  int templateCost(RoomTemplate template) =>
+      template.bundleCost(furnitureCatalog);
+
+  bool canPlaceRoomTemplate(RoomTemplate template) {
+    if (state.grymni < templateCost(template)) return false;
+    if (isRoomLimitReached(template.baseRoom)) return false;
+    return true;
+  }
+
+  /// Place a room template as one atomic transaction: deduct the bundle
+  /// cost (single discounted price), spawn the base room, then drop in
+  /// every furniture slot relative to the room's top-left corner. The
+  /// included furniture items are also marked as owned so the player can
+  /// later move or remove them via the Decor edit mode.
+  void placeRoomTemplate(RoomTemplate template, int col, int row,
+      {int rotation = 0}) {
+    if (!canPlaceRoomTemplate(template)) return;
+    final cost = templateCost(template);
+    final roomId = 'room_${DateTime.now().microsecondsSinceEpoch}';
+    final rooms = List<PlacedRoom>.from(state.placedRooms)
+      ..add(PlacedRoom(
+          id: roomId,
+          type: template.baseRoom,
+          col: col,
+          row: row,
+          rotation: rotation));
+
+    final placed = List<FurniturePlacement>.from(state.placedFurniture);
+    final owned = Set<String>.from(state.ownedFurniture);
+    for (final slot in template.furniture) {
+      // Slot offsets are stored relative to the unrotated room footprint.
+      // For Stage 2 the placement is rotation-naive — when rotation lands
+      // beyond 0° we still drop furniture at base offsets so the room is
+      // valid; rotation-aware furniture layout is a follow-up.
+      placed.add(FurniturePlacement(
+        itemId: slot.furnitureId,
+        col: col + slot.colOffset,
+        row: row + slot.rowOffset,
+      ));
+      owned.add(slot.furnitureId);
+    }
+
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - cost,
+      totalSpent: state.totalSpent + cost,
+      placedRooms: rooms,
+      placedFurniture: placed,
+      ownedFurniture: owned,
+    ));
+  }
+
   void removeRoom(String roomId) {
     final idx = state.placedRooms.indexWhere((r) => r.id == roomId);
     if (idx < 0) return;
@@ -709,6 +761,95 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni + room.type.cost ~/ 2,
       placedRooms: rooms,
+    ));
+  }
+
+  // ─── Wall / floor skin packs ──────────────────────────────────────────
+
+  bool canPurchaseWallSkinPack(WallSkinPack pack) =>
+      !state.ownedWallSkinPacks.contains(pack.id) &&
+      state.grymni >= pack.cost;
+
+  bool canPurchaseFloorSkinPack(FloorSkinPack pack) =>
+      !state.ownedFloorSkinPacks.contains(pack.id) &&
+      state.grymni >= pack.cost;
+
+  void purchaseWallSkinPack(WallSkinPack pack) {
+    if (!canPurchaseWallSkinPack(pack)) return;
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - pack.cost,
+      totalSpent: state.totalSpent + pack.cost,
+      ownedWallSkinPacks: {...state.ownedWallSkinPacks, pack.id},
+    ));
+  }
+
+  void purchaseFloorSkinPack(FloorSkinPack pack) {
+    if (!canPurchaseFloorSkinPack(pack)) return;
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - pack.cost,
+      totalSpent: state.totalSpent + pack.cost,
+      ownedFloorSkinPacks: {...state.ownedFloorSkinPacks, pack.id},
+    ));
+  }
+
+  /// Apply (or reset) the wall skin on a single placed room.
+  /// Pass [skinId] == [kWallSkinFreeId] or null to revert to tier default.
+  void applyRoomWallSkin(String roomId, String? skinId) {
+    final idx = state.placedRooms.indexWhere((r) => r.id == roomId);
+    if (idx < 0) return;
+    if (skinId != null &&
+        skinId != kWallSkinFreeId &&
+        !state.ownedWallSkinPacks.contains(skinId)) {
+      return;
+    }
+    final rooms = List<PlacedRoom>.from(state.placedRooms);
+    rooms[idx] = rooms[idx].copyWith(
+      wallSkinId: skinId == kWallSkinFreeId ? null : skinId,
+      clearWallSkin: skinId == null || skinId == kWallSkinFreeId,
+    );
+    _updateStateAndSync(state.copyWith(placedRooms: rooms));
+  }
+
+  /// Apply (or reset) the floor skin on a single placed room.
+  void applyRoomFloorSkin(String roomId, String? skinId) {
+    final idx = state.placedRooms.indexWhere((r) => r.id == roomId);
+    if (idx < 0) return;
+    if (skinId != null &&
+        skinId != kFloorSkinFreeId &&
+        !state.ownedFloorSkinPacks.contains(skinId)) {
+      return;
+    }
+    final rooms = List<PlacedRoom>.from(state.placedRooms);
+    rooms[idx] = rooms[idx].copyWith(
+      floorSkinId: skinId == kFloorSkinFreeId ? null : skinId,
+      clearFloorSkin: skinId == null || skinId == kFloorSkinFreeId,
+    );
+    _updateStateAndSync(state.copyWith(placedRooms: rooms));
+  }
+
+  // ─── Corridors ────────────────────────────────────────────────────────
+
+  int corridorCostPerTile({bool wide = false}) => wide ? 90 : 50;
+
+  int corridorCost(List<({int col, int row})> tiles, {bool wide = false}) =>
+      tiles.length * corridorCostPerTile(wide: wide);
+
+  bool canPlaceCorridor(List<({int col, int row})> tiles, {bool wide = false}) =>
+      tiles.isNotEmpty && state.grymni >= corridorCost(tiles, wide: wide);
+
+  void placeCorridor(
+    List<({int col, int row})> tiles, {
+    bool wide = false,
+  }) {
+    if (!canPlaceCorridor(tiles, wide: wide)) return;
+    final cost = corridorCost(tiles, wide: wide);
+    final id = 'corridor_${DateTime.now().microsecondsSinceEpoch}';
+    final corridors = List<PlacedCorridor>.from(state.placedCorridors)
+      ..add(PlacedCorridor(id: id, tiles: tiles, wide: wide));
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - cost,
+      totalSpent: state.totalSpent + cost,
+      placedCorridors: corridors,
     ));
   }
 

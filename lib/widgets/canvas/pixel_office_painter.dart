@@ -56,6 +56,16 @@ class PixelOfficePainter extends CustomPainter {
   final int ghostRoomRotation;
   final bool ghostIsValid;
 
+  /// Adjacency bonus label rendered over the ghost (e.g. "+5%" or "−5%").
+  /// Null when there is no adjacency effect for the current ghost position.
+  final String? adjacencyLabel;
+
+  final List<PlacedCorridor> placedCorridors;
+
+  /// First tile of a corridor being drawn — null when no corridor is in-flight.
+  final int? corridorAnchorCol;
+  final int? corridorAnchorRow;
+
   PixelOfficePainter({
     required this.gameState,
     this.sprites,
@@ -74,6 +84,10 @@ class PixelOfficePainter extends CustomPainter {
     this.ghostRoomRow,
     this.ghostRoomRotation = 0,
     this.ghostIsValid = true,
+    this.adjacencyLabel,
+    this.placedCorridors = const [],
+    this.corridorAnchorCol,
+    this.corridorAnchorRow,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -105,6 +119,7 @@ class PixelOfficePainter extends CustomPainter {
 
     _drawFloorAndWalls(canvas);
     _drawPlacedRooms(canvas);
+    _drawCorridors(canvas);
     _drawScene(canvas);
     _drawBubbles(canvas);
     _drawVignette(canvas);
@@ -883,11 +898,98 @@ class PixelOfficePainter extends CustomPainter {
     }));
   }
 
+  // ─── Corridors ────────────────────────────────────────────────────────
+
+  void _drawCorridors(Canvas canvas) {
+    if (placedCorridors.isEmpty &&
+        corridorAnchorCol == null &&
+        corridorAnchorRow == null) {
+      return;
+    }
+
+    final fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFFD700).withValues(alpha: 0.22);
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = const Color(0xFFFFD700).withValues(alpha: 0.60);
+    final wideFill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFFA500).withValues(alpha: 0.28);
+    final wideStroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = const Color(0xFFFFA500).withValues(alpha: 0.65);
+
+    for (final corridor in placedCorridors) {
+      final f = corridor.wide ? wideFill : fill;
+      final s = corridor.wide ? wideStroke : stroke;
+      for (final tile in corridor.tiles) {
+        final rect = Rect.fromLTWH(
+          tile.col * kTileSize,
+          tile.row * kTileSize,
+          corridor.wide ? kTileSize * 2 : kTileSize,
+          kTileSize,
+        );
+        canvas.drawRect(rect, f);
+        canvas.drawRect(rect, s);
+      }
+    }
+
+    // Anchor dot — first tap when drawing a corridor.
+    final ac = corridorAnchorCol;
+    final ar = corridorAnchorRow;
+    if (ac != null && ar != null) {
+      canvas.drawCircle(
+        Offset((ac + 0.5) * kTileSize, (ar + 0.5) * kTileSize),
+        3.5,
+        Paint()
+          ..style = PaintingStyle.fill
+          ..color = const Color(0xFFFFD700).withValues(alpha: 0.9),
+      );
+    }
+  }
+
   // ─── Edit mode overlay ────────────────────────────────────────────────
+
+  /// Builds a theme for [room] by applying any per-room wall/floor skin
+  /// overrides on top of the tier default [_theme].
+  RoomTheme _themeForRoom(PlacedRoom room) {
+    final base = _theme;
+    final wallPack = room.wallSkinId != null
+        ? wallSkinPackById(room.wallSkinId!)
+        : null;
+    final floorPack = room.floorSkinId != null
+        ? floorSkinPackById(room.floorSkinId!)
+        : null;
+    if (wallPack == null && floorPack == null) return base;
+    return RoomTheme(
+      id: base.id,
+      name: base.name,
+      nameEn: base.nameEn,
+      tier: base.tier,
+      wallBase: wallPack != null ? Color(wallPack.wallBase) : base.wallBase,
+      wallTop: wallPack != null ? Color(wallPack.wallTop) : base.wallTop,
+      wallInner:
+          wallPack != null ? Color(wallPack.wallInner) : base.wallInner,
+      floorDark:
+          floorPack != null ? Color(floorPack.floorDark) : base.floorDark,
+      floorLight:
+          floorPack != null ? Color(floorPack.floorLight) : base.floorLight,
+      floorGrid:
+          floorPack != null ? Color(floorPack.floorGrid) : base.floorGrid,
+      deskSurface: base.deskSurface,
+      deskEdge: base.deskEdge,
+      accentColor: base.accentColor,
+      vignetteAlpha: base.vignetteAlpha,
+    );
+  }
 
   void _drawPlacedRooms(Canvas canvas) {
     for (final room in placedRooms) {
-      drawRoom(canvas, room, _theme, tick, showWorkstationFurniture: false);
+      drawRoom(canvas, room, _themeForRoom(room), tick,
+          showWorkstationFurniture: false);
     }
   }
 
@@ -1056,12 +1158,35 @@ class PixelOfficePainter extends CustomPainter {
       final gt = ghostRoomType;
       if (gt != null) {
         final rotated = ghostRoomRotation == 90 || ghostRoomRotation == 270;
-        drawGhostRect(
-          gc * kTileSize,
-          gr * kTileSize,
-          (rotated ? gt.heightTiles : gt.widthTiles) * kTileSize,
-          (rotated ? gt.widthTiles : gt.heightTiles) * kTileSize,
-        );
+        final gw = (rotated ? gt.heightTiles : gt.widthTiles) * kTileSize;
+        final gh = (rotated ? gt.widthTiles : gt.heightTiles) * kTileSize;
+        drawGhostRect(gc * kTileSize, gr * kTileSize, gw, gh);
+
+        // Adjacency bonus label centred over the ghost footprint.
+        final label = adjacencyLabel;
+        if (label != null && ghostIsValid) {
+          final isBonus = !label.startsWith('−') && !label.startsWith('-');
+          final labelColor =
+              isBonus ? const Color(0xFF44FFAA) : const Color(0xFFFF7744);
+          final tp = TextPainter(
+            text: TextSpan(
+              text: label,
+              style: TextStyle(
+                color: labelColor,
+                fontSize: 5,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          tp.paint(
+            canvas,
+            Offset(
+              gc * kTileSize + gw / 2 - tp.width / 2,
+              gr * kTileSize + gh / 2 - tp.height / 2,
+            ),
+          );
+        }
       }
     }
 
