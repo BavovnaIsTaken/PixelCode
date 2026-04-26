@@ -269,6 +269,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       roleType: roleType,
       nickname: defaultNicknameFor(role, ordinal),
       hardware: HardwareTier.oldLaptop,
+      provider: AgentProviderType.values[role.defaultProvider],
       skills: initialSkillsForRole(roleType),
     );
 

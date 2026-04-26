@@ -483,6 +483,10 @@ class RoleCatalogEntry {
   /// Defaults to 0; override for starter roles (manager, coder).
   final int defaultSeedCount;
 
+  /// Default provider for newly hired instances (0=cloud/Claude, 1=local/Gemini).
+  /// Defaults to 0 (Claude).
+  final int defaultProvider;
+
   final AgentPassive passive;
 
   const RoleCatalogEntry({
@@ -496,6 +500,7 @@ class RoleCatalogEntry {
     required this.passive,
     this.singleton = false,
     this.defaultSeedCount = 0,
+    this.defaultProvider = 0,
   });
 }
 
