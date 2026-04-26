@@ -5,6 +5,13 @@
  * Server → Client: events
  */
 
+import type {
+  FacilitatorStyle,
+  IntakeAnswers,
+  OutputFormatKey,
+} from "./facilitator/types.js";
+import type { ScopeScore } from "./quest/scope_scorer.js";
+
 // ─── Client → Server ────────────────────────────────────────────────────────
 
 export type ClientMessage =
@@ -106,7 +113,16 @@ export type ClientMessage =
   // Client identification (sent on connect)
   | { type: "client_info"; clientId: string; deviceName: string; platform: string }
   // Dungeon training
-  | { type: "start_dungeon"; agentId: string; skillType: number; difficulty: 1 | 2 | 3 };
+  | { type: "start_dungeon"; agentId: string; skillType: number; difficulty: 1 | 2 | 3 }
+  // Facilitator System — seed a project with a chosen facilitator style.
+  // Client owns the FacilitatorStyle JSON (loaded from assets/facilitators/
+  // or, later, marketplace) so the server stays neutral about presets.
+  | {
+      type: "facilitator_start";
+      style: FacilitatorStyle;
+      projectDescription: string;
+      answers: IntakeAnswers;
+    };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -430,7 +446,18 @@ export type ServerMessage =
       feedback: string;
       passed: boolean;
     }
-  | { type: "dungeon_error"; agentId: string; error: string };
+  | { type: "dungeon_error"; agentId: string; error: string }
+  // Facilitator System — seed result for a successful `facilitator_start`.
+  // `outputJson` is the serialized `FacilitatorOutput` (with `format`
+  // discriminator embedded); the client routes it through its registry.
+  | {
+      type: "facilitator_seeded";
+      styleId: string;
+      finalScore: ScopeScore;
+      outputFormat: OutputFormatKey;
+      outputJson: string;
+    }
+  | { type: "facilitator_error"; error: string };
 
 /** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */
 export type HealthItemId =
