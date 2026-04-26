@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/facilitator_output.dart';
 import 'package:pixelcode/models/facilitator_style.dart';
 import 'package:pixelcode/screens/facilitator/facilitator_intake_screen.dart';
+import '../helpers/localization_test_helper.dart';
 
 FacilitatorStyle _styleWith(List<IntakeQuestion> questions) {
   return FacilitatorStyle(
@@ -55,6 +56,8 @@ Future<IntakeSubmission?> _pushIntake(
 }
 
 void main() {
+  setUpAll(initTestLocalization);
+
   testWidgets('renders style displayName as title and tagline as subhead', (
     tester,
   ) async {
