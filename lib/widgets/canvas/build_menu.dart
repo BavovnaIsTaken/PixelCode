@@ -52,19 +52,11 @@ extension BuildSectionDisplay on BuildSection {
   bool get isStage1Ready => this == BuildSection.rooms;
 }
 
-/// Width breakpoint between bottom-sheet and rail layouts.
+/// Viewport-width breakpoint that decides the layout. Note: this is the
+/// SCREEN width, not the BuildMenu container width — the menu is mounted in
+/// a 440dp side panel on desktop, so checking parent constraints would
+/// always read narrow and we'd render the wrong form.
 const double _kBreakpoint = 768;
-
-/// Tick provider — small private signal that drives the room-card preview
-/// animation cycles. Rebuilt every ~120 ms so subtle "alive" flickers in
-/// the preview sprites tick along.
-final _previewTickProvider = StreamProvider<int>((ref) async* {
-  var i = 0;
-  while (true) {
-    yield i++;
-    await Future<void>.delayed(const Duration(milliseconds: 120));
-  }
-});
 
 class BuildMenu extends ConsumerWidget {
   const BuildMenu({super.key});
@@ -79,17 +71,15 @@ class BuildMenu extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final economy = ref.watch(gameEconomyProvider);
     final mode = ref.watch(buildModeProvider);
-    final tick = ref.watch(_previewTickProvider).value ?? 0;
     final isEditMode = ref.watch(furnitureEditModeProvider);
+    // Static thumbnails — there's no animation worth the rebuild cost in a
+    // 64×56 px card. The live canvas still animates at full fps.
+    const tick = 0;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= _kBreakpoint;
-        return wide
-            ? _buildWide(context, ref, economy, mode, tick, isEditMode)
-            : _buildNarrow(context, ref, economy, mode, tick, isEditMode);
-      },
-    );
+    final wide = MediaQuery.of(context).size.width >= _kBreakpoint;
+    return wide
+        ? _buildWide(context, ref, economy, mode, tick, isEditMode)
+        : _buildNarrow(context, ref, economy, mode, tick, isEditMode);
   }
 
   // ─── Wide layout: rail + panel on the left ────────────────────────────────
