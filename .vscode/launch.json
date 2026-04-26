@@ -5,27 +5,27 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "PixelCode iOS (Profile)",
+            "name": "🎮📱 PixelCode iOS (Profile)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
             "deviceId": "00008140-00090C412268801C"
         },
         {
-            "name": "PixelCode iOS (Profile Wireless)",
+            "name": "🎮📡 PixelCode iOS (Profile Wireless)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
             "deviceId": "00008140-00090C412268801C"
         },
         {
-            "name": "PixelCode MacOS",
+            "name": "🎮💻 PixelCode macOS",
             "request": "launch",
             "type": "dart",
             "deviceId": "macos"
         },
         {
-            "name": "PixelDock (macOS)",
+            "name": "🛰️💻 PixelDock (macOS)",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
@@ -33,7 +33,7 @@
             "deviceId": "macos"
         },
         {
-            "name": "PixelDock (iOS)",
+            "name": "🛰️📱 PixelDock (iOS)",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
