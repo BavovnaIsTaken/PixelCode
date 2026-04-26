@@ -122,7 +122,7 @@ void main() {
     );
   });
 
-  testWidgets('skipped — existing output, no snackbar, no navigation',
+  testWidgets('skipped — existing output, snackbar explains skip, no navigation',
       (tester) async {
     final host = await _pump(tester, (context, ref) {
       return launchFacilitatorOnboarding(
@@ -148,7 +148,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(host.lastResult, isA<FacilitatorOnboardingSkipped>());
-    expect(find.byType(SnackBar), findsNothing);
+    expect(find.textContaining('already has a facilitator'), findsOneWidget);
   });
 
   testWidgets('completed success — snackbar shows task count', (tester) async {

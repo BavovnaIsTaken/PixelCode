@@ -40,65 +40,108 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
   PickIntakeFn? pickIntake,
   RunSessionFn? runSession,
 }) async {
+  void log(String msg) => debugPrint('[Facilitator] $msg');
+
+  log('launch start projectPath=$projectPath');
+
   final ws = ref.read(wsServiceProvider);
   final connected = isWsConnected ?? () => ws.isConnected;
   final navigator = Navigator.of(context);
   final messenger = ScaffoldMessenger.maybeOf(context);
 
+  void toast(String text) {
+    log('toast: $text');
+    messenger?.showSnackBar(SnackBar(content: Text(text)));
+  }
+
   if (!connected()) {
-    messenger?.showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Facilitator setup needs a server connection — connect and try again.',
-        ),
-      ),
+    toast(
+      'Facilitator setup needs a server connection — connect and try again.',
     );
     return const FacilitatorOnboardingDisconnected();
   }
+  log('ws connected — proceeding');
 
   final session = FacilitatorSessionService.bindToWsService(ws);
 
   final controller = FacilitatorOnboardingController(
-    loadStyles: loadStyles ?? FacilitatorStyleLoader.loadDefaults,
-    loadExisting: loadExisting ?? FacilitatorOutputPersistenceService.load,
+    loadStyles: loadStyles ??
+        () async {
+          log('loading default styles…');
+          final styles = await FacilitatorStyleLoader.loadDefaults();
+          log('loaded ${styles.length} styles: '
+              '${styles.map((s) => s.id).join(", ")}');
+          return styles;
+        },
+    loadExisting: loadExisting ??
+        (path) async {
+          log('checking existing output at $path');
+          final existing = await FacilitatorOutputPersistenceService.load(path);
+          log('existing output: ${existing == null ? "none" : "FOUND — skipping onboarding"}');
+          return existing;
+        },
     pickStyle: pickStyle ??
-        (styles) => navigator.push<FacilitatorStyle>(
-              MaterialPageRoute(
-                builder: (_) => FacilitatorPickerScreen(styles: styles),
-                fullscreenDialog: true,
-              ),
+        (styles) {
+          log('pushing FacilitatorPickerScreen (${styles.length} styles)');
+          return navigator.push<FacilitatorStyle>(
+            MaterialPageRoute(
+              builder: (_) => FacilitatorPickerScreen(styles: styles),
+              fullscreenDialog: true,
             ),
+          );
+        },
     pickIntake: pickIntake ??
-        (style) => navigator.push<IntakeSubmission>(
-              MaterialPageRoute(
-                builder: (_) => FacilitatorIntakeScreen(style: style),
-                fullscreenDialog: true,
-              ),
+        (style) {
+          log('pushing FacilitatorIntakeScreen for style=${style.id}');
+          return navigator.push<IntakeSubmission>(
+            MaterialPageRoute(
+              builder: (_) => FacilitatorIntakeScreen(style: style),
+              fullscreenDialog: true,
             ),
+          );
+        },
     runSession: runSession ??
         ({
           required projectPath,
           required style,
           required projectDescription,
           required answers,
-        }) =>
-            session.start(
-              projectPath: projectPath,
-              style: style,
-              projectDescription: projectDescription,
-              answers: answers,
-            ),
+        }) {
+          log('starting session style=${style.id}');
+          return session.start(
+            projectPath: projectPath,
+            style: style,
+            projectDescription: projectDescription,
+            answers: answers,
+          );
+        },
   );
 
-  final result = await controller.runIfNeeded(projectPath);
+  FacilitatorOnboardingResult result;
+  try {
+    result = await controller.runIfNeeded(projectPath);
+    log('result: ${result.runtimeType}');
+  } catch (e, st) {
+    log('ERROR during onboarding: $e\n$st');
+    if (context.mounted) toast('Facilitator onboarding error: $e');
+    rethrow;
+  }
 
   if (context.mounted) {
-    final m = ScaffoldMessenger.maybeOf(context);
-    if (m != null) {
-      final text = resultSnackbarText(result);
-      if (text != null) {
-        m.showSnackBar(SnackBar(content: Text(text)));
-      }
+    final text = resultSnackbarText(result);
+    if (text != null) {
+      toast(text);
+    } else {
+      // Always surface SOMETHING so the user knows the launcher ran.
+      toast(switch (result) {
+        FacilitatorOnboardingSkipped() =>
+          'Project already has a facilitator setup — skipping onboarding.',
+        FacilitatorOnboardingCancelled() =>
+          'Facilitator setup cancelled.',
+        FacilitatorOnboardingDisconnected() =>
+          'Facilitator setup needs a server connection.',
+        _ => 'Facilitator: $result',
+      });
     }
   }
 
