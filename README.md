@@ -293,6 +293,14 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 - Tailscale Funnel health-probe на сервері.
 - Pod checksum refresh для macOS.
 
+## Натхнення
+
+Ідея PixelCode виросла з VS Code-розширення [Pixel Agents](https://marketplace.visualstudio.com/items?itemName=pablodelucca.pixel-agents) ([github](https://github.com/pablodelucca/pixel-agents)) автора **pablodelucca** — воно першим показало AI-агентів як піксель-арт персонажів у маленькому офісі прямо в редакторі. PixelCode переосмислює цю ідею як окрему кросплатформну аппку поверх Claude Agent SDK з власною грою (XP, прокачка, економіка, dungeon-челенджі, мультидевайс real-time).
+
+Дякуємо також **JIK-A-4** за пак [MetroCity Free Topdown Character Pack](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack) (CC0), який Pixel Agents використовує як основу персонажів, і який нас надихнув на власну 6-тирову систему спрайтів.
+
+Повні ліцензійні нотиси третіх сторін — у [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
 ## Ліцензія
 
 PixelCode розповсюджується під [PolyForm Noncommercial License 1.0.0](LICENSE) — source-available ліцензія, яка дозволяє будь-яке **некомерційне** використання. Коротко це означає:
@@ -589,6 +597,14 @@ For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the 
 - iOS deployment doc rewrite.
 - Tailscale Funnel health probe on the server.
 - Pod checksum refresh for macOS.
+
+## Inspiration
+
+PixelCode grew out of the VS Code extension [Pixel Agents](https://marketplace.visualstudio.com/items?itemName=pablodelucca.pixel-agents) ([github](https://github.com/pablodelucca/pixel-agents)) by **pablodelucca** — it was the first to render AI agents as pixel-art characters working in a tiny office right inside the editor. PixelCode reimagines that idea as a standalone cross-platform app on top of the Claude Agent SDK, with its own game layer (XP, progression, economy, dungeon challenges, real-time multi-device mirroring).
+
+Thanks also to **JIK-A-4** for the [MetroCity Free Topdown Character Pack](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack) (CC0), which Pixel Agents uses as the base for its characters and which inspired our own 6-tier sprite system.
+
+Full third-party license notices: [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ## License
 
