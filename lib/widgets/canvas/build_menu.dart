@@ -17,6 +17,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/resource_pack.dart';
 import '../../providers/build_mode_provider.dart';
@@ -91,14 +92,6 @@ class BuildMenu extends ConsumerWidget {
     );
   }
 
-  Color _panelBg(GameState economy) {
-    final theme = roomThemeForLevel(economy.officeLevel);
-    return Color.alphaBlend(
-      theme.wallInner.withValues(alpha: 0.92),
-      const Color(0xFF050508),
-    );
-  }
-
   // ─── Wide layout: rail + panel on the left ────────────────────────────────
 
   Widget _buildWide(
@@ -113,7 +106,7 @@ class BuildMenu extends ConsumerWidget {
       children: [
         SizedBox(
           width: kRailWidth,
-          child: _buildRail(ref, economy, mode, isEditMode),
+          child: _buildRail(context, ref, mode, isEditMode),
         ),
         Expanded(
           child: _buildPanel(context, ref, economy, mode, tick),
@@ -123,16 +116,17 @@ class BuildMenu extends ConsumerWidget {
   }
 
   Widget _buildRail(
+    BuildContext context,
     WidgetRef ref,
-    GameState economy,
     BuildModeState mode,
     bool isEditMode,
   ) {
+    final c = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg(economy),
-        border: const Border(
-          right: BorderSide(color: Color(0x22FFFFFF), width: 1),
+        color: c.surface,
+        border: Border(
+          right: BorderSide(color: c.border, width: 1),
         ),
       ),
       child: Column(
@@ -140,19 +134,18 @@ class BuildMenu extends ConsumerWidget {
           const SizedBox(height: 12),
           IconButton(
             tooltip: 'Вийти',
-            icon: const Icon(Icons.close, color: Colors.white),
+            icon: Icon(Icons.close, color: c.textHigh),
             onPressed: () => ref.read(buildModeProvider.notifier).exit(),
           ),
           const SizedBox(height: 4),
-          for (final s in BuildSection.values) _railTile(ref, s, mode.section),
+          for (final s in BuildSection.values)
+            _railTile(context, ref, s, mode.section),
           const Spacer(),
           IconButton(
             tooltip: isEditMode ? 'Вийти з редагування' : 'Видалити кімнати',
             icon: Icon(
               isEditMode ? Icons.edit_off : Icons.edit_outlined,
-              color: isEditMode
-                  ? const Color(0xFFFFD700)
-                  : Colors.white.withValues(alpha: 0.7),
+              color: isEditMode ? c.gold : c.textMedium,
             ),
             onPressed: () {
               final next = !ref.read(furnitureEditModeProvider);
@@ -170,7 +163,13 @@ class BuildMenu extends ConsumerWidget {
     );
   }
 
-  Widget _railTile(WidgetRef ref, BuildSection s, BuildSection active) {
+  Widget _railTile(
+    BuildContext context,
+    WidgetRef ref,
+    BuildSection s,
+    BuildSection active,
+  ) {
+    final c = context.appColors;
     final isActive = s == active;
     return InkWell(
       onTap: () => ref.read(buildModeProvider.notifier).setSection(s),
@@ -179,21 +178,17 @@ class BuildMenu extends ConsumerWidget {
         margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(
           color: isActive
-              ? Colors.white.withValues(alpha: 0.12)
+              ? c.accent.withValues(alpha: 0.14)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          border: isActive
-              ? Border.all(color: const Color(0xFF00C0D1), width: 1)
-              : null,
+          border: isActive ? Border.all(color: c.accent, width: 1) : null,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
               s.icon,
-              color: isActive
-                  ? const Color(0xFF00C0D1)
-                  : Colors.white.withValues(alpha: 0.7),
+              color: isActive ? c.accent : c.textMedium,
               size: 22,
             ),
             const SizedBox(height: 4),
@@ -201,9 +196,7 @@ class BuildMenu extends ConsumerWidget {
               s.label,
               style: TextStyle(
                 fontSize: 10,
-                color: isActive
-                    ? const Color(0xFF00C0D1)
-                    : Colors.white.withValues(alpha: 0.7),
+                color: isActive ? c.accent : c.textMedium,
                 fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
               ),
             ),
@@ -220,37 +213,41 @@ class BuildMenu extends ConsumerWidget {
     BuildModeState mode,
     int tick,
   ) {
+    final c = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg(economy),
-        border: const Border(
-          right: BorderSide(color: Color(0x22FFFFFF), width: 1),
+        color: c.surface,
+        border: Border(
+          right: BorderSide(color: c.border, width: 1),
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _panelHeader(economy, mode.section),
-          Expanded(child: _sectionContent(ref, economy, mode, tick)),
+          _panelHeader(context, economy, mode.section),
+          Expanded(child: _sectionContent(context, ref, economy, mode, tick)),
         ],
       ),
     );
   }
 
-  Widget _panelHeader(GameState economy, BuildSection section) {
+  Widget _panelHeader(
+    BuildContext context,
+    GameState economy,
+    BuildSection section,
+  ) {
+    final c = context.appColors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Color(0x22FFFFFF), width: 1),
-        ),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.divider, width: 1)),
       ),
       child: Row(
         children: [
           Text(
             section.label,
-            style: const TextStyle(
-              color: Colors.white,
+            style: TextStyle(
+              color: c.textHigh,
               fontSize: 14,
               fontWeight: FontWeight.w600,
             ),
@@ -259,13 +256,13 @@ class BuildMenu extends ConsumerWidget {
           Icon(
             Icons.account_balance_wallet_outlined,
             size: 14,
-            color: Colors.white.withValues(alpha: 0.6),
+            color: c.textMedium,
           ),
           const SizedBox(width: 4),
           Text(
             '₲${economy.grymni}',
-            style: const TextStyle(
-              color: Color(0xFFFFD700),
+            style: TextStyle(
+              color: c.gold,
               fontSize: 12,
               fontWeight: FontWeight.w600,
             ),
@@ -285,23 +282,23 @@ class BuildMenu extends ConsumerWidget {
     int tick,
     bool isEditMode,
   ) {
+    final c = context.appColors;
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg(economy),
-        border: const Border(
-          top: BorderSide(color: Color(0x22FFFFFF), width: 1),
-        ),
+        color: c.surface,
+        border: Border(top: BorderSide(color: c.border, width: 1)),
       ),
       child: Column(
         children: [
-          _chipRow(ref, mode.section),
-          Expanded(child: _sectionContent(ref, economy, mode, tick)),
+          _chipRow(context, ref, mode.section),
+          Expanded(child: _sectionContent(context, ref, economy, mode, tick)),
         ],
       ),
     );
   }
 
-  Widget _chipRow(WidgetRef ref, BuildSection active) {
+  Widget _chipRow(BuildContext context, WidgetRef ref, BuildSection active) {
+    final c = context.appColors;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -309,7 +306,7 @@ class BuildMenu extends ConsumerWidget {
         children: [
           IconButton(
             tooltip: 'Вийти',
-            icon: const Icon(Icons.close, color: Colors.white, size: 20),
+            icon: Icon(Icons.close, color: c.textHigh, size: 20),
             onPressed: () => ref.read(buildModeProvider.notifier).exit(),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -320,7 +317,7 @@ class BuildMenu extends ConsumerWidget {
               scrollDirection: Axis.horizontal,
               children: [
                 for (final s in BuildSection.values) ...[
-                  _sectionChip(ref, s, active),
+                  _sectionChip(context, ref, s, active),
                   const SizedBox(width: 6),
                 ],
               ],
@@ -331,7 +328,13 @@ class BuildMenu extends ConsumerWidget {
     );
   }
 
-  Widget _sectionChip(WidgetRef ref, BuildSection s, BuildSection active) {
+  Widget _sectionChip(
+    BuildContext context,
+    WidgetRef ref,
+    BuildSection s,
+    BuildSection active,
+  ) {
+    final c = context.appColors;
     final isActive = s == active;
     return ChoiceChip(
       label: Text(s.label),
@@ -340,46 +343,46 @@ class BuildMenu extends ConsumerWidget {
       avatar: Icon(s.icon, size: 16),
       labelStyle: TextStyle(
         fontSize: 12,
-        color: isActive ? Colors.black : Colors.white.withValues(alpha: 0.85),
+        color: isActive ? c.background : c.textHigh,
         fontWeight: FontWeight.w500,
       ),
-      backgroundColor: Colors.white.withValues(alpha: 0.06),
-      selectedColor: const Color(0xFF00C0D1),
+      backgroundColor: c.surfaceDim,
+      selectedColor: c.accent,
     );
   }
 
   // ─── Section content ──────────────────────────────────────────────────────
 
   Widget _sectionContent(
+    BuildContext context,
     WidgetRef ref,
     GameState economy,
     BuildModeState mode,
     int tick,
   ) {
-    if (!mode.section.isStage1Ready) return _comingSoonStub(mode.section);
+    if (!mode.section.isStage1Ready) {
+      return _comingSoonStub(context, mode.section);
+    }
     if (mode.section == BuildSection.rooms) {
       return _roomsList(ref, economy, mode.selectedRoomType, tick);
     }
     return const SizedBox.shrink();
   }
 
-  Widget _comingSoonStub(BuildSection section) {
+  Widget _comingSoonStub(BuildContext context, BuildSection section) {
+    final c = context.appColors;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              section.icon,
-              size: 40,
-              color: Colors.white.withValues(alpha: 0.25),
-            ),
+            Icon(section.icon, size: 40, color: c.textLow),
             const SizedBox(height: 12),
             Text(
               '${section.label} — скоро',
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: c.textHigh,
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),
@@ -389,7 +392,7 @@ class BuildMenu extends ConsumerWidget {
             Text(
               'Прийде у Stage 2 разом з шаблонами кімнат, коридорами і пакетами стін/підлог.',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.55),
+                color: c.textMedium,
                 fontSize: 11,
                 height: 1.4,
               ),
@@ -453,15 +456,20 @@ class _RoomCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.appColors;
     final canAfford = economy.grymni >= type.cost;
     final placedCount = economy.placedRooms.where((r) => r.type == type).length;
     final atCap = placedCount >= type.maxPerOffice;
     final available = canAfford && !atCap;
 
-    final theme = roomThemeForLevel(economy.officeLevel);
-    final accentColor = type.isLuxury
-        ? const Color(0xFFE85DC6)
-        : const Color(0xFF44FF88);
+    // Pixel-art preview keeps using the room theme — the preview *is* a
+    // room, and rooms inherit their colors from the office tier.
+    final roomTheme = roomThemeForLevel(economy.officeLevel);
+
+    // Selection accent: theme accent for compact rooms, gold for luxury so
+    // the "this is the special tier" signal still reads at a glance even
+    // when the player swaps the UI theme.
+    final selectionColor = type.isLuxury ? c.gold : c.accent;
 
     return InkWell(
       onTap: available ? onTap : null,
@@ -470,10 +478,10 @@ class _RoomCard extends StatelessWidget {
         opacity: available ? 1.0 : 0.5,
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF0A0A14).withValues(alpha: 0.6),
+            color: c.surfaceDim,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: isSelected ? accentColor : const Color(0x22FFFFFF),
+              color: isSelected ? selectionColor : c.border,
               width: isSelected ? 2 : 1,
             ),
           ),
@@ -489,7 +497,7 @@ class _RoomCard extends StatelessWidget {
                   child: CustomPaint(
                     painter: _RoomPreviewPainter(
                       type: type,
-                      theme: theme,
+                      theme: roomTheme,
                       tick: tick,
                     ),
                   ),
@@ -502,8 +510,8 @@ class _RoomCard extends StatelessWidget {
                   children: [
                     Text(
                       '${type.icon} ${type.nameUk}',
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: c.textHigh,
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),
@@ -512,10 +520,7 @@ class _RoomCard extends StatelessWidget {
                     Text(
                       '${type.widthTiles}×${type.heightTiles}'
                       ' · до ${type.maxPerOffice} шт.',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
-                        fontSize: 10,
-                      ),
+                      style: TextStyle(color: c.textLow, fontSize: 10),
                     ),
                     const SizedBox(height: 4),
                     Row(
@@ -523,9 +528,7 @@ class _RoomCard extends StatelessWidget {
                         Text(
                           '₲${type.cost}',
                           style: TextStyle(
-                            color: canAfford
-                                ? const Color(0xFFFFD700)
-                                : const Color(0xFFFF5A5A),
+                            color: canAfford ? c.gold : c.error,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
@@ -535,8 +538,7 @@ class _RoomCard extends StatelessWidget {
                           Text(
                             'досягнуто ліміт',
                             style: TextStyle(
-                              color: const Color(0xFFFF5A5A)
-                                  .withValues(alpha: 0.85),
+                              color: c.error,
                               fontSize: 10,
                               fontWeight: FontWeight.w500,
                             ),
