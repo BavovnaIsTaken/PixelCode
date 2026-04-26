@@ -1,0 +1,17 @@
+{
+  "facilitator.picker.title": "Обери свого фасилітатора",
+  "facilitator.picker.subtitle": "Обери стиль, який відповідає тому, як ти хочеш вести цей проєкт. Можеш змінити пізніше.",
+  "facilitator.picker.choose": "Обрати",
+  "facilitator.output.questLine": "Лінія квестів",
+  "facilitator.output.missionBriefing": "Бріфінг місій",
+  "facilitator.output.milestoneTree": "Дерево мілстоунів",
+  "facilitator.output.sprintBacklog": "Бекмог спринту",
+  "facilitator.output.koanEntry": "Журнал рефлексії",
+  "facilitator.ceremony.none": "Немає церемоній",
+  "facilitator.ceremony.scheduled": "запланованих",
+  "facilitator.ceremony.eventDriven": "керованих подіями",
+  "facilitator.intake.projectTitle": "Опиши проєкт",
+  "facilitator.intake.projectHint": "Кілька речень про те, що ти хочеш збудувати…",
+  "facilitator.intake.projectValidator": "Опиши проєкт, щоб продовжити",
+  "facilitator.intake.submit": "Почати"
+}
