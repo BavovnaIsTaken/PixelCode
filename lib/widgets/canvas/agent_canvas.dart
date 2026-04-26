@@ -288,7 +288,24 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
         ? BuildMenu.kBottomSheetHeight
         : 0.0;
 
-    return Stack(
+    return KeyboardListener(
+      focusNode: _keyboardFocusNode,
+      autofocus: buildMode.active,
+      onKeyEvent: (event) {
+        if (!buildMode.active) return;
+        if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
+        final shift = HardwareKeyboard.instance.isShiftPressed;
+        if (event.logicalKey == LogicalKeyboardKey.keyR) {
+          if (shift) {
+            ref.read(buildModeProvider.notifier).rotateCounterClockwise();
+          } else {
+            ref.read(buildModeProvider.notifier).rotateClockwise();
+          }
+        } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+          ref.read(buildModeProvider.notifier).clearSelection();
+        }
+      },
+      child: Stack(
       children: [
         // Canvas — shrinks only when the mobile bottom sheet is open. On
         // desktop the menu takes the chat slot, so canvas keeps its full
@@ -425,6 +442,37 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             bottom: 0,
             height: BuildMenu.kBottomSheetHeight,
             child: const BuildMenu(),
+          ),
+
+        // Place Bar — floats above the build menu / above the canvas bottom
+        // edge when a room type is selected and the ghost is live.
+        if (buildMode.active && buildMode.selectedRoomType != null)
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: (!wideMenu ? BuildMenu.kBottomSheetHeight : 0) + 12,
+            child: _PlaceBar(
+              roomType: buildMode.selectedRoomType!,
+              ghostIsValid: _ghostIsValid(buildMode, gameEconomy.placedRooms),
+              ghostLive: buildMode.ghostCol != null,
+              rotation: buildMode.ghostRotation,
+              onCancel: () => ref.read(buildModeProvider.notifier).clearSelection(),
+              onRotateCW: () => ref.read(buildModeProvider.notifier).rotateClockwise(),
+              onRotateCCW: () => ref.read(buildModeProvider.notifier).rotateCounterClockwise(),
+              onPlace: () {
+                final mode = ref.read(buildModeProvider);
+                final rooms = ref.read(gameEconomyProvider).placedRooms;
+                if (mode.ghostCol != null && _ghostIsValid(mode, rooms)) {
+                  ref.read(gameEconomyProvider.notifier).placeRoom(
+                        mode.selectedRoomType!,
+                        mode.ghostCol!,
+                        mode.ghostRow!,
+                        rotation: mode.ghostRotation,
+                      );
+                  ref.read(buildModeProvider.notifier).clearGhost();
+                }
+              },
+            ),
           ),
       ],
     );
@@ -730,7 +778,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     // values; this branch only runs on a repeat-tap so the values are stable.
     if (!_ghostIsValid(mode, rooms)) return;
 
-    ref.read(gameEconomyProvider.notifier).placeRoom(rt, col, row);
+    ref
+        .read(gameEconomyProvider.notifier)
+        .placeRoom(rt, col, row, rotation: mode.ghostRotation);
     notifier.clearGhost();
   }
 
@@ -1003,6 +1053,201 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
         AgentStatus.waiting => 'чекає',
         AgentStatus.idle => '',
       };
+}
+
+// ─── Place Bar ───────────────────────────────────────────────────────────────
+
+/// Floating action bar shown when a room type is selected in Build Mode.
+/// Provides [X cancel] [↺ CCW] [↻ CW] [✓ Place ₲N] controls.
+class _PlaceBar extends StatelessWidget {
+  final RoomType roomType;
+  final bool ghostIsValid;
+  final bool ghostLive;
+  final int rotation;
+  final VoidCallback onCancel;
+  final VoidCallback onRotateCW;
+  final VoidCallback onRotateCCW;
+  final VoidCallback onPlace;
+
+  const _PlaceBar({
+    required this.roomType,
+    required this.ghostIsValid,
+    required this.ghostLive,
+    required this.rotation,
+    required this.onCancel,
+    required this.onRotateCW,
+    required this.onRotateCCW,
+    required this.onPlace,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    final canPlace = ghostIsValid && ghostLive;
+    final rotLabel = rotation == 0
+        ? ''
+        : '$rotation°';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: c.surface.withValues(alpha: 0.95),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: c.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Room name + cost
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${roomType.icon} ${roomType.nameUk}',
+                  style: TextStyle(
+                    color: c.textHigh,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                Row(
+                  children: [
+                    Text(
+                      '₲${roomType.cost}',
+                      style: TextStyle(
+                        color: c.gold,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (rotLabel.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        rotLabel,
+                        style: TextStyle(color: c.textMedium, fontSize: 10),
+                      ),
+                    ],
+                    if (ghostLive && !ghostIsValid) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        'не вміщується',
+                        style: TextStyle(color: c.error, fontSize: 10),
+                      ),
+                    ] else if (!ghostLive) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        'оберіть місце',
+                        style: TextStyle(color: c.textLow, fontSize: 10),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Cancel
+          _BarButton(
+            icon: Icons.close,
+            tooltip: 'Скасувати (Esc)',
+            color: c.textMedium,
+            onTap: onCancel,
+          ),
+          const SizedBox(width: 4),
+          // Rotate CCW
+          _BarButton(
+            icon: Icons.rotate_left,
+            tooltip: 'Повернути ліворуч (Shift+R)',
+            color: c.textMedium,
+            onTap: onRotateCCW,
+          ),
+          const SizedBox(width: 4),
+          // Rotate CW
+          _BarButton(
+            icon: Icons.rotate_right,
+            tooltip: 'Повернути праворуч (R)',
+            color: c.textMedium,
+            onTap: onRotateCW,
+          ),
+          const SizedBox(width: 8),
+          // Confirm place
+          GestureDetector(
+            onTap: canPlace ? onPlace : null,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: canPlace
+                    ? c.accent.withValues(alpha: 0.15)
+                    : c.surfaceDim,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: canPlace ? c.accent : c.border,
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.check,
+                    size: 14,
+                    color: canPlace ? c.accent : c.textLow,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '₲${roomType.cost}',
+                    style: TextStyle(
+                      color: canPlace ? c.accent : c.textLow,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BarButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _BarButton({
+    required this.icon,
+    required this.tooltip,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, size: 18, color: color),
+        ),
+      ),
+    );
+  }
 }
 
 // ─── Active Agents Status Strip ─────────────────────────────────────────────
