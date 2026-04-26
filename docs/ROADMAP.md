@@ -88,8 +88,8 @@
 | Foreman NPC polish (onboarding chevron + hover speech bubble "Збудуємо?" + persistence) | `[DONE]` | [lib/widgets/canvas/foreman_overlay_painter.dart](../lib/widgets/canvas/foreman_overlay_painter.dart), [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). Foreman вже існував як entry point; додано onboarding cues + diegetic tooltip |
 | Новий BuildMenu shell (NavigationRail desktop / bottom sheet mobile, 6 секцій: Rooms / Templates / Corridors / Walls / Floors / Decor) | `[DONE]` | [lib/widgets/canvas/build_menu.dart](../lib/widgets/canvas/build_menu.dart). Stage 1 видає тільки Rooms; решта секцій — placeholder "скоро у Stage 2" |
 | BuildMenu mount: replaces ChatPanel у лівому 440dp слоті на десктопі (build state ⇒ `buildModeProvider`); мобільна форма лишається bottom-sheet поверх canvas | `[DONE]` | [lib/providers/build_mode_provider.dart](../lib/providers/build_mode_provider.dart), [lib/screens/hub/hub_screen.dart](../lib/screens/hub/hub_screen.dart). Канвас на десктопі більше не звужується — займає всю праву колонку повністю |
-| Listener-based gesture layer (1-finger placement vs 2-finger pan, hover ghost, cursor variants, R/Shift+R rotate) | `[TODO]` | — |
-| Room placement flow (drag-place, snap-to-grid, ghost color valid/invalid, place bar `[X][↺][↻][✓ ₲N]`, adjacency hints зеленою пунктиром у preview) | `[TODO]` | — |
+| Listener-based gesture layer (1-finger placement vs 2-finger pan, hover ghost, cursor variants, R/Shift+R rotate) | `[WIP]` | Q2 2026 |
+| Room placement flow (drag-place, snap-to-grid, ghost color valid/invalid, place bar `[X][↺][↻][✓ ₲N]`, adjacency hints зеленою пунктиром у preview) | `[TODO]` | Q2 2026 |
 
 **Stage 2 — контент і міграція (наступний цикл).**
 
@@ -314,14 +314,15 @@ Facilitator — модальність взаємодії manager-агента, 
 | Компонент | Статус | Файли / ETA |
 |---|---|---|
 | **`FacilitatorStyle` schema** (persona_prompt, lexicon, ceremony, output_mapper) | `[DONE]` | [lib/models/facilitator_style.dart](../lib/models/facilitator_style.dart), [server/src/facilitator/types.ts](../server/src/facilitator/types.ts) |
-| **`FacilitatorRunner` server-side** (intake, seed kanban, on-event ceremonies) | `[PARTIAL]` | [server/src/facilitator/runner.ts](../server/src/facilitator/runner.ts) + WS endpoint `facilitator_start` готові; LLM-backed output generators і event-driven mutations попереду |
+| **`FacilitatorRunner` server-side** (intake, seed kanban, on-event ceremonies) | `[DONE]` | [server/src/facilitator/runner.ts](../server/src/facilitator/runner.ts) + WS endpoint `facilitator_start` готові; Mariya preset + i18n integration (v0.4.0) |
 | **`FacilitatorOutput` interface** (toKanbanTasks/toCanonicalProgress) | `[DONE]` | [lib/models/facilitator_output.dart](../lib/models/facilitator_output.dart) |
 | **Refactor: QuestLine → FacilitatorOutput impl** (Game Master mode) | `[DONE]` | [lib/models/quest_line.dart](../lib/models/quest_line.dart) |
 | **Refactor: QuestPersistence → FacilitatorOutputPersistence** | `[DONE]` | [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) |
 | **Default styles MVP**: Game Master, Marina (Amber), Drill Sergeant | `[DONE]` | [assets/facilitators/](../assets/facilitators/) |
 | **`MissionBriefing` output format** (Drill Sergeant) | `[DONE]` | [lib/models/mission_briefing.dart](../lib/models/mission_briefing.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
 | **`MilestoneTree` output format** (Marina) | `[DONE]` | [lib/models/milestone_tree.dart](../lib/models/milestone_tree.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
-| **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[DONE]` | [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart) + [lib/services/facilitator_onboarding.dart](../lib/services/facilitator_onboarding.dart) + [lib/widgets/facilitator/launch_facilitator_onboarding.dart](../lib/widgets/facilitator/launch_facilitator_onboarding.dart) — onboarding запускає picker→intake→`FacilitatorSessionService.start()` з project selector, коли проєкт ще не має збереженого output |
+| **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[DONE]` | [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart) + [lib/services/facilitator_onboarding.dart](../lib/services/facilitator_onboarding.dart) + [lib/widgets/facilitator/launch_facilitator_onboarding.dart](../lib/widgets/facilitator/launch_facilitator_onboarding.dart) — v0.4.0 додав localization bindings |
+| **i18n integration** (English + Ukrainian across all facilitators) | `[DONE]` | v0.4.0 — see [lib/services/localization_service.dart](../lib/services/localization_service.dart) |
 | **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[TODO]` | Q3 2026 |
 | **Hierarchical prompt safety** (style ≠ tech decisions; tech-lead veto) | `[TODO]` | Q3 2026 |
 | **Default styles v2**: Scrum Master, Stoic Mentor | `[TODO]` | Q4 2026 |

@@ -91,13 +91,25 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 - **Logo Path DSL** — власна скрипт-мова для анімації логотипу на запуску/вимкненні. [lib/services/logo_path_program.dart](lib/services/logo_path_program.dart).
 - **Панель діагностики** — здоров'я сервера, перевірка залежностей, лог-переглядач.
 
+## v0.4.0 — що нового (2026-04-26)
+
+- ✅ **Internationalization (i18n)** — повна локалізація на українську мову; англійська як fallback. Усі екрани, меню й повідомлення адаптовані. [lib/services/localization_service.dart](lib/services/localization_service.dart).
+- ✅ **Mariya facilitator preset** — новий стиль ведення (Ukrainian PM подібна), інтегрований з локалізацією. Можеш обирати між Game Master, Drill Sergeant та Mariya на старті проєкту.
+- ✅ **Build System v2 Stage 1** — навав BuildMenu для будівництва кімнат. NavigationRail на desktop, bottom sheet на мобілі. Schema v6 з підтримкою ротацій кімнат і per-room skin overrides.
+- ✅ **Foreman NPC polish** — дієгетичні підказки, chevron-анімація для onboarding, персистентність вибору.
+- 🔄 **Gesture layer (WIP)** — робимо 1-finger placement та 2-finger pan для будівництва.
+
+Повний CHANGELOG — [CHANGELOG.md](CHANGELOG.md).
+
 ## У планах / в роботі
 
 - **Бонуси суміжності кімнат** — Workstation ↔ Server Room (+5%), Break Room ↔ Lounge (стак моралі), Meeting Room ↔ Workstation (−10% затримки). Фреймворк є, проводка часткова. [docs/office_design.md](docs/office_design.md).
 - **Мораль від Break Room** — +20% продуктивності коли агенти відпочивають; поки не активне.
 - **Штраф за довгий кабель до Server Room** — −5% швидкості, якщо workstation далі ніж 8 клітинок від Server Room.
 - **Буст Meeting Room для менеджера** — зараз просто +1 до капасіті; у планах — прискорення диспатчу задач менеджером.
-- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд уже зібрано в пайплайн: пер-агент profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle зі score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager для system prompt + learned-context ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)) і cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Дизайн і план — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md). UI-інтеграція ще попереду.
+- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд уже зібрано в пайплайн: пер-агент profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle зі score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager для system prompt + learned-context ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)) і cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Дизайн і план — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md). UI-інтеграція наступна (Q3 2026).
+- **Custom Agent Spawn** (Q3 2026) — дозволити користувачам створювати й тренувати своїх унікальних агентів через UI.
+- **Marketplace v1** (Q4 2026) — торгівля агентами, рейтинги, merge-механіка.
 - **Android-деплой** — iOS через Wi-Fi вже готовий; для Android є скелет.
 - **Віддалена оркестрація** — WebSocket-шар готовий запускати сервер на іншій машині, не там де клієнт.
 
