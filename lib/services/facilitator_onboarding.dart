@@ -40,6 +40,12 @@ class FacilitatorOnboardingCompleted extends FacilitatorOnboardingResult {
   const FacilitatorOnboardingCompleted(this.session);
 }
 
+/// WS is not connected — onboarding can't run because we'd just hit the
+/// 30s timeout. The launcher surfaces this as its own snackbar.
+class FacilitatorOnboardingDisconnected extends FacilitatorOnboardingResult {
+  const FacilitatorOnboardingDisconnected();
+}
+
 // ─── Injection seams ─────────────────────────────────────────────────────────
 
 typedef LoadStylesFn = Future<List<FacilitatorStyle>> Function();
