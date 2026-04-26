@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pixelcode/models/facilitator_output.dart';
 import 'package:pixelcode/models/facilitator_style.dart';
 import 'package:pixelcode/models/mission_briefing.dart';
@@ -89,6 +90,8 @@ Future<_HostState> _pump(
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('disconnected — snackbar + Disconnected result, no navigation',
       (tester) async {
     final host = await _pump(tester, (context, ref) {
@@ -240,5 +243,45 @@ void main() {
       )),
       contains('boom'),
     );
+  });
+
+  testWidgets('skipped snackbar shows once per project, not on every call',
+      (tester) async {
+    const projectPath = '/tmp/unique-proj-123';
+    final host = await _pump(tester, (context, ref) {
+      return launchFacilitatorOnboarding(
+        context: context,
+        ref: ref,
+        projectPath: projectPath,
+        isWsConnected: () => true,
+        loadStyles: () async => fail('must not load styles'),
+        loadExisting: (_) async => _output(),
+        pickStyle: (_) async => fail('must not pick'),
+        pickIntake: (_) async => fail('must not intake'),
+        runSession: ({
+          required projectPath,
+          required style,
+          required projectDescription,
+          required answers,
+        }) async =>
+            fail('must not run'),
+      );
+    });
+
+    // First call — snackbar should appear
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    expect(host.lastResult, isA<FacilitatorOnboardingSkipped>());
+    expect(find.textContaining('already has a facilitator'), findsOneWidget);
+
+    // Dismiss the snackbar
+    ScaffoldMessenger.of(tester.element(find.byType(Scaffold))).clearSnackBars();
+    await tester.pumpAndSettle();
+
+    // Second call with same project — snackbar should NOT appear
+    await tester.tap(find.text('go'));
+    await tester.pumpAndSettle();
+    expect(host.lastResult, isA<FacilitatorOnboardingSkipped>());
+    expect(find.textContaining('already has a facilitator'), findsNothing);
   });
 }

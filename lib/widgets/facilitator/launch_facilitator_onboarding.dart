@@ -18,6 +18,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/facilitator_style.dart';
 import '../../providers/agent_provider.dart';
@@ -131,11 +132,17 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
     final text = resultSnackbarText(result);
     if (text != null) {
       toast(text);
+    } else if (result is FacilitatorOnboardingSkipped) {
+      // Only show the "skipped" message once per project.
+      final prefs = await SharedPreferences.getInstance();
+      final shownKey = 'facilitator_skipped_shown_$projectPath';
+      if (!prefs.containsKey(shownKey)) {
+        toast('Project already has a facilitator setup — skipping onboarding.');
+        await prefs.setBool(shownKey, true);
+      }
     } else {
       // Always surface SOMETHING so the user knows the launcher ran.
       toast(switch (result) {
-        FacilitatorOnboardingSkipped() =>
-          'Project already has a facilitator setup — skipping onboarding.',
         FacilitatorOnboardingCancelled() =>
           'Facilitator setup cancelled.',
         FacilitatorOnboardingDisconnected() =>
