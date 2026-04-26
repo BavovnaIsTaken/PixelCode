@@ -4,6 +4,8 @@ library;
 import 'dart:convert';
 
 import 'agent_trait.dart';
+import 'facilitator_output.dart';
+import 'quest_line.dart' show ScopeScore;
 import 'task_board.dart';
 
 // ─── Agent Info ──────────────────────────────────────────────────────────────
@@ -120,6 +122,8 @@ sealed class ServerMessage {
       'dungeon_started' => DungeonStartedMessage.fromJson(json),
       'dungeon_complete' => DungeonCompleteMessage.fromJson(json),
       'dungeon_error' => DungeonErrorMessage.fromJson(json),
+      'facilitator_seeded' => FacilitatorSeededMessage.fromJson(json),
+      'facilitator_error' => FacilitatorErrorMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -853,6 +857,42 @@ class DungeonErrorMessage implements ServerMessage {
         agentId: json['agentId'] as String? ?? '',
         error: json['error'] as String? ?? '',
       );
+}
+
+// ─── Facilitator System ─────────────────────────────────────────────────────
+
+/// Server signals a successful seed for a `facilitator_start` request.
+/// Carries the serialized output JSON so the client can route it through
+/// the persistence-service decoder registry (open/closed for new styles).
+class FacilitatorSeededMessage implements ServerMessage {
+  final String styleId;
+  final ScopeScore finalScore;
+  final OutputFormat outputFormat;
+  final String outputJson;
+
+  FacilitatorSeededMessage({
+    required this.styleId,
+    required this.finalScore,
+    required this.outputFormat,
+    required this.outputJson,
+  });
+
+  factory FacilitatorSeededMessage.fromJson(Map<String, dynamic> json) =>
+      FacilitatorSeededMessage(
+        styleId: json['styleId'] as String? ?? '',
+        finalScore:
+            ScopeScore.fromJson(json['finalScore'] as Map<String, dynamic>),
+        outputFormat:
+            OutputFormat.fromKey(json['outputFormat'] as String? ?? ''),
+        outputJson: json['outputJson'] as String? ?? '',
+      );
+}
+
+class FacilitatorErrorMessage implements ServerMessage {
+  final String error;
+  FacilitatorErrorMessage({required this.error});
+  factory FacilitatorErrorMessage.fromJson(Map<String, dynamic> json) =>
+      FacilitatorErrorMessage(error: json['error'] as String? ?? '');
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

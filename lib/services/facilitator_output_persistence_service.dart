@@ -62,6 +62,17 @@ class FacilitatorOutputPersistenceService {
     return File('${dir.path}/facilitator_output.json');
   }
 
+  /// Dispatches a JSON payload through the registered decoders. Returns
+  /// `null` when the payload's `format` discriminator has no matching
+  /// decoder — callers (e.g. the session orchestrator) can surface this
+  /// as a typed error instead of crashing.
+  static FacilitatorOutput? decode(Map<String, dynamic> json) {
+    final formatKey = json['format'] as String? ?? 'quest_line';
+    final format = OutputFormat.fromKey(formatKey);
+    final decoder = _decoders[format];
+    return decoder == null ? null : decoder(json);
+  }
+
   /// Load the facilitator output for a project, or `null` if none exists
   /// or its format has no registered decoder.
   static Future<FacilitatorOutput?> load(String projectPath) async {
@@ -70,12 +81,7 @@ class FacilitatorOutputPersistenceService {
       if (!file.existsSync()) return null;
       final raw = await file.readAsString();
       if (raw.isEmpty) return null;
-      final json = jsonDecode(raw) as Map<String, dynamic>;
-      final formatKey = json['format'] as String? ?? 'quest_line';
-      final format = OutputFormat.fromKey(formatKey);
-      final decoder = _decoders[format];
-      if (decoder == null) return null;
-      return decoder(json);
+      return decode(jsonDecode(raw) as Map<String, dynamic>);
     } catch (_) {
       return null;
     }
