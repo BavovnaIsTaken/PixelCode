@@ -10,6 +10,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
@@ -72,6 +73,17 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   StreamSubscription<ServerMessage>? _msgSub;
   Timer? _posSyncTimer;
 
+  /// True until the player has tapped the foreman at least once. Drives the
+  /// bouncing onboarding chevron above the foreman's head. Persisted across
+  /// launches so the chevron doesn't re-appear after every restart.
+  bool _foremanIntroPending = true;
+
+  /// True while a desktop pointer is hovering over the foreman hit rect.
+  /// Drives the diegetic "Збудуємо?" speech bubble.
+  bool _foremanHovering = false;
+
+  static const String _foremanIntroSeenKey = 'foremanIntroSeen';
+
   @override
   void initState() {
     super.initState();
@@ -80,7 +92,23 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _sprites.load().then((_) {
       if (mounted) setState(() {});
     });
+    _loadForemanIntroFlag();
     _startPositionSync();
+  }
+
+  Future<void> _loadForemanIntroFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getBool(_foremanIntroSeenKey) ?? false;
+    if (mounted && seen) {
+      setState(() => _foremanIntroPending = false);
+    }
+  }
+
+  Future<void> _markForemanIntroSeen() async {
+    if (!_foremanIntroPending) return;
+    setState(() => _foremanIntroPending = false);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_foremanIntroSeenKey, true);
   }
 
   void _startPositionSync() {
@@ -283,7 +311,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                         _updateBuildGhost(event.localPosition, constraints);
                       },
                       onExit: (_) {
-                        setState(() => _hoveredAgentId = null);
+                        setState(() {
+                          _hoveredAgentId = null;
+                          _foremanHovering = false;
+                        });
                       },
                       child: GestureDetector(
                         onTapDown: (d) =>
@@ -337,6 +368,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       sprites: _sprites,
                                       attention: _renovationAttention(
                                           gameEconomy),
+                                      firstTimePrompt: _foremanIntroPending,
+                                      hovering: _foremanHovering,
                                       nextTier: officeLevel.nextLevel,
                                       doorAffordable: ref
                                           .read(gameEconomyProvider.notifier)
@@ -480,7 +513,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       _selectedPreset = null;
       _ghostCol = null;
       _ghostRow = null;
+      // Hide hover bubble — pointer is now over the build menu, not the foreman.
+      _foremanHovering = false;
     });
+    // Persist that the player has discovered the foreman entry — chevron
+    // never re-appears on subsequent launches.
+    _markForemanIntroSeen();
   }
 
   /// Hit-test the Foreman sprite (world-space rect from foreman_overlay_painter).
@@ -533,6 +571,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final hit = _hitTestCharacter(pos, constraints);
     if (hit != _hoveredAgentId) {
       setState(() => _hoveredAgentId = hit);
+    }
+    // Foreman hover only matters outside build mode (where the entry exists).
+    final overForeman =
+        !_buildMode && _hitTestForeman(pos, constraints);
+    if (overForeman != _foremanHovering) {
+      setState(() => _foremanHovering = overForeman);
     }
   }
 

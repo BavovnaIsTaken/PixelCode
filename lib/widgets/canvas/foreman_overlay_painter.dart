@@ -18,6 +18,27 @@ import 'character_sprites.dart';
 import 'office_game_state.dart';
 import 'room_themes.dart';
 
+// ─── Above-head hint priority ───────────────────────────────────────────────
+
+/// Which hint, if any, should be drawn above the foreman this frame.
+/// Pure ordering — extracted from the painter so the priority is testable
+/// without spinning up a Flutter widget tree.
+enum ForemanHint { none, attention, onboarding, hover }
+
+/// Resolve the active hint given the live UI inputs. Hover wins over every
+/// other hint (live cursor feedback), then the one-time onboarding chevron,
+/// then the recurring affordability "!" bubble.
+ForemanHint pickForemanHint({
+  required bool hovering,
+  required bool firstTimePrompt,
+  required bool attention,
+}) {
+  if (hovering) return ForemanHint.hover;
+  if (firstTimePrompt) return ForemanHint.onboarding;
+  if (attention) return ForemanHint.attention;
+  return ForemanHint.none;
+}
+
 // ─── Layout constants ───────────────────────────────────────────────────────
 // Foreman tile position is declared in office_game_state.dart (foremanColFor/
 // foremanRowFor) so blockedTiles can reference it without a circular import.
@@ -70,6 +91,17 @@ class ForemanOverlayPainter extends CustomPainter {
   /// affordable is up for grabs (next tier OR an expansion).
   final bool attention;
 
+  /// First-launch onboarding hint: shows a bouncing chevron above the foreman
+  /// until the player has tapped him at least once. Distinct from [attention]
+  /// (which fires for affordability). When true, takes priority over the
+  /// attention bubble — onboarding the player matters more than upsells.
+  final bool firstTimePrompt;
+
+  /// True while a desktop pointer is hovering over the foreman hit rect.
+  /// Triggers a small "Збудуємо щось?" speech bubble — a diegetic tooltip
+  /// that replaces the chevron / attention bubble while active.
+  final bool hovering;
+
   /// Next office tier, if any. Drives the door's accent palette.
   final OfficeLevel? nextTier;
 
@@ -87,6 +119,8 @@ class ForemanOverlayPainter extends CustomPainter {
     required this.officeLevel,
     required this.sprites,
     required this.attention,
+    required this.firstTimePrompt,
+    required this.hovering,
     required this.nextTier,
     required this.doorAffordable,
     required this.doorDisabled,
@@ -223,9 +257,20 @@ class ForemanOverlayPainter extends CustomPainter {
     // overhangs the forehead, giving a clear silhouette.
     _drawHardHat(canvas, spriteX, spriteY);
 
-    // Attention bubble.
-    if (attention) {
-      _drawAttentionBubble(canvas, spriteX, spriteY);
+    final hint = pickForemanHint(
+      hovering: hovering,
+      firstTimePrompt: firstTimePrompt,
+      attention: attention,
+    );
+    switch (hint) {
+      case ForemanHint.hover:
+        _drawSpeechBubble(canvas, spriteX, spriteY);
+      case ForemanHint.onboarding:
+        _drawOnboardingChevron(canvas, spriteX, spriteY);
+      case ForemanHint.attention:
+        _drawAttentionBubble(canvas, spriteX, spriteY);
+      case ForemanHint.none:
+        break;
     }
   }
 
@@ -299,6 +344,112 @@ class ForemanOverlayPainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(bubbleX + 1, bubbleY + 6, 2, 1), p);
   }
 
+  /// One-time onboarding chevron — pixel-art down arrow that bobs above the
+  /// foreman so first-time players notice the build entry. Drawn larger and
+  /// brighter than the affordability "!" so it actually catches the eye.
+  void _drawOnboardingChevron(Canvas canvas, double x, double y) {
+    // Slow bob ~1 cycle per second (tick @ 30fps → 0.21 rad/frame ≈ 1Hz).
+    final bob = math.sin(tick * 0.21) * 1.5;
+    final cx = x + 8; // centred over the head
+    final topY = y - 10 + bob;
+
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // Drop shadow for legibility against busy backgrounds.
+    p.color = const Color(0x44000000);
+    _paintChevron(canvas, p, cx + 1, topY + 1);
+
+    // Bright accent fill (gold so it reads as friendly, not warning).
+    p.color = const Color(0xFFFFE357);
+    _paintChevron(canvas, p, cx, topY);
+
+    // Inner highlight stripe — 1 px lighter line on the top edge.
+    p.color = const Color(0xFFFFF7C2);
+    canvas.drawRect(Rect.fromLTWH(cx - 2, topY, 4, 1), p);
+  }
+
+  /// Pixel-art chevron pointing DOWN. 7 px wide, 5 px tall.
+  ///   ███████
+  ///    █████
+  ///     ███
+  ///      █
+  void _paintChevron(Canvas canvas, Paint p, double cx, double topY) {
+    canvas.drawRect(Rect.fromLTWH(cx - 3, topY, 7, 1), p);
+    canvas.drawRect(Rect.fromLTWH(cx - 2, topY + 1, 5, 1), p);
+    canvas.drawRect(Rect.fromLTWH(cx - 1, topY + 2, 3, 1), p);
+    canvas.drawRect(Rect.fromLTWH(cx, topY + 3, 1, 1), p);
+  }
+
+  /// Diegetic hover tooltip — pixel-art speech bubble with "Збудуємо щось?"
+  /// in a tiny 4 px font built from rectangles. Renders a fixed bubble; the
+  /// painter doesn't try to layout text via a TextPainter because it would
+  /// blur on the integer-scale pixel grid.
+  void _drawSpeechBubble(Canvas canvas, double x, double y) {
+    // Bubble sits to the right of the foreman so it doesn't clip into the
+    // grid above. 38 × 9 px keeps the proportions reading as a pixel-art
+    // bubble even at 4× canvas scale.
+    final bubbleX = x + 14;
+    final bubbleY = y - 2;
+    const bubbleW = 38.0;
+    const bubbleH = 9.0;
+
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // Shadow (1 px offset down-right).
+    p.color = const Color(0x44000000);
+    canvas.drawRect(
+      Rect.fromLTWH(bubbleX + 1, bubbleY + 1, bubbleW, bubbleH),
+      p,
+    );
+
+    // Bubble body — soft cream so text reads warm, not clinical.
+    p.color = const Color(0xFFFFF6D8);
+    canvas.drawRect(Rect.fromLTWH(bubbleX, bubbleY, bubbleW, bubbleH), p);
+
+    // 1 px outline.
+    p.color = const Color(0xFF2A2218);
+    canvas.drawRect(Rect.fromLTWH(bubbleX, bubbleY, bubbleW, 1), p);
+    canvas.drawRect(
+      Rect.fromLTWH(bubbleX, bubbleY + bubbleH - 1, bubbleW, 1),
+      p,
+    );
+    canvas.drawRect(Rect.fromLTWH(bubbleX, bubbleY, 1, bubbleH), p);
+    canvas.drawRect(
+      Rect.fromLTWH(bubbleX + bubbleW - 1, bubbleY, 1, bubbleH),
+      p,
+    );
+
+    // Tail — points down-left toward the foreman's head.
+    p.color = const Color(0xFFFFF6D8);
+    canvas.drawRect(Rect.fromLTWH(bubbleX - 1, bubbleY + 4, 1, 2), p);
+    canvas.drawRect(Rect.fromLTWH(bubbleX - 2, bubbleY + 5, 1, 1), p);
+    p.color = const Color(0xFF2A2218);
+    canvas.drawRect(Rect.fromLTWH(bubbleX - 2, bubbleY + 4, 1, 1), p);
+    canvas.drawRect(Rect.fromLTWH(bubbleX - 3, bubbleY + 5, 1, 1), p);
+    canvas.drawRect(Rect.fromLTWH(bubbleX - 1, bubbleY + 6, 1, 1), p);
+
+    // "Збудуємо?" — 4 px tall, drawn via TextPainter at the bubble centre.
+    // We allow TextPainter here because the bubble itself is large enough
+    // that 1-px font hinting blurs aren't visible. The bubble outline is
+    // pixel-art; the inner text is anti-aliased by design.
+    final tp = TextPainter(
+      text: const TextSpan(
+        text: 'Збудуємо?',
+        style: TextStyle(
+          color: Color(0xFF2A2218),
+          fontSize: 5.5,
+          fontWeight: FontWeight.w600,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: bubbleW - 2);
+    tp.paint(
+      canvas,
+      Offset(bubbleX + (bubbleW - tp.width) / 2, bubbleY + 1.5),
+    );
+  }
+
   @override
   bool shouldRepaint(covariant ForemanOverlayPainter old) =>
       old.gridCols != gridCols ||
@@ -307,6 +458,8 @@ class ForemanOverlayPainter extends CustomPainter {
       old.officeLevel != officeLevel ||
       old.sprites != sprites ||
       old.attention != attention ||
+      old.firstTimePrompt != firstTimePrompt ||
+      old.hovering != hovering ||
       old.nextTier != nextTier ||
       old.doorAffordable != doorAffordable ||
       old.doorDisabled != doorDisabled;
