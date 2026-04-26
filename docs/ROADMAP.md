@@ -293,7 +293,7 @@ Facilitator — модальність взаємодії manager-агента, 
 | **Default styles MVP**: Game Master, Marina (Amber), Drill Sergeant | `[DONE]` | [assets/facilitators/](../assets/facilitators/) |
 | **`MissionBriefing` output format** (Drill Sergeant) | `[DONE]` | [lib/models/mission_briefing.dart](../lib/models/mission_briefing.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
 | **`MilestoneTree` output format** (Marina) | `[DONE]` | [lib/models/milestone_tree.dart](../lib/models/milestone_tree.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
-| **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[TODO]` | Q3 2026 — наступний крок vertical slice |
+| **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[PARTIAL]` | [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart) orchestrator готовий (decode + persist + kanban dispatch); WS-протокол client-side і `sendFacilitatorStart` готові; залишилось wire picker → intake → service у real flow |
 | **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[TODO]` | Q3 2026 |
 | **Hierarchical prompt safety** (style ≠ tech decisions; tech-lead veto) | `[TODO]` | Q3 2026 |
 | **Default styles v2**: Scrum Master, Stoic Mentor | `[TODO]` | Q4 2026 |

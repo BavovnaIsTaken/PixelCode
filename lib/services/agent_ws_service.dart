@@ -9,6 +9,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../models/agent_message.dart';
+import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
 
 class AgentWsService {
@@ -405,6 +406,28 @@ class AgentWsService {
       'agentId': agentId,
       'skillType': skillType,
       'difficulty': difficulty.clamp(1, 3),
+    });
+  }
+
+  // ─── Facilitator System ──────────────────────────────────────────────────
+
+  /// Seeds a project with the chosen facilitator style. The server runs
+  /// intake → scope-score → output-generator and replies with either a
+  /// `facilitator_seeded` (success) or `facilitator_error` ServerMessage.
+  ///
+  /// The full style is sent over the wire so the server stays neutral
+  /// about presets — same path also serves user-defined / marketplace
+  /// styles down the line.
+  void sendFacilitatorStart({
+    required FacilitatorStyle style,
+    required String projectDescription,
+    required Map<String, String> answers,
+  }) {
+    _send({
+      'type': 'facilitator_start',
+      'style': style.toJson(),
+      'projectDescription': projectDescription,
+      'answers': answers,
     });
   }
 
