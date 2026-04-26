@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/facilitator_output.dart';
 import 'package:pixelcode/models/facilitator_style.dart';
 import 'package:pixelcode/screens/facilitator/facilitator_picker_screen.dart';
+import '../helpers/localization_test_helper.dart';
 
 FacilitatorStyle _style({
   required String id,
@@ -65,6 +66,8 @@ Future<FacilitatorStyle?> _pushPicker(
 }
 
 void main() {
+  setUpAll(initTestLocalization);
+
   testWidgets('renders one card per style with displayName + tagline', (
     tester,
   ) async {
