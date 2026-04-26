@@ -8,7 +8,7 @@ import {
   clampScore,
   applyOverrides,
   type ScopeScore,
-} from "../src/quest/scope_scorer.ts";
+} from "../src/quest/scope_scorer.js";
 
 test("tierForScore — boundary values map to documented tiers", () => {
   assert.equal(tierForScore(0).tier, "micro");
