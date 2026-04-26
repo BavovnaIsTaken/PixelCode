@@ -16,7 +16,6 @@ import '../../widgets/deploy/device_deploy_popover.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_program.dart';
-import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
 import '../../widgets/canvas/agent_canvas.dart';
 import '../../widgets/canvas/build_menu.dart';
@@ -457,12 +456,6 @@ class _HubScreenState extends ConsumerState<HubScreen>
       }
     });
 
-    // Eagerly initialize providers so they collect data even when their
-    // panels are closed.
-    ref.watch(debugLogProvider);
-    ref.watch(taskBoardProvider);
-    ref.watch(gameEconomyProvider);
-
     final tc = context.appColors;
 
     return Scaffold(
@@ -789,8 +782,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           if (!isConnected) const ConnectionTerminal(),
           const Spacer(),
           // Currency (server-dependent)
-          if (isConnected)
-            _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
+          if (isConnected) const _GrymniDisplay(),
           if (isConnected) const SizedBox(width: 8),
           // iOS deploy
           if (isConnected) _DeviceDeployButton(),
@@ -943,8 +935,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
           const ProjectSelector(),
           const Spacer(),
           // Currency display (server-dependent)
-          if (isConnected)
-            _GrymniDisplay(grymni: ref.watch(gameEconomyProvider).grymni),
+          if (isConnected) const _GrymniDisplay(),
           // The Office / Board / Shop switcher is rendered as a notch that
           // droops below the title bar — see _buildDesktopLayout's Stack.
           const SizedBox(width: 8),
@@ -1131,11 +1122,11 @@ class _HubScreenState extends ConsumerState<HubScreen>
 }
 
 class _GrymniDisplay extends ConsumerWidget {
-  final int grymni;
-  const _GrymniDisplay({required this.grymni});
+  const _GrymniDisplay();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final grymni = ref.watch(gameEconomyProvider.select((s) => s.grymni));
     final label = grymni >= 1000
         ? '${(grymni / 1000).toStringAsFixed(grymni % 1000 == 0 ? 0 : 1)}K'
         : grymni.toString();

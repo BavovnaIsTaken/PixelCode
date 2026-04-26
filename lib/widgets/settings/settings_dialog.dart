@@ -13,6 +13,7 @@ import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
+import '../../providers/gemini_auth_provider.dart';
 import '../../providers/energy_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/session_provider.dart';
@@ -863,9 +864,10 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
 
   @override
   Widget build(BuildContext context) {
-    final authAsync = ref.watch(claudeAuthProvider);
+    final claudeAuthAsync = ref.watch(claudeAuthProvider);
+    final geminiAuthAsync = ref.watch(geminiAuthProvider);
     final game = ref.watch(gameEconomyProvider);
-    final isLoggedIn = authAsync.valueOrNull?.loggedIn ?? false;
+    final claudeLoggedIn = claudeAuthAsync.valueOrNull?.loggedIn ?? false;
 
     final frameId = game.equippedFor(CosmeticType.avatarFrame);
     final titleId = game.equippedFor(CosmeticType.titleBadge);
@@ -886,7 +888,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Avatar with frame
-            _FramedAvatar(frameId: frameId, isLoggedIn: isLoggedIn),
+            _FramedAvatar(frameId: frameId, isLoggedIn: claudeLoggedIn),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -1160,7 +1162,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
                   ),
                   const SizedBox(height: 4),
                   // Auth status line
-                  _buildAuthStatus(authAsync),
+                  _buildAuthStatus(claudeAuthAsync),
                 ],
               ),
             ),
@@ -1173,7 +1175,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
         SizedBox(
           width: double.infinity,
           height: 44,
-          child: _buildAuthButton(authAsync),
+          child: _buildAuthSection(ref, claudeAuthAsync, geminiAuthAsync),
         ),
 
         const SizedBox(height: 32),
@@ -1277,27 +1279,100 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     );
   }
 
-  Widget _buildAuthButton(AsyncValue<ClaudeAuthStatus> authAsync) {
-    return authAsync.when(
-      loading: () => FilledButton(
-        onPressed: null,
-        style: FilledButton.styleFrom(
-          backgroundColor: Colors.white.withValues(alpha: 0.05),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+  Widget _buildAuthSection(
+    WidgetRef ref,
+    AsyncValue<ClaudeAuthStatus> claudeAuthAsync,
+    AsyncValue<GeminiAuthStatus> geminiAuthAsync,
+  ) {
+    return Column(
+      children: [
+        _buildAuthProviderButton(
+          ref,
+          provider: 'Claude',
+          icon: Icons.login_rounded,
+          claudeAuth: claudeAuthAsync,
         ),
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Colors.white.withValues(alpha: 0.3),
-          ),
+        const SizedBox(height: 8),
+        _buildAuthProviderButton(
+          ref,
+          provider: 'Google (Gemini)',
+          icon: Icons.login_rounded,
+          geminiAuth: geminiAuthAsync,
         ),
+      ],
+    );
+  }
+
+  Widget _buildAuthProviderButton(
+    WidgetRef ref, {
+    required String provider,
+    required IconData icon,
+    AsyncValue<ClaudeAuthStatus>? claudeAuth,
+    AsyncValue<GeminiAuthStatus>? geminiAuth,
+  }) {
+    if (claudeAuth != null) {
+      return claudeAuth.when(
+        loading: () => _buildLoadingButton(),
+        error: (_, _) => _buildErrorButton(
+          onPressed: () => ref.read(claudeAuthProvider.notifier).refresh(),
+        ),
+        data: (status) {
+          if (status.loggedIn) {
+            return _buildLoggedInButton(
+              label: 'Вийти (Claude)',
+              onPressed: () => ref.read(claudeAuthProvider.notifier).logout(),
+            );
+          }
+          return _buildLoginButton(
+            label: 'Увійти через claude.ai',
+            icon: icon,
+            onPressed: () => ref.read(claudeAuthProvider.notifier).login(),
+          );
+        },
+      );
+    } else if (geminiAuth != null) {
+      return geminiAuth.when(
+        loading: () => _buildLoadingButton(),
+        error: (_, _) => _buildErrorButton(
+          onPressed: () => ref.read(geminiAuthProvider.notifier).refresh(),
+        ),
+        data: (status) {
+          if (status.loggedIn) {
+            return _buildLoggedInButton(
+              label: 'Вийти (Google)',
+              onPressed: () => ref.read(geminiAuthProvider.notifier).logout(),
+            );
+          }
+          return _buildLoginButton(
+            label: 'Увійти через Google (gemini-cli)',
+            icon: icon,
+            onPressed: () => ref.read(geminiAuthProvider.notifier).login(),
+          );
+        },
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildLoadingButton() => FilledButton(
+    onPressed: null,
+    style: FilledButton.styleFrom(
+      backgroundColor: Colors.white.withValues(alpha: 0.05),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ),
+    child: SizedBox(
+      width: 18,
+      height: 18,
+      child: CircularProgressIndicator(
+        strokeWidth: 2,
+        color: Colors.white.withValues(alpha: 0.3),
       ),
-      error: (_, _) => OutlinedButton.icon(
-        onPressed: () => ref.read(claudeAuthProvider.notifier).refresh(),
+    ),
+  );
+
+  Widget _buildErrorButton({required VoidCallback onPressed}) =>
+      OutlinedButton.icon(
+        onPressed: onPressed,
         icon: const Icon(Icons.refresh, size: 16),
         label: const Text('Спробувати знову'),
         style: OutlinedButton.styleFrom(
@@ -1305,44 +1380,39 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
           side: BorderSide(
             color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
           ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
-      ),
-      data: (status) {
-        if (status.loggedIn) {
-          return OutlinedButton(
-            onPressed: () =>
-                ref.read(claudeAuthProvider.notifier).logout(),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white.withValues(alpha: 0.5),
-              side: BorderSide(
-                color: Colors.white.withValues(alpha: 0.1),
-              ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Вийти'),
-          );
-        }
-        return FilledButton.icon(
-          onPressed: () =>
-              ref.read(claudeAuthProvider.notifier).login(),
-          icon: const Icon(Icons.login_rounded, size: 16),
-          label: const Text('Увійти через Claude'),
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF00C0D1),
-            foregroundColor: Colors.black,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        );
-      },
-    );
-  }
+      );
+
+  Widget _buildLoginButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) =>
+      FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 16),
+        label: Text(label),
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF00C0D1),
+          foregroundColor: Colors.black,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+
+  Widget _buildLoggedInButton({
+    required String label,
+    required VoidCallback onPressed,
+  }) =>
+      OutlinedButton(
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white.withValues(alpha: 0.5),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        child: Text(label),
+      );
 }
 
 // ─── Session profile tile ──────────────────────────────────────────────────

@@ -63,64 +63,66 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
 
     final c = context.appColors;
 
-    return Container(
-      color: c.background,
-      child: Column(
-        children: [
-          // Balance header
-          _BalanceHeader(grymni: game.grymni, totalEarned: game.totalEarned),
-          // Tab bar
-          Container(
-            decoration: BoxDecoration(
-              border: Border(
-                bottom:
-                    BorderSide(color: c.divider),
+    return RepaintBoundary(
+      child: Container(
+        color: c.background,
+        child: Column(
+          children: [
+            // Balance header
+            _BalanceHeader(grymni: game.grymni, totalEarned: game.totalEarned),
+            // Tab bar
+            Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom:
+                      BorderSide(color: c.divider),
+                ),
+              ),
+              child: TabBar(
+                controller: _tabCtrl,
+                isScrollable: true,
+                tabAlignment: TabAlignment.start,
+                labelColor: c.accent,
+                unselectedLabelColor: c.textLow,
+                labelStyle: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+                unselectedLabelStyle: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w400,
+                ),
+                indicatorColor: c.accent,
+                indicatorWeight: 2,
+                dividerColor: Colors.transparent,
+                tabs: const [
+                  Tab(text: 'Наймання'),
+                  Tab(text: 'Навички'),
+                  Tab(text: 'Офіс'),
+                  Tab(text: 'Меблі'),
+                  Tab(text: 'Косметика'),
+                  Tab(text: 'Донат'),
+                ],
               ),
             ),
-            child: TabBar(
-              controller: _tabCtrl,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              labelColor: c.accent,
-              unselectedLabelColor: c.textLow,
-              labelStyle: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.3,
+            // Tab content
+            Expanded(
+              child: TabBarView(
+                controller: _tabCtrl,
+                physics: const BouncingScrollPhysics(),
+                children: const [
+                  RepaintBoundary(child: _HiringTab()),
+                  RepaintBoundary(child: _SkillsTab()),
+                  RepaintBoundary(child: _OfficeTab()),
+                  RepaintBoundary(child: _FurnitureTab()),
+                  RepaintBoundary(child: _CosmeticsTab()),
+                  RepaintBoundary(child: _DonationTab()),
+                ],
               ),
-              unselectedLabelStyle: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w400,
-              ),
-              indicatorColor: c.accent,
-              indicatorWeight: 2,
-              dividerColor: Colors.transparent,
-              tabs: const [
-                Tab(text: 'Наймання'),
-                Tab(text: 'Навички'),
-                Tab(text: 'Офіс'),
-                Tab(text: 'Меблі'),
-                Tab(text: 'Косметика'),
-                Tab(text: 'Донат'),
-              ],
             ),
-          ),
-          // Tab content
-          Expanded(
-            child: TabBarView(
-              controller: _tabCtrl,
-              physics: const BouncingScrollPhysics(),
-              children: const [
-                _HiringTab(),
-                _SkillsTab(),
-                _OfficeTab(),
-                _FurnitureTab(),
-                _CosmeticsTab(),
-                _DonationTab(),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -206,6 +208,12 @@ class _HiringTab extends ConsumerWidget {
     final game = ref.watch(gameEconomyProvider);
     final notifier = ref.read(gameEconomyProvider.notifier);
 
+    // Pre-group agents by role for efficiency (O(N) instead of O(roles * N))
+    final agentsByRole = <String, List<AgentGameData>>{};
+    for (final a in game.agents.values) {
+      agentsByRole.putIfAbsent(a.roleType, () => []).add(a);
+    }
+
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
@@ -220,7 +228,7 @@ class _HiringTab extends ConsumerWidget {
         for (final role in roleCatalog)
           _RoleHireCard(
             role: role,
-            instances: game.instancesOfRole(role.roleType),
+            instances: agentsByRole[role.roleType] ?? [],
             canHire: notifier.canHire(role.roleType),
             canHireMore: game.canHireMore,
             onHire: () => notifier.hireAgent(role.roleType),
@@ -556,17 +564,19 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
         // Agent selector
         _SectionHeader(icon: Icons.person_outline, title: 'Обери агента'),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final entry in hiredAgents)
-              _AgentChip(
-                agentId: entry.key,
-                isSelected: _selectedAgentId == entry.key,
-                onTap: () => setState(() => _selectedAgentId = entry.key),
-              ),
-          ],
+        RepaintBoundary(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final entry in hiredAgents)
+                _AgentChip(
+                  agentId: entry.key,
+                  isSelected: _selectedAgentId == entry.key,
+                  onTap: () => setState(() => _selectedAgentId = entry.key),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
 
@@ -1231,48 +1241,50 @@ class _FurnitureTabState extends ConsumerState<_FurnitureTab> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 4,
-                        runSpacing: 4,
-                        children: [
-                          for (final id in game.ownedFurniture)
-                            GestureDetector(
-                              onTap: () => ref
-                                  .read(
-                                      selectedFurnitureIdProvider.notifier)
-                                  .state = selectedId == id ? null : id,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: selectedId == id
-                                      ? _accent.withValues(alpha: 0.2)
-                                      : Colors.white
-                                          .withValues(alpha: 0.04),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
+                      RepaintBoundary(
+                        child: Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            for (final id in game.ownedFurniture)
+                              GestureDetector(
+                                onTap: () => ref
+                                    .read(
+                                        selectedFurnitureIdProvider.notifier)
+                                    .state = selectedId == id ? null : id,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
                                     color: selectedId == id
-                                        ? _accent.withValues(alpha: 0.5)
+                                        ? _accent.withValues(alpha: 0.2)
                                         : Colors.white
-                                            .withValues(alpha: 0.08),
+                                            .withValues(alpha: 0.04),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: selectedId == id
+                                          ? _accent.withValues(alpha: 0.5)
+                                          : Colors.white
+                                              .withValues(alpha: 0.08),
+                                    ),
                                   ),
-                                ),
-                                child: Text(
-                                  furnitureById(id)?.name ?? id,
-                                  style: TextStyle(
-                                    color: selectedId == id
-                                        ? _accent
-                                        : Colors.white
-                                            .withValues(alpha: 0.4),
-                                    fontSize: 9,
-                                    fontWeight: selectedId == id
-                                        ? FontWeight.w600
-                                        : FontWeight.w400,
+                                  child: Text(
+                                    furnitureById(id)?.name ?? id,
+                                    style: TextStyle(
+                                      color: selectedId == id
+                                          ? _accent
+                                          : Colors.white
+                                              .withValues(alpha: 0.4),
+                                      fontSize: 9,
+                                      fontWeight: selectedId == id
+                                          ? FontWeight.w600
+                                          : FontWeight.w400,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 6),
                       Text(
@@ -1617,17 +1629,19 @@ class _CosmeticsTabState extends ConsumerState<_CosmeticsTab> {
         // Type selector
         _SectionHeader(icon: Icons.palette_outlined, title: 'Категорія'),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final type in CosmeticType.values)
-              _CosmeticTypeChip(
-                type: type,
-                isSelected: _selectedType == type,
-                onTap: () => setState(() => _selectedType = type),
-              ),
-          ],
+        RepaintBoundary(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final type in CosmeticType.values)
+                _CosmeticTypeChip(
+                  type: type,
+                  isSelected: _selectedType == type,
+                  onTap: () => setState(() => _selectedType = type),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 16),
 

@@ -362,8 +362,8 @@ class AgentWsService {
     _send({
       'type': 'set_game_state',
       'instances': instances,
-      'fullState': ?fullState,
-      'stateUpdatedAt': ?stateUpdatedAt,
+      'fullState': fullState,
+      'stateUpdatedAt': stateUpdatedAt,
     });
   }
 

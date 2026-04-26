@@ -6,6 +6,7 @@ library;
 
 import 'dart:convert';
 
+import 'agent_message.dart';
 import 'app_theme.dart';
 
 // ─── Office levels ─────────────────────────────────────────────────────────
@@ -361,6 +362,9 @@ class AgentGameData {
   /// Experience points accumulated towards the next level. Schema v5+.
   final int xp;
 
+  /// The backend model provider for this agent.
+  final AgentProviderType provider;
+
   const AgentGameData({
     required this.instanceId,
     required this.roleType,
@@ -369,6 +373,7 @@ class AgentGameData {
     this.skills = const {},
     this.level = 1,
     this.xp = 0,
+    this.provider = AgentProviderType.cloud,
   });
 
   /// Average skill value — purely a cosmetic summary for UI.
@@ -387,6 +392,7 @@ class AgentGameData {
     Map<SkillType, int>? skills,
     int? level,
     int? xp,
+    AgentProviderType? provider,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -396,6 +402,7 @@ class AgentGameData {
         skills: skills ?? this.skills,
         level: level ?? this.level,
         xp: xp ?? this.xp,
+        provider: provider ?? this.provider,
       );
 
   Map<String, dynamic> toJson() => {
@@ -408,6 +415,7 @@ class AgentGameData {
         },
         'level': level,
         'xp': xp,
+        'provider': provider.index,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -422,6 +430,7 @@ class AgentGameData {
         },
         level: json['level'] as int? ?? 1,
         xp: json['xp'] as int? ?? 0,
+        provider: AgentProviderType.values[json['provider'] as int? ?? 0],
       );
 }
 

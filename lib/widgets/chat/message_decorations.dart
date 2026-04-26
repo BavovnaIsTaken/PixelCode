@@ -10,12 +10,11 @@ const double _kBorderWidth = 3.0;
 /// caller can fall back to the default decoration unchanged.
 BoxDecoration? categoryBubbleDecoration(MessageCategory? category) {
   return switch (category) {
+    // Non-uniform borders are only invalid when combined with borderRadius.
+    // These decorations intentionally omit borderRadius so Flutter's renderer
+    // can handle the left accent without a uniform-color constraint.
     MessageCategory.awaitingReply => BoxDecoration(
         color: const Color(0xFF00C0D1).withValues(alpha: 0.06),
-        borderRadius: const BorderRadius.only(
-          topRight: Radius.circular(12),
-          bottomRight: Radius.circular(4),
-        ),
         border: Border(
           left: const BorderSide(color: Color(0xFF00C0D1), width: _kBorderWidth),
           top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
@@ -25,10 +24,6 @@ BoxDecoration? categoryBubbleDecoration(MessageCategory? category) {
       ),
     MessageCategory.status => BoxDecoration(
         color: Colors.transparent,
-        borderRadius: const BorderRadius.only(
-          topRight: Radius.circular(12),
-          bottomRight: Radius.circular(4),
-        ),
         border: Border(
           left: BorderSide(color: Colors.white.withValues(alpha: 0.18), width: 2),
         ),

@@ -22,6 +22,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
   StreamSubscription<ServerMessage>? _sub;
   StreamSubscription<bool>? _connSub;
   Timer? _saveTimer;
+  Timer? _syncTimer;
   Timer? _passiveIncomeTimer;
 
   /// Agents currently running work, tracked locally from ws messages so
@@ -59,6 +60,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       _sub?.cancel();
       _connSub?.cancel();
       _saveTimer?.cancel();
+      _syncTimer?.cancel();
       _passiveIncomeTimer?.cancel();
     });
 
@@ -66,12 +68,6 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   void _scheduleSave() {
-    // Stamp the state as locally mutated so cross-device sync can apply
-    // last-write-wins. Done synchronously so _syncToServer (which may run
-    // right after) sees the bumped timestamp.
-    state = state.copyWith(
-      updatedAt: DateTime.now().millisecondsSinceEpoch,
-    );
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 2), () {
       final prefs = ref.read(sharedPrefsProvider);
@@ -93,27 +89,39 @@ class GameEconomyNotifier extends Notifier<GameState> {
   ///
   /// Serializes every hired instance into the `instances` map the server
   /// expects (instanceId → { roleType, nickname, hardware, skills }).
+  /// Debounced to avoid hammering the server during rapid UI actions.
   void _syncToServer() {
-    final gs = state;
-    final instances = <String, Map<String, dynamic>>{};
+    _syncTimer?.cancel();
+    _syncTimer = Timer(const Duration(milliseconds: 500), () {
+      final gs = state;
+      final instances = <String, Map<String, dynamic>>{};
 
-    for (final entry in gs.agents.entries) {
-      final a = entry.value;
-      instances[entry.key] = {
-        'roleType': a.roleType,
-        'nickname': a.nickname,
-        'hardware': a.hardware.index,
-        'skills': {
-          for (final s in a.skills.entries) s.key.index.toString(): s.value,
-        },
-      };
-    }
+      for (final entry in gs.agents.entries) {
+        final a = entry.value;
+        instances[entry.key] = {
+          'roleType': a.roleType,
+          'nickname': a.nickname,
+          'hardware': a.hardware.index,
+          'provider': a.provider.index,
+          'skills': {
+            for (final s in a.skills.entries) s.key.index.toString(): s.value,
+          },
+        };
+      }
+      ref.read(wsServiceProvider).setGameState(
+            instances: instances,
+            fullState: gs.encode(),
+            stateUpdatedAt: gs.updatedAt,
+          );
+    });
+  }
 
-    ref.read(wsServiceProvider).setGameState(
-          instances: instances,
-          fullState: gs.encode(),
-          stateUpdatedAt: gs.updatedAt,
-        );
+  void _updateStateAndSync(GameState newState) {
+    state = newState.copyWith(
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    _scheduleSave();
+    _syncToServer();
   }
 
   void _onMessage(ServerMessage msg) {
@@ -215,24 +223,20 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final bonus = msg.costUsd < 0.1 ? 50 : 0;
     final earned = base + bonus;
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + earned,
       totalEarned: state.totalEarned + earned,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void _passiveIncome() {
     if (_activeAgentIds.isEmpty) return;
 
     // 10₲ per minute while agents are working
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + 10,
       totalEarned: state.totalEarned + 10,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Hiring ────────────────────────────────────────────────────────────
@@ -268,13 +272,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
       skills: initialSkillsForRole(roleType),
     );
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
       agents: updated,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
     return instanceId;
   }
 
@@ -294,11 +296,6 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
     final refund = (role?.hireCost ?? 0) ~/ 2;
 
-    state = state.copyWith(
-      grymni: state.grymni + refund,
-      agents: updated,
-    );
-
     // If the fired instance was selected, switch back to a manager instance.
     if (ref.read(selectedAgentProvider) == instanceId) {
       final managers = state.instancesOfRole('manager');
@@ -306,8 +303,10 @@ class GameEconomyNotifier extends Notifier<GameState> {
           managers.isNotEmpty ? managers.first.instanceId : 'manager';
     }
 
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni + refund,
+      agents: updated,
+    ));
   }
 
   /// Rename an instance's nickname. Free within the game (no currency cost).
@@ -319,9 +318,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = agent.copyWith(nickname: trimmed);
 
-    state = state.copyWith(agents: updated);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(agents: updated));
   }
 
   // ─── Skills ────────────────────────────────────────────────────────────
@@ -355,13 +352,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = agent.copyWith(skills: newSkills);
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
       agents: updated,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   /// Award XP to an agent, possibly triggering one or more level-ups.
@@ -384,9 +379,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = agent.copyWith(level: level, xp: xp);
 
-    state = state.copyWith(agents: updated);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(agents: updated));
     return levelsGained;
   }
 
@@ -394,12 +387,10 @@ class GameEconomyNotifier extends Notifier<GameState> {
   /// Called when a task completes with a creativity crit.
   void awardCritBonus() {
     const bonus = 150;
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + bonus,
       totalEarned: state.totalEarned + bonus,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   /// Dungeon completion now awards agent-level XP (not per-skill XP).
@@ -429,13 +420,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = agent.copyWith(hardware: next);
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - next.cost,
       totalSpent: state.totalSpent + next.cost,
       agents: updated,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Office ────────────────────────────────────────────────────────────
@@ -468,16 +457,14 @@ class GameEconomyNotifier extends Notifier<GameState> {
         .where((p) => p.col < nextCols - 1 && p.row < nextRows - 1)
         .toList();
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
       officeLevel: next,
       officeExpansions: 0,
       placedRooms: keptRooms,
       placedFurniture: keptFurniture,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   /// Whether the player can afford and is eligible for the next expansion
@@ -494,25 +481,21 @@ class GameEconomyNotifier extends Notifier<GameState> {
     if (!canBuyOfficeExpansion()) return;
     final next = state.nextExpansion!;
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - next.cost,
       totalSpent: state.totalSpent + next.cost,
       officeExpansions: state.officeExpansions + 1,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Donations ─────────────────────────────────────────────────────────
 
   void purchaseDonation(DonationPackage package) {
     // Stub: always "successful payment"
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + package.grymni,
       totalEarned: state.totalEarned + package.grymni,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Nickname ──────────────────────────────────────────────────────────
@@ -526,14 +509,12 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final cost = state.nextNicknameChangeCost;
     if (cost > 0 && state.grymni < cost) return false;
 
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       nickname: trimmed,
       nicknameChangesUsed: state.nicknameChangesUsed + 1,
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
     return true;
   }
 
@@ -560,13 +541,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final item = cosmeticById(cosmeticId)!;
 
     final owned = Set<String>.from(state.ownedCosmetics)..add(cosmeticId);
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - item.cost,
       totalSpent: state.totalSpent + item.cost,
       ownedCosmetics: owned,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void equipCosmetic(String cosmeticId) {
@@ -576,17 +555,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
     final equipped = Map<int, String>.from(state.equippedCosmetics);
     equipped[item.type.index] = cosmeticId;
-    state = state.copyWith(equippedCosmetics: equipped);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(equippedCosmetics: equipped));
   }
 
   void unequipCosmetic(CosmeticType type) {
     final equipped = Map<int, String>.from(state.equippedCosmetics);
     equipped.remove(type.index);
-    state = state.copyWith(equippedCosmetics: equipped);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(equippedCosmetics: equipped));
   }
 
   // ─── Themes ────────────────────────────────────────────────────────────
@@ -610,22 +585,18 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final def = themeById(themeId)!;
 
     final owned = Set<String>.from(state.themeState.ownedThemes)..add(themeId);
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - def.cost,
       totalSpent: state.totalSpent + def.cost,
       themeState: state.themeState.copyWith(ownedThemes: owned),
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void activateTheme(String themeId) {
     if (!ownsTheme(themeId)) return;
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       themeState: state.themeState.copyWith(activeThemeId: themeId),
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void customizeTheme(String themeId, ThemeCustomization customization) {
@@ -640,11 +611,9 @@ class GameEconomyNotifier extends Notifier<GameState> {
     } else {
       customs[themeId] = customization;
     }
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       themeState: state.themeState.copyWith(customizations: customs),
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Furniture ────────────────────────────────────────────────────────
@@ -664,31 +633,25 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final item = furnitureById(itemId)!;
 
     final owned = Set<String>.from(state.ownedFurniture)..add(itemId);
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - item.cost,
       totalSpent: state.totalSpent + item.cost,
       ownedFurniture: owned,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void placeFurniture(String itemId, int col, int row) {
     if (!ownsFurniture(itemId)) return;
     final placed = List<FurniturePlacement>.from(state.placedFurniture)
       ..add(FurniturePlacement(itemId: itemId, col: col, row: row));
-    state = state.copyWith(placedFurniture: placed);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(placedFurniture: placed));
   }
 
   void removePlacedFurniture(int index) {
     if (index < 0 || index >= state.placedFurniture.length) return;
     final placed = List<FurniturePlacement>.from(state.placedFurniture)
       ..removeAt(index);
-    state = state.copyWith(placedFurniture: placed);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(placedFurniture: placed));
   }
 
   void moveFurniture(int index, int newCol, int newRow) {
@@ -700,9 +663,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       col: newCol,
       row: newRow,
     );
-    state = state.copyWith(placedFurniture: placed);
-    _scheduleSave();
-    _syncToServer();
+    _updateStateAndSync(state.copyWith(placedFurniture: placed));
   }
 
   // ─── Office rooms (Build Mode) ────────────────────────────────────────────
@@ -719,13 +680,11 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final id = 'room_${DateTime.now().microsecondsSinceEpoch}';
     final rooms = List<PlacedRoom>.from(state.placedRooms)
       ..add(PlacedRoom(id: id, type: type, col: col, row: row));
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni - type.cost,
       totalSpent: state.totalSpent + type.cost,
       placedRooms: rooms,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   void removeRoom(String roomId) {
@@ -733,23 +692,19 @@ class GameEconomyNotifier extends Notifier<GameState> {
     if (idx < 0) return;
     final room = state.placedRooms[idx];
     final rooms = List<PlacedRoom>.from(state.placedRooms)..removeAt(idx);
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + room.type.cost ~/ 2,
       placedRooms: rooms,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 
   // ─── Cheat / debug ────────────────────────────────────────────────────
 
   void addGrymni(int amount) {
-    state = state.copyWith(
+    _updateStateAndSync(state.copyWith(
       grymni: state.grymni + amount,
       totalEarned: state.totalEarned + amount,
-    );
-    _scheduleSave();
-    _syncToServer();
+    ));
   }
 }
 

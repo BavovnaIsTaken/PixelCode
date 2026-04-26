@@ -70,6 +70,7 @@ export type ClientMessage =
           roleType: string; // "coder", "reviewer", "manager", etc.
           nickname: string;
           hardware: number; // HardwareTier enum index (0..5)
+          provider?: number; // AgentProviderType enum index (0=cloud, 1=local)
           skills: Record<string, number>; // skillType index → level (1-10)
         }
       >;

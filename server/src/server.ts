@@ -37,6 +37,9 @@ import {
   type GameStateData,
   type HiredAgentInfo,
 } from "./agents.js";
+import { LocalGeminiRunner } from "./local_gemini_runner.js";
+
+const localGemini = new LocalGeminiRunner();
 import { runDungeon, getChallenge } from "./dungeon.js";
 import { FacilitatorRunner, type RunnerState } from "./facilitator/runner.js";
 import {
@@ -1686,10 +1689,55 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       promptParam = prefixedPrompt;
     }
 
-    const q = query({
-      prompt: promptParam,
-      options: queryOptions,
-    });
+    const q = (targetInstance?.provider === 1) // 1 = local
+      ? (async function*() {
+          // Local execution bridge
+          const res = await localGemini.query({
+            agentId: targetAgentId,
+            systemPrompt: finalSystemPrompt,
+            userMessage: prefixedPrompt,
+            projectContext: projectMemory,
+            onText: (text) => {
+              // Send partial text to client for streaming effect
+              send(ws, {
+                type: "assistant_text",
+                text,
+                isPartial: true,
+                agentId: targetAgentId,
+              });
+            }
+          });
+
+          // Mimic completion message
+          yield {
+            type: "assistant",
+            subtype: "message",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: res.result }],
+            },
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              total_cost_usd: 0,
+            },
+            duration_ms: res.duration_ms,
+            session_id: "local",
+            parent_tool_use_id: null,
+          } as SDKAssistantMessage;
+
+          // Mimic result message
+          yield {
+            type: "result",
+            result: res.result,
+            duration_ms: res.duration_ms,
+            total_cost_usd: 0,
+          } as unknown as SDKMessage;
+        })()
+      : query({
+          prompt: promptParam,
+          options: queryOptions,
+        });
 
     let messageCount = 0;
     for await (const message of q) {

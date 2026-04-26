@@ -408,6 +408,8 @@ export interface AgentInstanceData {
   nickname: string;
   /** HardwareTier enum index from Flutter (0..5). */
   hardware: number;
+  /** AgentProviderType enum index (0=cloud, 1=local). */
+  provider?: number;
   /** Skill levels keyed by skillType index-as-string ("0".."4"). */
   skills: Record<string, number>;
 }
@@ -639,6 +641,8 @@ export interface HiredAgentInfo {
   roleType: string;
   /** Effective Claude model (post hardware+skills min). */
   model: string;
+  /** AgentProviderType enum index. */
+  provider: number;
 }
 
 /** Returns the list of hired instances in a UI-friendly shape. */
@@ -659,6 +663,7 @@ export function buildHiredAgentInfoList(
       role: role.ukrainianRoleLabel,
       roleType: inst.roleType,
       model,
+      provider: inst.provider ?? 0, // Default to cloud
     });
   }
   return out;

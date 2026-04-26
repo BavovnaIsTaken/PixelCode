@@ -18,6 +18,7 @@ import '../../services/facilitator_session_service.dart';
 import 'board_added_bubble.dart';
 import 'message_decorations.dart';
 import 'send_button.dart';
+import 'thread_widget.dart';
 
 /// Parses numbered choice options from agent text.
 /// Returns a list of choice labels only when the numbered list is at the very
@@ -64,6 +65,75 @@ String _agentNickname(WidgetRef ref, String id) {
     _ => id,
   };
 }
+
+// ─── Chat item grouping ───────────────────────────────────────────────────────
+
+sealed class _ChatItem {}
+
+class _SingleMessage extends _ChatItem {
+  final ChatMessage message;
+  _SingleMessage(this.message);
+}
+
+class _StatusGroup extends _ChatItem {
+  final List<ChatMessage> messages;
+  _StatusGroup(this.messages);
+}
+
+class _ThreadGroup extends _ChatItem {
+  final String id;
+  final List<ChatMessage> messages;
+  _ThreadGroup({required this.id, required this.messages});
+}
+
+/// Groups a flat message list into runs for rendering.
+///
+/// - Consecutive [MessageCategory.status] messages without a `threadId` (≥2)
+///   become a [_StatusGroup].
+/// - Messages sharing a `threadId` become a [_ThreadGroup].
+/// - Everything else is a [_SingleMessage].
+List<_ChatItem> _buildChatItems(List<ChatMessage> messages) {
+  final items = <_ChatItem>[];
+  int i = 0;
+  while (i < messages.length) {
+    final msg = messages[i];
+
+    // Thread group: all consecutive messages sharing the same threadId
+    if (msg.threadId != null) {
+      final id = msg.threadId!;
+      final group = <ChatMessage>[];
+      while (i < messages.length && messages[i].threadId == id) {
+        group.add(messages[i]);
+        i++;
+      }
+      items.add(_ThreadGroup(id: id, messages: group));
+      continue;
+    }
+
+    // Status run: consecutive status messages without a threadId
+    if (msg.category == MessageCategory.status) {
+      final run = <ChatMessage>[];
+      while (i < messages.length &&
+          messages[i].category == MessageCategory.status &&
+          messages[i].threadId == null) {
+        run.add(messages[i]);
+        i++;
+      }
+      if (run.length >= 2) {
+        items.add(_StatusGroup(run));
+      } else {
+        items.add(_SingleMessage(run.first));
+      }
+      continue;
+    }
+
+    items.add(_SingleMessage(msg));
+    i++;
+  }
+  return items;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 class ChatPanel extends ConsumerStatefulWidget {
   const ChatPanel({super.key});
@@ -669,6 +739,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   Widget build(BuildContext context) {
     final selectedAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
+    final groupedItems = _buildChatItems(messages);
     final syncState = ref.watch(chatSyncStateProvider);
     final agentStatus = ref.watch(
       agentsProvider.select((m) => m[selectedAgent]?.status ?? AgentStatus.idle),
@@ -835,7 +906,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                             reverse: true,
                             controller: _scrollController,
                             padding: const EdgeInsets.all(16),
-                            itemCount: messages.length + (showThinking ? 1 : 0),
+                            itemCount: groupedItems.length + (showThinking ? 1 : 0),
                             itemBuilder: (context, index) {
                               if (showThinking && index == 0) {
                                 return _ThinkingBubble(
@@ -845,10 +916,23 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                 );
                               }
                               final msgIndex = showThinking ? index - 1 : index;
-                              return _ChatBubble(
-                                message:
-                                    messages[messages.length - 1 - msgIndex],
-                              );
+                              final item = groupedItems[groupedItems.length - 1 - msgIndex];
+                              return switch (item) {
+                                _SingleMessage(:final message) =>
+                                  _ChatBubble(message: message),
+                                _StatusGroup(:final messages) =>
+                                  StatusGroupWidget(
+                                    key: ValueKey('sg_${messages.first.timestamp.millisecondsSinceEpoch}'),
+                                    messages: messages,
+                                  ),
+                                _ThreadGroup(:final id, :final messages) =>
+                                  ThreadTile(
+                                    key: ValueKey('t_$id'),
+                                    threadId: id,
+                                    messages: messages,
+                                    messageBuilder: (msg) => _ChatBubble(message: msg),
+                                  ),
+                              };
                             },
                           ),
                           if (!_autoScroll)
@@ -1257,8 +1341,17 @@ class _ChatBubble extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isUser = message.role == ChatRole.user;
+
+    // taskLinked messages render as a compact board-announcement row, not a bubble.
+    if (message.category == MessageCategory.taskLinked) {
+      return BoardAddedBubble(title: message.text);
+    }
+
     final choices =
         (!isUser && !message.isStreaming) ? _extractChoices(message.text) : null;
+
+    final catDecoration = !isUser ? categoryBubbleDecoration(message.category) : null;
+    final catTextStyle = !isUser ? categoryTextStyle(message.category) : null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1288,20 +1381,21 @@ class _ChatBubble extends ConsumerWidget {
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: isUser
-                        ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
-                        : const Color(0xFF1E1F27),
-                    borderRadius: BorderRadius.circular(12).copyWith(
-                      bottomRight: isUser ? const Radius.circular(4) : null,
-                      bottomLeft: !isUser ? const Radius.circular(4) : null,
-                    ),
-                    border: Border.all(
-                      color: isUser
-                          ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
-                          : Colors.white.withValues(alpha: 0.06),
-                    ),
-                  ),
+                  decoration: catDecoration ??
+                      BoxDecoration(
+                        color: isUser
+                            ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
+                            : const Color(0xFF1E1F27),
+                        borderRadius: BorderRadius.circular(12).copyWith(
+                          bottomRight: isUser ? const Radius.circular(4) : null,
+                          bottomLeft: !isUser ? const Radius.circular(4) : null,
+                        ),
+                        border: Border.all(
+                          color: isUser
+                              ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+                              : Colors.white.withValues(alpha: 0.06),
+                        ),
+                      ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1327,11 +1421,12 @@ class _ChatBubble extends ConsumerWidget {
                       if (message.text.isNotEmpty)
                         SelectableText(
                           message.text,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.9),
-                            fontSize: 13,
-                            height: 1.5,
-                          ),
+                          style: catTextStyle ??
+                              TextStyle(
+                                color: Colors.white.withValues(alpha: 0.9),
+                                fontSize: 13,
+                                height: 1.5,
+                              ),
                         ),
                       if (message.isStreaming)
                         Padding(

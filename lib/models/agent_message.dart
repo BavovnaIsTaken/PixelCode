@@ -8,6 +8,12 @@ import 'facilitator_output.dart';
 import 'quest_line.dart' show ScopeScore;
 import 'task_board.dart';
 
+enum AgentProviderType {
+  cloud, // Anthropic / Vertex AI via Server
+  local, // Gemini CLI / Local Model
+  ollama // Future support
+}
+
 // ─── Agent Info ──────────────────────────────────────────────────────────────
 
 /// Identity of an agent known to the UI.
@@ -21,6 +27,7 @@ class AgentInfo {
   final String role;
   final String model;
   final String roleType;
+  final AgentProviderType provider;
 
   const AgentInfo({
     required this.id,
@@ -28,6 +35,7 @@ class AgentInfo {
     required this.role,
     required this.model,
     required this.roleType,
+    this.provider = AgentProviderType.cloud,
   });
 
   factory AgentInfo.fromJson(Map<String, dynamic> json) {
@@ -45,6 +53,7 @@ class AgentInfo {
       role: json['role'] as String,
       model: json['model'] as String,
       roleType: derivedRoleType,
+      provider: AgentProviderType.values[json['provider'] as int? ?? 0],
     );
   }
 }
