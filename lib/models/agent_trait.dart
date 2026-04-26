@@ -47,6 +47,33 @@ class AgentTrait {
         firstSeen: DateTime.parse(json['firstSeen'] as String),
         lastSeen: DateTime.parse(json['lastSeen'] as String),
       );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AgentTrait &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          agentId == other.agentId &&
+          type == other.type &&
+          category == other.category &&
+          tag == other.tag &&
+          lesson == other.lesson &&
+          frequency == other.frequency &&
+          firstSeen == other.firstSeen &&
+          lastSeen == other.lastSeen;
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      agentId.hashCode ^
+      type.hashCode ^
+      category.hashCode ^
+      tag.hashCode ^
+      lesson.hashCode ^
+      frequency.hashCode ^
+      firstSeen.hashCode ^
+      lastSeen.hashCode;
 }
 
 enum TraitType { strength, weakness }

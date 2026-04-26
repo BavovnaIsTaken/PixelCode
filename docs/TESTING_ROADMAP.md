@@ -216,10 +216,12 @@ flutter test test/models/game_state_test.dart \
 
 ---
 
-## Phase 2: Agent Personalization System 🔄 IN QUEUE (Q3 2026)
+## Phase 2: Agent Personalization System 🔄 IN PROGRESS (Q3 2026)
 
 **Target**: Memory lifecycle, lesson extraction, trait management — foundation for custom agents.  
-**Status**: ❌ **NOT STARTED** — 0 tests  
+**Status**: ✅ **SERVER COMPLETE** — 68 tests passing  
+**Server**: Memory Lifecycle (38) + Lesson Extractor (13) + Profile Cache (5) + Personalization (2) + Trait Memory (10)  
+**Pending**: UI tests for Personalization Panel (awaiting UI implementation)  
 **Blocking**: Phase 3 (Custom Agent Spawn)
 
 ### 📝 What Needs Testing
@@ -591,11 +593,12 @@ agent_A.skills_sum > agent_B.skills_sum
 | Phase | Component | Tests | Status | Duration | Blocker |
 |---|---|---|---|---|---|
 | **1** | Core Game State | 91 | ✅ DONE | Done | — |
-| **2** | Personalization | ~70 | ❌ TODO | 2–3w | Phase 1 |
+| **2** | Personalization (server-side) | 68 | ✅ IN PROGRESS | ~1w | Phase 1 |
+| **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
 | **3** | Custom Agent Spawn | ~50 | ❌ TODO | 2–3w | Phase 2 |
 | **4** | Marketplace v1 | ~50 | ❌ TODO | 3–4w | Phase 3 |
 | **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
-| **TOTAL** | — | **~340 tests** | — | **~15–18w solo** | — |
+| **TOTAL** | — | **~350+ tests** | — | **~15–18w solo** | — |
 
 ---
 
