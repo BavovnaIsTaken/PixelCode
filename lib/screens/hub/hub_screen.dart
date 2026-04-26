@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../main.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../widgets/deploy/device_deploy_popover.dart';
 import '../../providers/settings_provider.dart';
@@ -18,6 +19,7 @@ import '../../services/logo_path_program.dart';
 import '../../providers/task_board_provider.dart';
 import '../../widgets/board/task_board_panel.dart';
 import '../../widgets/canvas/agent_canvas.dart';
+import '../../widgets/canvas/build_menu.dart';
 import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
@@ -565,14 +567,26 @@ class _HubScreenState extends ConsumerState<HubScreen>
             Expanded(
               child: Row(
                 children: [
-                  // Left: Chat panel or Easter egg games
+                  // Left: Chat panel — replaced by BuildMenu while the player
+                  // is in Build Mode (and the canvas view is open). Easter
+                  // eggs always win when summoned.
                   SizedBox(
                     width: 440,
                     child: _showGames
                         ? EasterEggGames(
                             onClose: () => setState(() => _showGames = false),
                           )
-                        : const ChatPanel(),
+                        : Consumer(
+                            builder: (context, ref, _) {
+                              final inBuildMode = ref
+                                  .watch(buildModeProvider
+                                      .select((m) => m.active));
+                              if (inBuildMode && _viewIndex == 0) {
+                                return const BuildMenu();
+                              }
+                              return const ChatPanel();
+                            },
+                          ),
                   ),
                   // Divider
                   Container(

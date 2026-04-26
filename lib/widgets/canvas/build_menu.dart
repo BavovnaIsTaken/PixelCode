@@ -15,9 +15,13 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/game_economy.dart';
 import '../../models/resource_pack.dart';
+import '../../providers/build_mode_provider.dart';
+import '../../providers/game_economy_provider.dart';
+import '../../providers/shop_navigation_provider.dart';
 import 'office_game_state.dart';
 import 'room_sprites.dart';
 import 'room_themes.dart';
@@ -50,30 +54,19 @@ extension BuildSectionDisplay on BuildSection {
 /// Width breakpoint between bottom-sheet and rail layouts.
 const double _kBreakpoint = 768;
 
-class BuildMenu extends StatelessWidget {
-  final GameState economy;
-  final BuildSection section;
-  final RoomType? selectedRoomType;
-  final int tick;
-  final bool isEditMode;
+/// Tick provider — small private signal that drives the room-card preview
+/// animation cycles. Rebuilt every ~120 ms so subtle "alive" flickers in
+/// the preview sprites tick along.
+final _previewTickProvider = StreamProvider<int>((ref) async* {
+  var i = 0;
+  while (true) {
+    yield i++;
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+  }
+});
 
-  final ValueChanged<BuildSection> onSectionChange;
-  final ValueChanged<RoomType> onSelectRoom;
-  final VoidCallback onExit;
-  final VoidCallback onToggleEdit;
-
-  const BuildMenu({
-    super.key,
-    required this.economy,
-    required this.section,
-    required this.selectedRoomType,
-    required this.tick,
-    required this.isEditMode,
-    required this.onSectionChange,
-    required this.onSelectRoom,
-    required this.onExit,
-    required this.onToggleEdit,
-  });
+class BuildMenu extends ConsumerWidget {
+  const BuildMenu({super.key});
 
   // Public layout constants — agent_canvas reads these to allocate canvas space.
   static const double kRailWidth = 88;
@@ -82,16 +75,23 @@ class BuildMenu extends StatelessWidget {
   static const double kBreakpoint = _kBreakpoint;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final economy = ref.watch(gameEconomyProvider);
+    final mode = ref.watch(buildModeProvider);
+    final tick = ref.watch(_previewTickProvider).value ?? 0;
+    final isEditMode = ref.watch(furnitureEditModeProvider);
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= _kBreakpoint;
-        return wide ? _buildWide(context) : _buildNarrow(context);
+        return wide
+            ? _buildWide(context, ref, economy, mode, tick, isEditMode)
+            : _buildNarrow(context, ref, economy, mode, tick, isEditMode);
       },
     );
   }
 
-  Color get _panelBg {
+  Color _panelBg(GameState economy) {
     final theme = roomThemeForLevel(economy.officeLevel);
     return Color.alphaBlend(
       theme.wallInner.withValues(alpha: 0.92),
@@ -101,19 +101,36 @@ class BuildMenu extends StatelessWidget {
 
   // ─── Wide layout: rail + panel on the left ────────────────────────────────
 
-  Widget _buildWide(BuildContext context) {
+  Widget _buildWide(
+    BuildContext context,
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+    int tick,
+    bool isEditMode,
+  ) {
     return Row(
       children: [
-        SizedBox(width: kRailWidth, child: _buildRail()),
-        SizedBox(width: kPanelWidth, child: _buildPanel(context)),
+        SizedBox(
+          width: kRailWidth,
+          child: _buildRail(ref, economy, mode, isEditMode),
+        ),
+        Expanded(
+          child: _buildPanel(context, ref, economy, mode, tick),
+        ),
       ],
     );
   }
 
-  Widget _buildRail() {
+  Widget _buildRail(
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+    bool isEditMode,
+  ) {
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg,
+        color: _panelBg(economy),
         border: const Border(
           right: BorderSide(color: Color(0x22FFFFFF), width: 1),
         ),
@@ -124,10 +141,10 @@ class BuildMenu extends StatelessWidget {
           IconButton(
             tooltip: 'Вийти',
             icon: const Icon(Icons.close, color: Colors.white),
-            onPressed: onExit,
+            onPressed: () => ref.read(buildModeProvider.notifier).exit(),
           ),
           const SizedBox(height: 4),
-          for (final s in BuildSection.values) _railTile(s),
+          for (final s in BuildSection.values) _railTile(ref, s, mode.section),
           const Spacer(),
           IconButton(
             tooltip: isEditMode ? 'Вийти з редагування' : 'Видалити кімнати',
@@ -137,7 +154,15 @@ class BuildMenu extends StatelessWidget {
                   ? const Color(0xFFFFD700)
                   : Colors.white.withValues(alpha: 0.7),
             ),
-            onPressed: onToggleEdit,
+            onPressed: () {
+              final next = !ref.read(furnitureEditModeProvider);
+              ref.read(furnitureEditModeProvider.notifier).state = next;
+              if (next) {
+                // Entering edit mode abandons any in-flight pick — can't
+                // place and delete at the same time.
+                ref.read(buildModeProvider.notifier).clearSelection();
+              }
+            },
           ),
           const SizedBox(height: 12),
         ],
@@ -145,19 +170,19 @@ class BuildMenu extends StatelessWidget {
     );
   }
 
-  Widget _railTile(BuildSection s) {
-    final active = s == section;
+  Widget _railTile(WidgetRef ref, BuildSection s, BuildSection active) {
+    final isActive = s == active;
     return InkWell(
-      onTap: () => onSectionChange(s),
+      onTap: () => ref.read(buildModeProvider.notifier).setSection(s),
       child: Container(
         height: 64,
         margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(
-          color: active
+          color: isActive
               ? Colors.white.withValues(alpha: 0.12)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          border: active
+          border: isActive
               ? Border.all(color: const Color(0xFF00C0D1), width: 1)
               : null,
         ),
@@ -166,7 +191,7 @@ class BuildMenu extends StatelessWidget {
           children: [
             Icon(
               s.icon,
-              color: active
+              color: isActive
                   ? const Color(0xFF00C0D1)
                   : Colors.white.withValues(alpha: 0.7),
               size: 22,
@@ -176,10 +201,10 @@ class BuildMenu extends StatelessWidget {
               s.label,
               style: TextStyle(
                 fontSize: 10,
-                color: active
+                color: isActive
                     ? const Color(0xFF00C0D1)
                     : Colors.white.withValues(alpha: 0.7),
-                fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
               ),
             ),
           ],
@@ -188,10 +213,16 @@ class BuildMenu extends StatelessWidget {
     );
   }
 
-  Widget _buildPanel(BuildContext context) {
+  Widget _buildPanel(
+    BuildContext context,
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+    int tick,
+  ) {
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg,
+        color: _panelBg(economy),
         border: const Border(
           right: BorderSide(color: Color(0x22FFFFFF), width: 1),
         ),
@@ -199,14 +230,14 @@ class BuildMenu extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _panelHeader(),
-          Expanded(child: _sectionContent()),
+          _panelHeader(economy, mode.section),
+          Expanded(child: _sectionContent(ref, economy, mode, tick)),
         ],
       ),
     );
   }
 
-  Widget _panelHeader() {
+  Widget _panelHeader(GameState economy, BuildSection section) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: const BoxDecoration(
@@ -246,24 +277,31 @@ class BuildMenu extends StatelessWidget {
 
   // ─── Narrow layout: bottom sheet with chip row ────────────────────────────
 
-  Widget _buildNarrow(BuildContext context) {
+  Widget _buildNarrow(
+    BuildContext context,
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+    int tick,
+    bool isEditMode,
+  ) {
     return Container(
       decoration: BoxDecoration(
-        color: _panelBg,
+        color: _panelBg(economy),
         border: const Border(
           top: BorderSide(color: Color(0x22FFFFFF), width: 1),
         ),
       ),
       child: Column(
         children: [
-          _chipRow(),
-          Expanded(child: _sectionContent()),
+          _chipRow(ref, mode.section),
+          Expanded(child: _sectionContent(ref, economy, mode, tick)),
         ],
       ),
     );
   }
 
-  Widget _chipRow() {
+  Widget _chipRow(WidgetRef ref, BuildSection active) {
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -272,7 +310,7 @@ class BuildMenu extends StatelessWidget {
           IconButton(
             tooltip: 'Вийти',
             icon: const Icon(Icons.close, color: Colors.white, size: 20),
-            onPressed: onExit,
+            onPressed: () => ref.read(buildModeProvider.notifier).exit(),
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
@@ -282,7 +320,7 @@ class BuildMenu extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               children: [
                 for (final s in BuildSection.values) ...[
-                  _sectionChip(s),
+                  _sectionChip(ref, s, active),
                   const SizedBox(width: 6),
                 ],
               ],
@@ -293,16 +331,16 @@ class BuildMenu extends StatelessWidget {
     );
   }
 
-  Widget _sectionChip(BuildSection s) {
-    final active = s == section;
+  Widget _sectionChip(WidgetRef ref, BuildSection s, BuildSection active) {
+    final isActive = s == active;
     return ChoiceChip(
       label: Text(s.label),
-      selected: active,
-      onSelected: (_) => onSectionChange(s),
+      selected: isActive,
+      onSelected: (_) => ref.read(buildModeProvider.notifier).setSection(s),
       avatar: Icon(s.icon, size: 16),
       labelStyle: TextStyle(
         fontSize: 12,
-        color: active ? Colors.black : Colors.white.withValues(alpha: 0.85),
+        color: isActive ? Colors.black : Colors.white.withValues(alpha: 0.85),
         fontWeight: FontWeight.w500,
       ),
       backgroundColor: Colors.white.withValues(alpha: 0.06),
@@ -312,13 +350,20 @@ class BuildMenu extends StatelessWidget {
 
   // ─── Section content ──────────────────────────────────────────────────────
 
-  Widget _sectionContent() {
-    if (!section.isStage1Ready) return _comingSoonStub();
-    if (section == BuildSection.rooms) return _roomsList();
+  Widget _sectionContent(
+    WidgetRef ref,
+    GameState economy,
+    BuildModeState mode,
+    int tick,
+  ) {
+    if (!mode.section.isStage1Ready) return _comingSoonStub(mode.section);
+    if (mode.section == BuildSection.rooms) {
+      return _roomsList(ref, economy, mode.selectedRoomType, tick);
+    }
     return const SizedBox.shrink();
   }
 
-  Widget _comingSoonStub() {
+  Widget _comingSoonStub(BuildSection section) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -356,7 +401,12 @@ class BuildMenu extends StatelessWidget {
     );
   }
 
-  Widget _roomsList() {
+  Widget _roomsList(
+    WidgetRef ref,
+    GameState economy,
+    RoomType? selectedRoomType,
+    int tick,
+  ) {
     final rooms = RoomType.values
         .where((rt) => _isRoomAvailable(rt, economy))
         .toList();
@@ -369,7 +419,8 @@ class BuildMenu extends StatelessWidget {
         economy: economy,
         tick: tick,
         isSelected: selectedRoomType == rooms[i],
-        onTap: () => onSelectRoom(rooms[i]),
+        onTap: () =>
+            ref.read(buildModeProvider.notifier).toggleRoom(rooms[i]),
       ),
     );
   }
@@ -381,6 +432,7 @@ class BuildMenu extends StatelessWidget {
     return true;
   }
 }
+
 
 // ─── Room card ───────────────────────────────────────────────────────────────
 
