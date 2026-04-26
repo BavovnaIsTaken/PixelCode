@@ -5,6 +5,9 @@ import {
   memoryLifecycleConfig,
   findStrength,
   findWeakness,
+  findSimilarStrength,
+  findSimilarWeakness,
+  tokenJaccard,
   buildStrengthIndex,
   buildWeaknessIndex,
   CAPACITY_TIERS,
@@ -197,6 +200,122 @@ test("buildWeaknessIndex — keys by pitfall, retains all entries", () => {
 test("tierForAgent — defaults to sonnet tier", () => {
   assert.deepEqual(tierForAgent("any-id"), CAPACITY_TIERS.sonnet);
 });
+
+// ─── tokenJaccard ──────────────────────────────────────────────────────────
+
+test("tokenJaccard — identical strings return 1", () => {
+  assert.equal(tokenJaccard("delegation-scope", "delegation-scope"), 1);
+});
+
+test("tokenJaccard — fully disjoint strings return 0", () => {
+  assert.equal(tokenJaccard("alpha-beta", "gamma-delta"), 0);
+});
+
+test("tokenJaccard — partial overlap (1 of 4 unique tokens) = 1/4 = 0.25", () => {
+  // {delegation, scope, unclear} ∩ {clear, task, delegation} = {delegation}
+  // union = {delegation, scope, unclear, clear, task} = 5 tokens
+  // 1/5 = 0.2
+  assert.ok(
+    Math.abs(tokenJaccard("unclear-delegation-scope", "clear-task-delegation") - 0.2) < 1e-9
+  );
+});
+
+test("tokenJaccard — synonym variations cross threshold (≥0.5)", () => {
+  // {unclear, delegation, scope} vs {vague, delegation, scope}
+  // intersect=2, union=4 → 0.5
+  const score = tokenJaccard("unclear-delegation-scope", "vague-delegation-scope");
+  assert.ok(score >= memoryLifecycleConfig.similarityThreshold);
+});
+
+test("tokenJaccard — case-insensitive", () => {
+  assert.equal(tokenJaccard("Foo-Bar", "foo-bar"), 1);
+});
+
+test("tokenJaccard — handles spaces, hyphens, and underscores as separators", () => {
+  assert.equal(tokenJaccard("foo bar", "foo-bar"), 1);
+  assert.equal(tokenJaccard("foo_bar", "foo bar"), 1);
+});
+
+test("tokenJaccard — token order does not matter (set-based)", () => {
+  assert.equal(tokenJaccard("code-quality", "quality-code"), 1);
+});
+
+test("tokenJaccard — empty inputs return 0", () => {
+  assert.equal(tokenJaccard("", "anything"), 0);
+  assert.equal(tokenJaccard("anything", ""), 0);
+});
+
+// ─── findSimilarStrength / findSimilarWeakness ─────────────────────────────
+
+test("findSimilarStrength — exact match wins over similar one", () => {
+  const profile = makeProfile({
+    strengths: [
+      makeStrength({ skill: "exact" }),
+      makeStrength({ skill: "exact-similar-but-different" }),
+    ],
+  });
+  const found = findSimilarStrength(profile, "exact");
+  assert.equal(found?.skill, "exact");
+});
+
+test("findSimilarStrength — synonym variation matches above threshold", () => {
+  const profile = makeProfile({
+    strengths: [makeStrength({ skill: "unclear-delegation-scope" })],
+  });
+  const found = findSimilarStrength(profile, "vague-delegation-scope");
+  assert.equal(found?.skill, "unclear-delegation-scope");
+});
+
+test("findSimilarStrength — distant terms return undefined", () => {
+  const profile = makeProfile({
+    strengths: [makeStrength({ skill: "delegation-scope" })],
+  });
+  const found = findSimilarStrength(profile, "code-quality-review");
+  assert.equal(found, undefined);
+});
+
+test("findSimilarStrength — picks the highest-Jaccard candidate", () => {
+  // Query: {unclear, delegation, scope}
+  // delegation-scope        : intersect=2, union=3 → 0.667 (closer: fewer divergent tokens)
+  // vague-delegation-scope  : intersect=2, union=4 → 0.5
+  // distant-task-rotation   : intersect=0, union=6 → 0   (below threshold)
+  const profile = makeProfile({
+    strengths: [
+      makeStrength({ skill: "vague-delegation-scope" }),
+      makeStrength({ skill: "distant-task-rotation" }),
+      makeStrength({ skill: "delegation-scope" }),
+    ],
+  });
+  const found = findSimilarStrength(profile, "unclear-delegation-scope");
+  assert.equal(found?.skill, "delegation-scope");
+});
+
+test("findSimilarStrength — custom threshold filters out weak matches", () => {
+  const profile = makeProfile({
+    strengths: [makeStrength({ skill: "delegation-scope" })],
+  });
+  // Default threshold 0.5 would NOT match (only 2/3 = 0.67 actually does match).
+  // With a higher threshold of 0.9, the match is rejected.
+  const tight = findSimilarStrength(profile, "vague-delegation-scope", 0.9);
+  assert.equal(tight, undefined);
+});
+
+test("findSimilarWeakness — same semantics, different field name", () => {
+  const profile = makeProfile({
+    weaknesses: [makeWeakness({ pitfall: "missing-null-checks" })],
+  });
+  const found = findSimilarWeakness(profile, "missed-null-check");
+  // {missing, null, checks} vs {missed, null, check}
+  // intersect = {null} = 1; union = {missing, missed, null, checks, check} = 5
+  // = 0.2 — below default 0.5 threshold
+  assert.equal(found, undefined);
+
+  // With a lower threshold this should match.
+  const loose = findSimilarWeakness(profile, "missed-null-check", 0.15);
+  assert.equal(loose?.pitfall, "missing-null-checks");
+});
+
+// ─── capacity tiers ────────────────────────────────────────────────────────
 
 test("CAPACITY_TIERS — opus > sonnet > haiku across all caps", () => {
   const keys = [

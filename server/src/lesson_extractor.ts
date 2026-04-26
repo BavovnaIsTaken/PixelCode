@@ -14,8 +14,8 @@ import {
   computeScore,
   tierForAgent,
   memoryLifecycleConfig,
-  buildStrengthIndex,
-  buildWeaknessIndex,
+  findSimilarStrength,
+  findSimilarWeakness,
   type CapacityTier,
 } from "./memory_lifecycle";
 
@@ -109,13 +109,12 @@ export class LessonExtractor {
       userProfile.globalPatterns.topicAffinities[key] ??
       memoryLifecycleConfig.defaultTopicAffinity;
 
-    // Transient O(1) lookups for the duration of this call. Discarded after.
-    const byStrength = buildStrengthIndex(profile);
-    const byWeakness = buildWeaknessIndex(profile);
-
     for (const lesson of lessons) {
       if (lesson.category === "strength") {
-        const existing = byStrength.get(lesson.title);
+        // findSimilarStrength: exact-match-first, then token-Jaccard fallback.
+        // Folds Haiku's synonym variations ("unclear-delegation-scope" vs
+        // "vague-delegation-scope") into one entry instead of accumulating dupes.
+        const existing = findSimilarStrength(profile, lesson.title);
         if (existing) {
           existing.observedCount++;
           existing.confidence = Math.min(
@@ -125,7 +124,7 @@ export class LessonExtractor {
           );
           existing.lastObservedAt = now;
         } else {
-          const entry: (typeof profile.strengths)[number] = {
+          profile.strengths.push({
             skill: lesson.title,
             context: lesson.context,
             observedCount: 1,
@@ -134,9 +133,7 @@ export class LessonExtractor {
             lastObservedAt: now,
             lastAppliedAt: now,
             createdAt: now,
-          };
-          profile.strengths.push(entry);
-          byStrength.set(lesson.title, entry);
+          });
 
           if (profile.strengths.length > tier.MAX_STRENGTHS) {
             profile.strengths.sort(
@@ -145,13 +142,10 @@ export class LessonExtractor {
                 computeScore(a, affinity(a.skill))
             );
             profile.strengths.length = tier.MAX_STRENGTHS;
-            // Index now contains a stale reference to the evicted entry —
-            // safe: we discard the index when this method returns and the
-            // current iteration's entry has a unique title not yet evicted.
           }
         }
       } else {
-        const existing = byWeakness.get(lesson.title);
+        const existing = findSimilarWeakness(profile, lesson.title);
         if (existing) {
           existing.observedCount++;
           existing.avoidanceScore = Math.min(
@@ -161,7 +155,7 @@ export class LessonExtractor {
           );
           existing.lastObservedAt = now;
         } else {
-          const entry: (typeof profile.weaknesses)[number] = {
+          profile.weaknesses.push({
             pitfall: lesson.title,
             impact: lesson.context,
             observedCount: 1,
@@ -170,9 +164,7 @@ export class LessonExtractor {
             lastObservedAt: now,
             lastAvoidedAt: now,
             createdAt: now,
-          };
-          profile.weaknesses.push(entry);
-          byWeakness.set(lesson.title, entry);
+          });
 
           if (profile.weaknesses.length > tier.MAX_WEAKNESSES) {
             profile.weaknesses.sort(
