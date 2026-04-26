@@ -17,10 +17,24 @@ class GamePersistenceService {
       final json = jsonDecode(raw) as Map<String, dynamic>;
       final version = json['schemaVersion'] as int? ?? 1;
       if (version != GameState.currentSchemaVersion) {
-        // Schema mismatch: drop state but preserve whitelisted fields so
-        // players don't lose currency or purchased items across breaking
-        // schema changes.  Set a flag so the UI can show a one-time reset
-        // toast.
+        // Soft migration: same logical shape with purely additive fields. We
+        // accept saves exactly one version back and rely on fromJson to fill
+        // safe defaults for missing keys. Players keep agents / placed rooms /
+        // grymni intact; no reset toast.
+        if (version == GameState.currentSchemaVersion - 1) {
+          try {
+            final migrated = GameState.fromJson(json)
+                .copyWith(schemaVersion: GameState.currentSchemaVersion);
+            prefs.setString(_key, migrated.encode());
+            return migrated;
+          } catch (_) {
+            // Parse failed — fall through to the hard wipe below.
+          }
+        }
+
+        // Hard wipe: schema is too old or soft-migration failed. Preserve
+        // whitelisted fields so players don't lose currency or purchased
+        // items, and set a flag for the one-time reset toast.
         prefs.setBool('schemaResetFlag', true);
         final fresh = GameState.initial();
         final migrated = fresh.copyWith(
