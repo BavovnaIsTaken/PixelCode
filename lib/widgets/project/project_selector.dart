@@ -9,6 +9,7 @@ import '../../models/agent_message.dart';
 import '../../models/project.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/project_provider.dart';
+import '../facilitator/launch_facilitator_onboarding.dart';
 
 class ProjectSelector extends ConsumerStatefulWidget {
   const ProjectSelector({super.key});
@@ -61,6 +62,12 @@ class _ProjectSelectorState extends ConsumerState<ProjectSelector> {
     } finally {
       if (mounted) setState(() => _isSwitching = false);
     }
+    if (!mounted) return;
+    await launchFacilitatorOnboarding(
+      context: context,
+      ref: ref,
+      projectPath: project.path,
+    );
   }
 
   Future<void> _pickFolder() async {
@@ -75,6 +82,12 @@ class _ProjectSelectorState extends ConsumerState<ProjectSelector> {
     } finally {
       if (mounted) setState(() => _isSwitching = false);
     }
+    if (!mounted) return;
+    await launchFacilitatorOnboarding(
+      context: context,
+      ref: ref,
+      projectPath: result,
+    );
   }
 
   Future<void> _rename(String newName) async {
