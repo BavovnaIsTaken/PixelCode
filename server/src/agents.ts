@@ -231,6 +231,20 @@ ${LANG_RULE}`,
   },
 };
 
+/** Default AI provider for each role (0=cloud/Claude, 1=local/Gemini, 2=ollama). */
+export const roleDefaultProviders: Record<string, number> = {
+  manager: 0,
+  coder: 0,
+  tester: 0,
+  reviewer: 0,
+  "tech-lead": 0,
+  security: 0,
+  "ui-ux-designer": 0,
+  "llm-specialist": 0,
+  "game-designer": 0,
+  "strategy-keeper": 0,
+};
+
 /** @deprecated Use roleTemplates. Kept as alias during migration. */
 export const teamAgents = roleTemplates;
 

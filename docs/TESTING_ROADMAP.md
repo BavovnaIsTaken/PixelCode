@@ -327,12 +327,14 @@ testWidgets('PersonalizationPanel shows lessons', (tester) async {
 
 ---
 
-## Phase 3: Custom Agent Spawn & Self-Play 📋 QUEUED (Q3 2026)
+## Phase 3: Custom Agent Spawn & Self-Play 📋 IN PROGRESS (Q3 2026)
 
 **Target**: MVP for ecosystem — users create + export agents.  
-**Status**: ❌ **NOT STARTED** — 0 tests  
+**Status**: ✅ **SERVER-SIDE COMPLETE** — 37 tests passing  
+**Server**: Self-Play (15) + Agent Export/Import (13) + Agent Identity (9)  
 **Blocking**: Phase 4 (Marketplace v1)  
-**Depends on**: Phase 2 (Personalization UI)
+**Depends on**: Phase 2 (Personalization UI)  
+**Pending**: UI tests (Custom Spawn form, self-play progress), integration tests
 
 ### 📝 What Needs Testing
 
@@ -593,10 +595,11 @@ agent_A.skills_sum > agent_B.skills_sum
 | Phase | Component | Tests | Status | Duration | Blocker |
 |---|---|---|---|---|---|
 | **1** | Core Game State | 91 | ✅ DONE | Done | — |
-| **2** | Personalization (server-side) | 68 | ✅ IN PROGRESS | ~1w | Phase 1 |
+| **2** | Personalization (server) | 68 | ✅ DONE | Done | Phase 1 |
 | **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
-| **3** | Custom Agent Spawn | ~50 | ❌ TODO | 2–3w | Phase 2 |
-| **4** | Marketplace v1 | ~50 | ❌ TODO | 3–4w | Phase 3 |
+| **3** | Custom Agent Spawn (server) | 37 | ✅ IN PROGRESS | ~1w | — |
+| **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
+| **4** | Marketplace v1 | ~50 | ❌ TODO | 3–4w | Phase 3 UI |
 | **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
 | **TOTAL** | — | **~350+ tests** | — | **~15–18w solo** | — |
 
