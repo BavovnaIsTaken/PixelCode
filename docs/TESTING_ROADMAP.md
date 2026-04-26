@@ -420,11 +420,11 @@ test('agent export/import preserves skills', () {
 ## Phase 4: Marketplace v1 🎯 IN PROGRESS (Q4 2026)
 
 **Target**: Agent trading infrastructure.  
-**Status**: ✅ **CORE SERVER COMPLETE** — 24 tests passing  
-**Server**: Quality Scoring (10) + Backend (14)  
+**Status**: ✅ **CORE + ECONOMICS COMPLETE** — 36 tests passing  
+**Server**: Quality Scoring (10) + Backend (14) + Commission (12)  
 **Blocking**: Phase 5+ (real-money economics)  
 **Depends on**: Phase 3 (Custom Agent Spawn)  
-**Pending**: Commission calculations (~6), Crowdsourced data pool (~8), UI tests (~12)
+**Pending**: Crowdsourced data pool (~8), UI tests (~12)
 
 ### 📝 What Needs Testing
 
@@ -467,11 +467,15 @@ agent_A.skills_sum > agent_B.skills_sum
 
 #### D. Marketplace Commission
 
-**Tests needed** (~6 tests):
-- [ ] Calculate 15–20% commission
-- [ ] Track total marketplace revenue
-- [ ] Player payout calculation (80–85% of sale)
-- [ ] Commission on real-money conversions
+**Tests completed** ✅ (~12 tests):
+- [x] Calculate 20% commission  
+- [x] Track total marketplace revenue
+- [x] Player payout calculation (80% of sale)
+- [x] Commission on real-money conversions
+- [x] Seller earnings tracking across multiple sales
+- [x] Buyer spending aggregation
+- [x] Transaction immutability and audit trail
+- [x] Edge cases (zero-value, large sales)
 
 ---
 
@@ -601,10 +605,10 @@ agent_A.skills_sum > agent_B.skills_sum
 | **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
 | **3** | Custom Agent Spawn (server) | 37 | ✅ DONE | Done | — |
 | **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
-| **4** | Marketplace v1 (server) | 24 | ✅ IN PROGRESS | ~1w | — |
-| **4.X** | Commission + Data Pool + UI | ~26 | ⏳ PENDING | 2w | — |
+| **4** | Marketplace v1 (server) | 36 | ✅ IN PROGRESS | ~2w | — |
+| **4.X** | Data Pool + UI | ~20 | ⏳ PENDING | 2w | — |
 | **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
-| **TOTAL** | — | **~350+ tests** | — | **~15–18w solo** | — |
+| **TOTAL** | — | **~362+ tests** | — | **~15–18w solo** | — |
 
 ---
 
@@ -676,6 +680,6 @@ open coverage/index.html
 
 ---
 
-**Last updated:** 2026-04-26  
+**Last updated:** 2026-04-26 (Commission tests added)  
 **Owner**: @danylooliinyk  
 **Sync with**: [ROADMAP.md](ROADMAP.md), [STRATEGY.md](STRATEGY.md)
