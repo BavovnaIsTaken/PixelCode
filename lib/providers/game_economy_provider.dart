@@ -687,12 +687,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
   bool isRoomLimitReached(RoomType type) =>
       roomCount(type) >= type.maxPerOffice;
 
-  void placeRoom(RoomType type, int col, int row) {
+  void placeRoom(RoomType type, int col, int row, {int rotation = 0}) {
     if (!canPlaceRoom(type)) return;
     if (isRoomLimitReached(type)) return;
     final id = 'room_${DateTime.now().microsecondsSinceEpoch}';
     final rooms = List<PlacedRoom>.from(state.placedRooms)
-      ..add(PlacedRoom(id: id, type: type, col: col, row: row));
+      ..add(PlacedRoom(
+          id: id, type: type, col: col, row: row, rotation: rotation));
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni - type.cost,
       totalSpent: state.totalSpent + type.cost,

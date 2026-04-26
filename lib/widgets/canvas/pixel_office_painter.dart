@@ -1055,11 +1055,12 @@ class PixelOfficePainter extends CustomPainter {
 
       final gt = ghostRoomType;
       if (gt != null) {
+        final rotated = ghostRoomRotation == 90 || ghostRoomRotation == 270;
         drawGhostRect(
           gc * kTileSize,
           gr * kTileSize,
-          gt.widthTiles * kTileSize,
-          gt.heightTiles * kTileSize,
+          (rotated ? gt.heightTiles : gt.widthTiles) * kTileSize,
+          (rotated ? gt.widthTiles : gt.heightTiles) * kTileSize,
         );
       }
     }

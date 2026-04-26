@@ -345,6 +345,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       : buildMode.selectedRoomType,
                                   ghostRoomCol: buildMode.ghostCol,
                                   ghostRoomRow: buildMode.ghostRow,
+                                  ghostRoomRotation: buildMode.ghostRotation,
                                   ghostIsValid: _ghostIsValid(
                                       buildMode, gameEconomy.placedRooms),
                                 ),
@@ -683,21 +684,23 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     if (rt == null || gc == null || gr == null) return false;
     final gCols = _gameState.gridCols;
     final gRows = _gameState.gridRows;
+    final gw = mode.ghostWidth;
+    final gh = mode.ghostHeight;
     // Must be fully inside inner grid
     if (gc < 1 || gr < 1) return false;
-    if (gc + rt.widthTiles > gCols - 1) return false;
-    if (gr + rt.heightTiles > gRows - 1) return false;
+    if (gc + gw > gCols - 1) return false;
+    if (gr + gh > gRows - 1) return false;
     // No overlap with blocked tiles
     final blocked = _gameState.blockedTiles;
-    for (int dc = 0; dc < rt.widthTiles; dc++) {
-      for (int dr = 0; dr < rt.heightTiles; dr++) {
+    for (int dc = 0; dc < gw; dc++) {
+      for (int dr = 0; dr < gh; dr++) {
         if (blocked.contains('${gc + dc},${gr + dr}')) return false;
       }
     }
-    // No overlap with existing rooms
+    // No overlap with existing rooms (use their rotated footprint too)
     for (final r in rooms) {
-      final ox = gc < r.col + r.type.widthTiles && gc + rt.widthTiles > r.col;
-      final oy = gr < r.row + r.type.heightTiles && gr + rt.heightTiles > r.row;
+      final ox = gc < r.col + r.footprintWidth && gc + gw > r.col;
+      final oy = gr < r.row + r.footprintHeight && gr + gh > r.row;
       if (ox && oy) return false;
     }
     return true;
