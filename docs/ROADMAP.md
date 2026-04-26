@@ -60,7 +60,7 @@
 | Dungeon training з Haiku-суддею | `[DONE]` | [server/src/dungeon.ts](../server/src/dungeon.ts) |
 | Task outcome rolls (bug/crit/incomplete) | `[DONE]` | [lib/services/task_outcome.dart](../lib/services/task_outcome.dart) |
 | Energy meter (daily token meter) | `[DONE]` | [lib/widgets/energy/energy_meter.dart](../lib/widgets/energy/energy_meter.dart) |
-| Quest line / quest persistence (Game Master mode foundation) | `[PARTIAL]` | [server/src/quest/](../server/src/quest/), [lib/services/quest_persistence_service.dart](../lib/services/quest_persistence_service.dart) — data shapes готові, інтеграція в [Facilitator System](FACILITATOR_SYSTEM.md) попереду |
+| Quest line / quest persistence (Game Master mode foundation) | `[PARTIAL]` | [server/src/quest/](../server/src/quest/), [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) — data shapes готові, `QuestLine` тепер імплементує `FacilitatorOutput`; runner + UI попереду (див. [Facilitator System](FACILITATOR_SYSTEM.md)) |
 | **Style picker UI** (вибір facilitator-а на старті проєкту) | `[TODO]` | Q3 2026 |
 | **Lexicon swap layer** (kanban labels через style.lexicon) | `[TODO]` | Q3 2026 |
 | Shop panel (скіни, меблі, апгрейди) | `[DONE]` | [lib/widgets/shop/](../lib/widgets/shop/) |
