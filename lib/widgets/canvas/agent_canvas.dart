@@ -18,7 +18,7 @@ import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import 'build_picker_rail.dart';
+import 'build_menu.dart';
 import 'character_sprites.dart';
 import 'foreman_overlay_painter.dart';
 import 'office_game_state.dart';
@@ -54,12 +54,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   // Build Mode state
   bool _buildMode = false;
-  BuildCategory? _buildCategory;
+  BuildSection _buildSection = BuildSection.rooms;
   RoomType? _selectedRoomType;
-
-  /// When set, the ghost previews a whole preset bundle (multiple rooms) and
-  /// [_selectedRoomType] is null. Mutually exclusive with [_selectedRoomType].
-  OfficePreset? _selectedPreset;
 
   int? _ghostCol;
   int? _ghostRow;
@@ -284,19 +280,28 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
     final officeLevel = gameEconomy.officeLevel;
     final editMode = ref.watch(furnitureEditModeProvider);
-    final trayOpen = _buildMode && _buildCategory != null;
-    final railSpace = _buildMode ? BuildPickerRail.kRailWidth : 0.0;
-    final traySpace = trayOpen ? BuildPickerRail.kTrayHeight : 0.0;
+
+    // BuildMenu shifts the canvas: on wide viewports it sits on the LEFT
+    // (rail + content panel = 88+280 dp), on narrow ones at the BOTTOM
+    // (200 dp sheet). Decision driven by the same breakpoint the menu uses.
+    final viewportWidth = MediaQuery.of(context).size.width;
+    final wideMenu = viewportWidth >= BuildMenu.kBreakpoint;
+    final menuLeftSpace = _buildMode && wideMenu
+        ? BuildMenu.kRailWidth + BuildMenu.kPanelWidth
+        : 0.0;
+    final menuBottomSpace = _buildMode && !wideMenu
+        ? BuildMenu.kBottomSheetHeight
+        : 0.0;
 
     return Stack(
       children: [
         // Canvas — shrinks when build-mode panels are open so the office
         // fits the remaining rectangle instead of being covered over.
         Positioned(
-          left: 0,
+          left: menuLeftSpace,
           top: 0,
-          right: railSpace,
-          bottom: traySpace,
+          right: 0,
+          bottom: menuBottomSpace,
           child: LayoutBuilder(
             builder: (context, constraints) {
               return Stack(
@@ -341,15 +346,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                   buildMode: _buildMode,
                                   ghostRoomType:
                                       editMode ? null : _selectedRoomType,
-                                  ghostPreset:
-                                      editMode ? null : _selectedPreset,
                                   ghostRoomCol: _ghostCol,
                                   ghostRoomRow: _ghostRow,
-                                  ghostIsValid: _selectedPreset != null
-                                      ? _presetGhostIsValid(
-                                          gameEconomy.placedRooms)
-                                      : _ghostIsValid(
-                                          gameEconomy.placedRooms),
+                                  ghostIsValid:
+                                      _ghostIsValid(gameEconomy.placedRooms),
                                 ),
                               ),
                             ),
@@ -417,25 +417,26 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           ),
         ),
 
-        // Build rail + tray: Positioned.fill but the internal widgets only
-        // occupy the right strip + bottom strip, so the canvas above sees the
-        // reduced area and they never overlap.
+        // BuildMenu: rail+panel on the left for wide viewports, bottom sheet
+        // for narrow ones. Canvas above already shrunk to make room for it.
         if (_buildMode)
-          Positioned.fill(
-            child: BuildPickerRail(
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: wideMenu ? 0 : null,
+            right: wideMenu ? null : 0,
+            width: wideMenu
+                ? BuildMenu.kRailWidth + BuildMenu.kPanelWidth
+                : null,
+            height: wideMenu ? null : BuildMenu.kBottomSheetHeight,
+            child: BuildMenu(
               economy: gameEconomy,
               selectedRoomType: _selectedRoomType,
-              selectedPreset: _selectedPreset,
-              activeCategory: _buildCategory,
+              section: _buildSection,
               tick: _tick,
               isEditMode: editMode,
-              showConfirmHint: _ghostCol != null &&
-                  (_selectedRoomType != null ||
-                      _selectedPreset != null),
-              onCategoryTap: (cat) => setState(() {
-                _buildCategory = cat;
-                // Switching category exits edit mode — the user is picking
-                // new things to place, not modifying existing ones.
+              onSectionChange: (s) => setState(() {
+                _buildSection = s;
                 if (editMode) {
                   ref.read(furnitureEditModeProvider.notifier).state = false;
                 }
@@ -443,17 +444,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               onSelectRoom: (rt) => setState(() {
                 _selectedRoomType =
                     _selectedRoomType == rt ? null : rt;
-                _selectedPreset = null;
-                _ghostCol = null;
-                _ghostRow = null;
-                if (editMode) {
-                  ref.read(furnitureEditModeProvider.notifier).state = false;
-                }
-              }),
-              onSelectPreset: (preset) => setState(() {
-                _selectedPreset =
-                    _selectedPreset?.id == preset.id ? null : preset;
-                _selectedRoomType = null;
                 _ghostCol = null;
                 _ghostRow = null;
                 if (editMode) {
@@ -468,7 +458,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                     // Can't place and edit at the same time — clear the
                     // current ghost selection when entering edit mode.
                     _selectedRoomType = null;
-                    _selectedPreset = null;
                     _ghostCol = null;
                     _ghostRow = null;
                   });
@@ -476,9 +465,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               },
               onExit: () => setState(() {
                 _buildMode = false;
-                _buildCategory = null;
                 _selectedRoomType = null;
-                _selectedPreset = null;
                 _ghostCol = null;
                 _ghostRow = null;
                 if (editMode) {
@@ -508,9 +495,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   void _enterBuildMode() {
     setState(() {
       _buildMode = true;
-      _buildCategory = BuildCategory.compact;
+      _buildSection = BuildSection.rooms;
       _selectedRoomType = null;
-      _selectedPreset = null;
       _ghostCol = null;
       _ghostRow = null;
       // Hide hover bubble — pointer is now over the build menu, not the foreman.
@@ -790,22 +776,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
     final notifier = ref.read(gameEconomyProvider.notifier);
 
-    final preset = _selectedPreset;
-    if (preset != null) {
-      if (!_presetGhostIsValid(rooms)) return;
-      notifier.applyPreset(
-        preset: preset,
-        col: col,
-        row: row,
-        blockedTiles: _gameState.blockedTiles,
-      );
-      setState(() {
-        _ghostCol = null;
-        _ghostRow = null;
-      });
-      return;
-    }
-
     final rt = _selectedRoomType;
     if (rt == null) return;
     if (!_ghostIsValid(rooms)) return;
@@ -815,19 +785,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       _ghostCol = null;
       _ghostRow = null;
     });
-  }
-
-  bool _presetGhostIsValid(List<PlacedRoom> rooms) {
-    final preset = _selectedPreset;
-    final gc = _ghostCol;
-    final gr = _ghostRow;
-    if (preset == null || gc == null || gr == null) return false;
-    return ref.read(gameEconomyProvider.notifier).canApplyPreset(
-          preset: preset,
-          col: gc,
-          row: gr,
-          blockedTiles: _gameState.blockedTiles,
-        );
   }
 
   void _updateBuildGhost(Offset screenPos, BoxConstraints constraints) {
