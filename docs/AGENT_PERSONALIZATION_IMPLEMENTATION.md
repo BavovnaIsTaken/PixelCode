@@ -1,6 +1,54 @@
-# Implementation Guide: Personalized Agent System with Prompt Caching
+# Personalized Agent System — Implementation Guide
 
 Based on Claude Agent SDK architecture and PixelCode's existing ChatHistory + TraitMemory foundation.
+
+Companion to [`AGENT_PERSONALIZATION_SYSTEM.md`](AGENT_PERSONALIZATION_SYSTEM.md) (design rationale).
+
+---
+
+## 0. Status (as of 2026-04-26)
+
+**MVP shipped.** All phases in [§9 Timeline](#9-timeline) complete; live smoke test verified the end-to-end cycle (Haiku reflection → AgentProfile → fragment in next system prompt).
+
+### ✅ Done
+
+| Section | Slice | Commit |
+|---------|-------|--------|
+| §2 Phase 1 | ProfileCache + ChatHistory ext + ExecutionHooks foundation | `b23461f` |
+| §6 Memory Lifecycle | `computeScore` / decay / eviction / capacity tiers | `5cd0e2a` |
+| §6 (extension) | `tokenJaccard` + `findSimilar*` semantic dedup (off-doc) | `f8c6552` |
+| §3 Phase 2.1 | LessonExtractor (3 patterns + `applyLessons` with eviction) | `933da30` |
+| §3 Phase 2.2 | PromptCacheManager (system prompt + `buildLearnedContext`) | `b014da8` |
+| §4 Phase 3 | AgentContextPreparer (adapted for `query()` SDK shape) | `48786f3` |
+| §5 Phase 4 | ProjectContextManager (cross-project migration) | `cc3ec3f` |
+| (off-doc) Phase 4.5.1 | `injectLearnedContext` wired in `server.ts` | `cce3c76` |
+| (off-doc) Phase 4.5.2 | `applyLlmLessons` wired in `reflectOnQuery` | `54c0c69` |
+
+Live smoke test 2026-04-26: profiles persist, `manager#1` accumulated `unclear-delegation-scope` weakness from real Haiku reflection, apply-boost incremented `avoidedCount` and `avoidanceScore` on subsequent query.
+
+### 🔭 Resume here — next priorities (none started yet)
+
+1. **Retirement instead of delete** — `compactProfile` and `migrateProfileToNewProject` archive entries (`retired: true` + `retiredAt`) instead of removing them. Required before fork / breed / resurrect UX. Pure profile layer, ~30–50 LOC. **Recommended next slice — fully additive, no production wiring.**
+2. **Population telemetry** — admin-API endpoint listing trending / veteran / dormant agents by `observedCount` + recency. Lives in [`server/src/admin.ts`](../server/src/admin.ts).
+3. **Fork / breed alpha** — profile merge: strengths(A) + weaknesses(B) → new agent. Pure profile op, ~50 LOC.
+4. **`clientId → userId`** — replace `"default-user"` hardcode in [`server.ts`](../server/src/server.ts) and [`agent_context.ts`](../server/src/agent_context.ts) once per-user identity exists in the protocol.
+5. **Embedding-based dedup** — swap `findSimilarStrength` / `findSimilarWeakness` body from `tokenJaccard` to brute-force cosine over per-entry `embedding: Float32Array`. Signature stable, swap point already in place; pick provider (Voyage / OpenAI / local).
+
+### 📂 File path reference (doc → actual)
+
+The doc was drafted using a `backend/src/services/…` layout. Actual code lives flat under `server/src/…`:
+
+| Doc path (referenced in §2–§6) | Actual file |
+|---|---|
+| `backend/src/services/profileCache.ts` | [`server/src/profile_cache.ts`](../server/src/profile_cache.ts) |
+| `backend/src/services/chatHistory.ts` | [`server/src/chat_history.ts`](../server/src/chat_history.ts) |
+| `backend/src/hooks/executionHooks.ts` | [`server/src/hooks/executionHooks.ts`](../server/src/hooks/executionHooks.ts) |
+| `backend/src/services/lessonExtractor.ts` | [`server/src/lesson_extractor.ts`](../server/src/lesson_extractor.ts) |
+| `backend/src/services/promptCacheManager.ts` | [`server/src/prompt_cache_manager.ts`](../server/src/prompt_cache_manager.ts) |
+| `backend/src/agents/agentInitializer.ts` | [`server/src/agent_context.ts`](../server/src/agent_context.ts) (renamed; bundles fragment + cacheKey + recent msgs for the function-oriented `query()` SDK) |
+| `backend/src/services/projectContextManager.ts` | [`server/src/project_context_manager.ts`](../server/src/project_context_manager.ts) |
+| (added in §6) | [`server/src/memory_lifecycle.ts`](../server/src/memory_lifecycle.ts) |
+| (added off-doc, Phase 4.5.x) | [`server/src/personalization.ts`](../server/src/personalization.ts) |
 
 ---
 

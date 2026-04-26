@@ -97,7 +97,7 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 - **Мораль від Break Room** — +20% продуктивності коли агенти відпочивають; поки не активне.
 - **Штраф за довгий кабель до Server Room** — −5% швидкості, якщо workstation далі ніж 8 клітинок від Server Room.
 - **Буст Meeting Room для менеджера** — зараз просто +1 до капасіті; у планах — прискорення диспатчу задач менеджером.
-- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд уже зібрано в пайплайн: пер-агент profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle зі score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager для system prompt + learned-context ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)) і cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Дизайн і план — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md). UI-інтеграція ще попереду.
+- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд уже зібрано в пайплайн: пер-агент profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle зі score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager для system prompt + learned-context ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)) і cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Дизайн і план — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md). UI-інтеграція ще попереду.
 - **Android-деплой** — iOS через Wi-Fi вже готовий; для Android є скелет.
 - **Віддалена оркестрація** — WebSocket-шар готовий запускати сервер на іншій машині, не там де клієнт.
 
@@ -261,7 +261,7 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 - Agent context preparer: fragment + cacheKey + recent messages ([agent_context.ts](server/src/agent_context.ts)).
 - Project context manager — cross-project profile migration ([project_context_manager.ts](server/src/project_context_manager.ts)).
 - Profile cache + execution hooks ([profile_cache.ts](server/src/profile_cache.ts), [hooks/](server/src/hooks/)).
-- Дизайн-документ і план імплементації — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).
+- Дизайн-документ і план імплементації — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md).
 
 **Features — Client UX**
 - Connection terminal indicator у хедері хаба — наочний статус WS-з'єднання.
@@ -402,7 +402,7 @@ The Node.js server ([server/](server/)) bridges the Flutter client to the Claude
 - **Break Room morale system** — +20% productivity when agents rest; not yet active.
 - **Server Room cable proximity** — −5% speed penalty if a workstation is >8 tiles from the Server Room.
 - **Meeting Room manager boost** — currently just +1 capacity; planned to speed up Manager task dispatch.
-- **Agent personalization system** — persistent lessons from past runs to tune prompts. Backend pipeline is wired: per-agent profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle with score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager for system prompt + learned-context fragment ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)), and cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Design + plan: [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md). UI integration still pending.
+- **Agent personalization system** — persistent lessons from past runs to tune prompts. Backend pipeline is wired: per-agent profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle with score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager for system prompt + learned-context fragment ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)), and cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Design + plan: [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md). UI integration still pending.
 - **Android deployment** — iOS over Wi-Fi is done; Android skeleton in place.
 - **Remote orchestration** — WebSocket layer is ready for running the server on a different machine than the client.
 
@@ -566,7 +566,7 @@ For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the 
 - Agent context preparer: fragment + cacheKey + recent messages ([agent_context.ts](server/src/agent_context.ts)).
 - Project context manager — cross-project profile migration ([project_context_manager.ts](server/src/project_context_manager.ts)).
 - Profile cache + execution hooks ([profile_cache.ts](server/src/profile_cache.ts), [hooks/](server/src/hooks/)).
-- Design doc + implementation plan: [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md).
+- Design doc + implementation plan: [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md).
 
 **Features — Client UX**
 - Connection terminal indicator in the hub header — visible WS connection state at a glance.
