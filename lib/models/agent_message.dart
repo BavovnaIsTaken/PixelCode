@@ -899,6 +899,27 @@ class FacilitatorErrorMessage implements ServerMessage {
 
 enum ChatRole { user, assistant }
 
+/// Semantic category applied to a chat message for visual differentiation.
+/// Null (default) means a regular assistant/user message with no special treatment.
+enum MessageCategory {
+  /// Agent is waiting for the user's response — rendered with cyan left border.
+  awaitingReply,
+
+  /// Pure technical noise: tool calls, delegation events, status updates.
+  /// Rendered smaller, monospace, faded; consecutive runs collapse to "N дій".
+  status,
+
+  /// A board task was added — rendered as a board-linkage announcement row.
+  taskLinked,
+}
+
+MessageCategory? _parseCategory(String? s) => switch (s) {
+      'awaitingReply' => MessageCategory.awaitingReply,
+      'status' => MessageCategory.status,
+      'taskLinked' => MessageCategory.taskLinked,
+      _ => null,
+    };
+
 class ChatMessage {
   final ChatRole role;
   final String text;
@@ -907,6 +928,12 @@ class ChatMessage {
   final bool isStreaming;
   final List<String> imageBase64s;
 
+  /// Groups this message into a thread. Null means the message is top-level.
+  final String? threadId;
+
+  /// Optional semantic category used to select visual treatment.
+  final MessageCategory? category;
+
   ChatMessage({
     required this.role,
     required this.text,
@@ -914,15 +941,25 @@ class ChatMessage {
     DateTime? timestamp,
     this.isStreaming = false,
     this.imageBase64s = const [],
+    this.threadId,
+    this.category,
   }) : timestamp = timestamp ?? DateTime.now();
 
-  ChatMessage copyWith({String? text, bool? isStreaming}) => ChatMessage(
+  ChatMessage copyWith({
+    String? text,
+    bool? isStreaming,
+    String? threadId,
+    MessageCategory? category,
+  }) =>
+      ChatMessage(
         role: role,
         text: text ?? this.text,
         agentId: agentId,
         timestamp: timestamp,
         isStreaming: isStreaming ?? this.isStreaming,
         imageBase64s: imageBase64s,
+        threadId: threadId ?? this.threadId,
+        category: category ?? this.category,
       );
 
   Map<String, dynamic> toJson() => {
@@ -931,6 +968,8 @@ class ChatMessage {
         'agentId': agentId,
         'timestamp': timestamp.toIso8601String(),
         if (imageBase64s.isNotEmpty) 'images': imageBase64s,
+        if (threadId != null) 'threadId': threadId,
+        if (category != null) 'category': category!.name,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -938,7 +977,8 @@ class ChatMessage {
         text: json['text'] as String,
         agentId: json['agentId'] as String? ?? 'manager',
         timestamp: DateTime.parse(json['timestamp'] as String),
-        imageBase64s:
-            (json['images'] as List?)?.cast<String>() ?? const [],
+        imageBase64s: (json['images'] as List?)?.cast<String>() ?? const [],
+        threadId: json['threadId'] as String?,
+        category: _parseCategory(json['category'] as String?),
       );
 }

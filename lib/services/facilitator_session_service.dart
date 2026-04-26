@@ -18,6 +18,16 @@ import '../models/facilitator_style.dart';
 import 'agent_ws_service.dart';
 import 'facilitator_output_persistence_service.dart';
 
+// ─── Board-task notification stream ─────────────────────────────────────────
+
+/// Fires a task title each time a kanban task is dispatched by the facilitator.
+/// Components (e.g. ChatPanel) can subscribe to surface confirmation banners.
+final _boardTaskController = StreamController<String>.broadcast();
+
+/// App-wide stream of task titles added to the board by the facilitator.
+/// Subscription is safe across widget rebuilds because the stream is broadcast.
+Stream<String> get facilitatorBoardTaskStream => _boardTaskController.stream;
+
 // ─── Injection seams ─────────────────────────────────────────────────────────
 
 /// Sends the `facilitator_start` WS request. Side-effecting; no return.
@@ -189,6 +199,7 @@ class FacilitatorSessionService {
         allowedRoles: t.allowedRoles,
         taskType: t.taskType,
       );
+      _boardTaskController.add(t.title);
     }
 
     return FacilitatorSeedSuccess(

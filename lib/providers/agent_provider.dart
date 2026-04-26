@@ -293,6 +293,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
+  /// Injects a local-only message into the chat (never sent to the server).
+  /// Used for synthetic notifications like board-task-added confirmations.
+  void addLocalMessage(ChatMessage msg) {
+    final agentId = msg.agentId.isNotEmpty ? msg.agentId : _selectedAgent;
+    _setAgentMessages(agentId, [..._agentMessages(agentId), msg]);
+    _scheduleSave();
+  }
+
   void sendMessage(
     String text, {
     List<Uint8List> images = const [],

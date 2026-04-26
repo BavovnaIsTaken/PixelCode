@@ -14,6 +14,9 @@ import '../../models/app_theme.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
+import '../../services/facilitator_session_service.dart';
+import 'board_added_bubble.dart';
+import 'message_decorations.dart';
 import 'send_button.dart';
 
 /// Parses numbered choice options from agent text.
@@ -81,6 +84,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   final _imagePicker = ImagePicker();
   Timer? _skeletonTimer;
   bool _showSkeleton = false;
+  StreamSubscription<String>? _boardTaskSub;
 
   // Direct-messaging hint: dismissed once per chat opening. If the user ticks
   // the "don't show again" box, the hint is hidden permanently via settings.
@@ -125,6 +129,20 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         });
       }
     });
+
+    _boardTaskSub = facilitatorBoardTaskStream.listen(_onBoardTaskAdded);
+  }
+
+  void _onBoardTaskAdded(String title) {
+    if (!mounted) return;
+    ref.read(chatProvider.notifier).addLocalMessage(
+      ChatMessage(
+        role: ChatRole.assistant,
+        agentId: ref.read(selectedAgentProvider),
+        text: title,
+        category: MessageCategory.taskLinked,
+      ),
+    );
   }
 
   void _onFocusChange() => setState(() {});
@@ -143,6 +161,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
 
   @override
   void dispose() {
+    _boardTaskSub?.cancel();
     _skeletonTimer?.cancel();
     _focusNode.removeListener(_onFocusChange);
     _controller.removeListener(_onInputChanged);
