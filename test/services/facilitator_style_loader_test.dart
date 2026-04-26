@@ -16,7 +16,7 @@ Future<String> _diskLoader(String key) async {
 void main() {
   group('defaultStyleIds', () {
     test('contains exactly the 3 MVP styles in expected order', () {
-      expect(defaultStyleIds, ['game_master', 'marina', 'drill_sergeant']);
+      expect(defaultStyleIds, ['game_master', 'Mariya', 'drill_sergeant']);
     });
   });
 
@@ -34,14 +34,14 @@ void main() {
       expect(s.toneModifiers.verbosity, greaterThan(0.5));
     });
 
-    test('marina parses, lands on Amber / milestoneTree', () async {
+    test('mariya parses, lands on Amber / milestoneTree', () async {
       final s =
-          await FacilitatorStyleLoader.loadById('marina', loader: _diskLoader);
-      expect(s.id, 'marina');
+          await FacilitatorStyleLoader.loadById('Mariya', loader: _diskLoader);
+      expect(s.id, 'Mariya');
       expect(s.laloux, Laloux.amber);
       expect(s.outputMapper, OutputFormat.milestoneTree);
-      expect(s.lexicon['task'], 'task');
-      expect(s.lexicon['sprint'], 'iteration');
+      expect(s.lexicon['task'], 'завдання');
+      expect(s.lexicon['sprint'], 'цикл');
       // High formality.
       expect(s.toneModifiers.formality, greaterThan(0.7));
     });
