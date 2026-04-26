@@ -38,6 +38,11 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { runDungeon, getChallenge } from "./dungeon.js";
+import { FacilitatorRunner, type RunnerState } from "./facilitator/runner.js";
+import {
+  parseStartRequest as parseFacilitatorStart,
+  handleStartRequest as handleFacilitatorStart,
+} from "./facilitator/ws_handler.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
@@ -557,6 +562,22 @@ const clientBypassPermissions = new WeakMap<WebSocket, boolean>();
 
 /** Per-client game economy state (hired agents, hardware, skills). */
 const clientGameState = new WeakMap<WebSocket, GameStateData>();
+
+/**
+ * Per-client Facilitator System runtime state. Survives across messages on
+ * the same WS so subsequent ticks/switches see the same fire-log + style.
+ * Lost on reconnect (acceptable for the vertical slice; persistence lands
+ * with the personalization integration).
+ */
+const clientFacilitatorState = new WeakMap<WebSocket, RunnerState>();
+
+/**
+ * Singleton runner — purely behavioral, holds no per-client state. Default
+ * `GeneratorRegistry` ships stub generators for the MVP output mappers
+ * (quest_line / mission_briefing / milestone_tree); LLM-backed generators
+ * register themselves via `setGenerator` once available.
+ */
+const facilitatorRunner = new FacilitatorRunner();
 
 /** Latest full game state for cross-device sync (last-write-wins by timestamp). */
 let latestFullGameState: string | null = null;
@@ -3350,6 +3371,41 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        // ─── Facilitator System ──────────────────────────────────────────
+
+        case "facilitator_start": {
+          const parsed = parseFacilitatorStart(msg);
+          if (!parsed.ok) {
+            sendDebug(ws, "warn", "facilitator", `Bad start payload: ${parsed.error}`);
+            send(ws, { type: "facilitator_error", error: parsed.error } as any);
+            break;
+          }
+          const result = await handleFacilitatorStart(
+            facilitatorRunner,
+            PROJECT_CWD,
+            parsed.value,
+          );
+          if (!result.ok) {
+            sendDebug(ws, "error", "facilitator", `Seed failed: ${result.error}`);
+            send(ws, { type: "facilitator_error", error: result.error } as any);
+            break;
+          }
+          clientFacilitatorState.set(ws, result.state);
+          dbg(
+            "info",
+            "facilitator",
+            `Seeded "${parsed.value.style.id}" → ${result.seed.outputFormat} (${result.seed.outputJson.length}B)`,
+          );
+          send(ws, {
+            type: "facilitator_seeded",
+            styleId: parsed.value.style.id,
+            finalScore: result.seed.finalScore,
+            outputFormat: result.seed.outputFormat,
+            outputJson: result.seed.outputJson,
+          } as any);
+          break;
+        }
+
         // ─── Task board messages ──────────────────────────────────────────
 
         case "board_get_state":
@@ -3604,5 +3660,6 @@ wss.on("connection", (ws, request) => {
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
     agentRunner.cancelAll(ws);
     connectedClients.delete(ws);
+    clientFacilitatorState.delete(ws);
   });
 });

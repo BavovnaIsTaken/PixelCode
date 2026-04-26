@@ -60,8 +60,8 @@
 | Dungeon training з Haiku-суддею | `[DONE]` | [server/src/dungeon.ts](../server/src/dungeon.ts) |
 | Task outcome rolls (bug/crit/incomplete) | `[DONE]` | [lib/services/task_outcome.dart](../lib/services/task_outcome.dart) |
 | Energy meter (daily token meter) | `[DONE]` | [lib/widgets/energy/energy_meter.dart](../lib/widgets/energy/energy_meter.dart) |
-| Quest line / quest persistence (Game Master mode foundation) | `[PARTIAL]` | [server/src/quest/](../server/src/quest/), [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) — data shapes готові, `QuestLine` тепер імплементує `FacilitatorOutput`; runner + UI попереду (див. [Facilitator System](FACILITATOR_SYSTEM.md)) |
-| **Style picker UI** (вибір facilitator-а на старті проєкту) | `[TODO]` | Q3 2026 |
+| Quest line / quest persistence (Game Master mode foundation) | `[PARTIAL]` | [server/src/quest/](../server/src/quest/), [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) — data shapes + persistence + Game Master output готові; runner wired через `facilitator_start` WS endpoint; client integration попереду (див. [Facilitator System](FACILITATOR_SYSTEM.md)) |
+| **Style picker UI** (вибір facilitator-а на старті проєкту) | `[PARTIAL]` | [lib/screens/facilitator/facilitator_picker_screen.dart](../lib/screens/facilitator/facilitator_picker_screen.dart) + [lib/screens/facilitator/facilitator_intake_screen.dart](../lib/screens/facilitator/facilitator_intake_screen.dart) готові; wire до WS endpoint попереду |
 | **Lexicon swap layer** (kanban labels через style.lexicon) | `[TODO]` | Q3 2026 |
 | Shop panel (скіни, меблі, апгрейди) | `[DONE]` | [lib/widgets/shop/](../lib/widgets/shop/) |
 | Multi-project / session profiles | `[DONE]` | [lib/models/session_profile.dart](../lib/models/session_profile.dart) |
@@ -283,16 +283,18 @@
 
 Facilitator — модальність взаємодії manager-агента, що визначає лексикон, ритм церемоній і output-формат (quest / sprint / milestone / mission / koan). Quest System стає одним з режимів (Game Master). Дизайн — у [FACILITATOR_SYSTEM.md](FACILITATOR_SYSTEM.md), Game Master режим — у [FACILITATOR_GAMEMASTER.md](FACILITATOR_GAMEMASTER.md).
 
-| Компонент | Статус | ETA |
+| Компонент | Статус | Файли / ETA |
 |---|---|---|
-| **`FacilitatorStyle` schema** (persona_prompt, lexicon, ceremony, output_mapper) | `[TODO]` | Q3 2026 |
-| **`FacilitatorRunner` server-side** (intake, seed kanban, on-event ceremonies) | `[TODO]` | Q3 2026 |
-| **`FacilitatorOutput` interface** (toKanbanTasks/toCanonicalProgress) | `[TODO]` | Q3 2026 |
-| **Refactor: QuestLine → FacilitatorOutput impl** (Game Master mode) | `[TODO]` | Q3 2026 |
-| **Refactor: QuestPersistence → FacilitatorOutputPersistence** | `[TODO]` | Q3 2026 |
-| **Default styles MVP**: Game Master, Marina (Amber), Drill Sergeant | `[TODO]` | Q3 2026 |
-| **`MissionBriefing` output format** (Drill Sergeant) | `[TODO]` | Q3 2026 |
-| **`MilestoneTree` output format** (Marina) | `[TODO]` | Q3 2026 |
+| **`FacilitatorStyle` schema** (persona_prompt, lexicon, ceremony, output_mapper) | `[DONE]` | [lib/models/facilitator_style.dart](../lib/models/facilitator_style.dart), [server/src/facilitator/types.ts](../server/src/facilitator/types.ts) |
+| **`FacilitatorRunner` server-side** (intake, seed kanban, on-event ceremonies) | `[PARTIAL]` | [server/src/facilitator/runner.ts](../server/src/facilitator/runner.ts) + WS endpoint `facilitator_start` готові; LLM-backed output generators і event-driven mutations попереду |
+| **`FacilitatorOutput` interface** (toKanbanTasks/toCanonicalProgress) | `[DONE]` | [lib/models/facilitator_output.dart](../lib/models/facilitator_output.dart) |
+| **Refactor: QuestLine → FacilitatorOutput impl** (Game Master mode) | `[DONE]` | [lib/models/quest_line.dart](../lib/models/quest_line.dart) |
+| **Refactor: QuestPersistence → FacilitatorOutputPersistence** | `[DONE]` | [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) |
+| **Default styles MVP**: Game Master, Marina (Amber), Drill Sergeant | `[DONE]` | [assets/facilitators/](../assets/facilitators/) |
+| **`MissionBriefing` output format** (Drill Sergeant) | `[DONE]` | [lib/models/mission_briefing.dart](../lib/models/mission_briefing.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
+| **`MilestoneTree` output format** (Marina) | `[DONE]` | [lib/models/milestone_tree.dart](../lib/models/milestone_tree.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
+| **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[TODO]` | Q3 2026 — наступний крок vertical slice |
+| **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[TODO]` | Q3 2026 |
 | **Hierarchical prompt safety** (style ≠ tech decisions; tech-lead veto) | `[TODO]` | Q3 2026 |
 | **Default styles v2**: Scrum Master, Stoic Mentor | `[TODO]` | Q4 2026 |
 | **`SprintBacklog` output format** (Scrum Master) | `[TODO]` | Q4 2026 |
