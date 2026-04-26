@@ -2,7 +2,7 @@
  * Lesson Extractor — turns execution-hook payloads into typed Lessons,
  * then applies them to an AgentProfile (with consolidation + eviction).
  *
- * Design: docs/IMPLEMENTATION_GUIDE.md §3.1 (extraction) + §6.7 (apply with eviction).
+ * Design: docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md §3.1 (extraction) + §6.7 (apply with eviction).
  */
 
 import {

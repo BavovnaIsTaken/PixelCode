@@ -6,7 +6,7 @@
  * (e.g. buildOfficePrompt in agents.ts) produces, plus a cache key and the
  * recent chat messages within a token budget.
  *
- * Phase 3 of docs/IMPLEMENTATION_GUIDE.md, adapted for the actual
+ * Phase 3 of docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md, adapted for the actual
  * @anthropic-ai/claude-agent-sdk shape (function-oriented query(), not
  * class-oriented Agent).
  *

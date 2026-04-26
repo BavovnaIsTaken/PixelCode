@@ -2,7 +2,7 @@
  * Prompt Cache Manager — assembles the system prompt for an agent and applies
  * the spaced-repetition boost to entries that get injected.
  *
- * Design: docs/IMPLEMENTATION_GUIDE.md §3.2 (system prompt structure)
+ * Design: docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md §3.2 (system prompt structure)
  *         + §6.7 (sort by score, apply-boost on selected entries).
  *
  * Side effect: buildSystemPrompt mutates and persists agentProfile (apply-boost).

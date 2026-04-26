@@ -2,7 +2,7 @@
  * Memory Lifecycle — time-dependent score, find-by-title helpers,
  * transient batch indexes, and per-tier capacity caps.
  *
- * Design: docs/IMPLEMENTATION_GUIDE.md §6.
+ * Design: docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md §6.
  *
  * Invariant: this module produces no on-disk state. Indexes built by
  * buildStrengthIndex / buildWeaknessIndex are transient — discard after use.

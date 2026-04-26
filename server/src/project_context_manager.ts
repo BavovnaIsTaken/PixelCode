@@ -1,7 +1,7 @@
 /**
  * Project Context Manager — handles cross-project transitions for AgentProfiles.
  *
- * Design: docs/IMPLEMENTATION_GUIDE.md §5 + AGENT_PERSONALIZATION_SYSTEM.md §2.5.
+ * Design: docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md §5 + AGENT_PERSONALIZATION_SYSTEM.md §2.5.
  *
  * Universal context (strengths, weaknesses, contextPatterns.universal) follows
  * the agent everywhere. Project-specific context is intentionally scoped to its
