@@ -181,6 +181,10 @@ class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
   bool _scanning = false;
   StreamSubscription<DiscoveredServer>? _scanSub;
 
+  /// host:port currently being resolved via /metadata.json — used to disable
+  /// the tile so the user can't double-tap while we briefly fetch the tunnel URL.
+  String? _resolvingKey;
+
   bool get _isEdit => widget.existing != null;
 
   /// True when the entered host is a secure tunnel domain (port is ignored).
@@ -241,15 +245,31 @@ class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
     );
   }
 
-  void _selectDiscovered(DiscoveredServer server) {
-    // One-tap connect: directly create profile and return
+  Future<void> _selectDiscovered(DiscoveredServer server) async {
+    final key = '${server.host}:${server.port}';
+    if (_resolvingKey != null) return;
+    setState(() => _resolvingKey = key);
+
+    // Briefly ask the server for its public Funnel URL, so the saved profile
+    // works off-LAN too. Non-blocking on failure — falls back to LAN host.
+    final ws = ref.read(wsServiceProvider);
+    final meta = await fetchServerMetadata(
+      host: server.host,
+      port: server.port,
+      onLog: ws.log,
+    );
+
+    if (!mounted) return;
+
     final profile = SessionProfile(
       id: widget.existing?.id ??
           DateTime.now().millisecondsSinceEpoch.toString(),
       name: server.name,
       host: server.host,
       port: server.port,
+      tunnelUrl: meta?.tunnelUrl,
     );
+    setState(() => _resolvingKey = null);
     widget.onSubmit(profile);
   }
 
@@ -279,6 +299,7 @@ class _SessionFormContentState extends ConsumerState<_SessionFormContent> {
         _ScanSection(
           scanning: _scanning,
           discovered: _discovered,
+          resolvingKey: _resolvingKey,
           onScan: _startScan,
           onSelect: _selectDiscovered,
         ),
@@ -505,12 +526,14 @@ class _ScanSection extends StatelessWidget {
   const _ScanSection({
     required this.scanning,
     required this.discovered,
+    required this.resolvingKey,
     required this.onScan,
     required this.onSelect,
   });
 
   final bool scanning;
   final List<DiscoveredServer> discovered;
+  final String? resolvingKey;
   final VoidCallback onScan;
   final ValueChanged<DiscoveredServer> onSelect;
 
@@ -616,6 +639,8 @@ class _ScanSection extends StatelessWidget {
                     ),
                   _DiscoveredServerTile(
                     server: discovered[i],
+                    resolving: resolvingKey ==
+                        '${discovered[i].host}:${discovered[i].port}',
                     onTap: () => onSelect(discovered[i]),
                   ),
                 ],
@@ -646,15 +671,20 @@ class _ScanSection extends StatelessWidget {
 }
 
 class _DiscoveredServerTile extends StatelessWidget {
-  const _DiscoveredServerTile({required this.server, required this.onTap});
+  const _DiscoveredServerTile({
+    required this.server,
+    required this.onTap,
+    this.resolving = false,
+  });
 
   final DiscoveredServer server;
   final VoidCallback onTap;
+  final bool resolving;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: onTap,
+      onTap: resolving ? null : onTap,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -688,14 +718,17 @@ class _DiscoveredServerTile extends StatelessWidget {
                 ],
               ),
             ),
-            Text(
-              'Підключити',
-              style: TextStyle(
-                color: const Color(0xFF00C0D1).withValues(alpha: 0.7),
-                fontSize: 11,
-                fontWeight: FontWeight.w500,
+            if (resolving)
+              const PixelLoader(size: 14)
+            else
+              Text(
+                'Підключити',
+                style: TextStyle(
+                  color: const Color(0xFF00C0D1).withValues(alpha: 0.7),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-            ),
           ],
         ),
       ),
