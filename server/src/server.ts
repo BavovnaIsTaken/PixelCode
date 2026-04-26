@@ -47,6 +47,8 @@ import {
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
 import { ChatHistory } from "./chat_history.js";
+import { AgentContextPreparer } from "./agent_context.js";
+import { injectLearnedContext } from "./personalization.js";
 import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./health.js";
 import type { HealthItemId } from "./protocol.js";
 import { loadConfig, type ServerConfig } from "./config.js";
@@ -470,6 +472,11 @@ function historyFilePath(projectCwd: string): string {
 
 const chatHistory = new ChatHistory();
 chatHistory.load(historyFilePath(PROJECT_CWD));
+
+// Personalization layer (Phase 4.5.1) — extends each query's system prompt
+// with the agent's learned-context fragment. Kill-switch via env var.
+const agentContextPreparer = new AgentContextPreparer(chatHistory);
+const PERSONALIZATION_ENABLED = process.env.PIXELCODE_PERSONALIZATION !== "off";
 
 // ─── Shared SDK session (one per project, all clients) ───────────────────────
 
@@ -1509,6 +1516,28 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const gameState = clientGameState.get(ws);
     const systemPrompt = buildOfficePrompt(targetAgentId, projectMemory, agentTraits, gameState);
 
+    // Append the personalization fragment. Always safe — falls back to vanilla
+    // systemPrompt on any failure, controlled by PIXELCODE_PERSONALIZATION env var.
+    const finalSystemPrompt = await injectLearnedContext(
+      systemPrompt,
+      {
+        preparer: agentContextPreparer,
+        enabled: PERSONALIZATION_ENABLED,
+        onError: (err) =>
+          dbg(
+            "warn",
+            "personalization",
+            `prepare failed: ${err instanceof Error ? err.message : String(err)}`
+          ),
+      },
+      {
+        agentId: targetAgentId,
+        userId: "default-user", // TODO(auth): replace with real userId once user identity exists in protocol
+        sessionId: currentSessionId ?? "fresh",
+        currentProject: PROJECT_CWD,
+      }
+    );
+
     // Build dynamic agent definitions (one per hired instance, models from hardware)
     const dynamicAgents = buildDynamicAgents(gameState);
     void dynamicAgents; // currently only used for prompt composition inside buildOfficePrompt
@@ -1550,7 +1579,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       : undefined;
 
     const queryOptions = {
-      systemPrompt,
+      systemPrompt: finalSystemPrompt,
       model: targetModel,
       allowedTools,
       ...(mcpServers ? { mcpServers } : {}),
@@ -1571,8 +1600,8 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       continue: queryOptions.continue,
     });
     // Log first 500 chars of system prompt so we can verify it's correct
-    dbg("info", "prompt", `System prompt (first 500 chars): ${systemPrompt.slice(0, 500)}`);
-    sendDebug(ws, "info", "prompt", `SystemPrompt starts: "${systemPrompt.slice(0, 200)}…"`);
+    dbg("info", "prompt", `System prompt (first 500 chars): ${finalSystemPrompt.slice(0, 500)}`);
+    sendDebug(ws, "info", "prompt", `SystemPrompt starts: "${finalSystemPrompt.slice(0, 200)}…"`);
 
     // Prefix the message so the AI knows who it's from and who it's to
     const prefixedPrompt = `[User → ${targetAgentId}]: ${userMessage}`;
