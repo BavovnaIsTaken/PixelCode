@@ -2,6 +2,8 @@
 
 > Високорівневе ТЗ і трекер прогресу. Базується на стратегії з [STRATEGY.md](STRATEGY.md).
 > Кожен пункт має статус і прив'язку до фази/кварталу.
+>
+> **Реалістичний буфер:** дати тут — "early estimate" для соло-розробника. Реалістичний множник ×1.5 на тайм-лайн (див. [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)). Slippage передбачуваний, не катастрофа.
 
 ## Статуси
 
@@ -46,7 +48,7 @@
 | Z-sorted рендер 320×224, walk/type/read/idle анімації | `[DONE]` | [lib/widgets/canvas/pixel_office_painter.dart](../lib/widgets/canvas/pixel_office_painter.dart) |
 | 6-тирова система спрайтів, 7 кадрів × 3 напрямки | `[DONE]` | [assets/characters/](../assets/characters/), [lib/widgets/canvas/pixel_sprites.dart](../lib/widgets/canvas/pixel_sprites.dart) |
 | Меблі (столи, монітори, стільці, рослини) | `[DONE]` | [assets/furniture/](../assets/furniture/) |
-| Hire/fire агентів за ролями (7 ролей) | `[DONE]` | [lib/widgets/](../lib/widgets/) |
+| Hire/fire агентів за ролями (10 ролей: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer, llm-specialist, game-designer, strategy-keeper) | `[DONE]` | [lib/widgets/](../lib/widgets/), [lib/models/game_economy.dart](../lib/models/game_economy.dart) |
 | Kanban task board з drag-and-drop | `[DONE]` | [lib/widgets/board/task_board_panel.dart](../lib/widgets/board/task_board_panel.dart) |
 | Real-time chat і activity feed | `[DONE]` | [lib/widgets/chat/](../lib/widgets/chat/) |
 | Agent-level XP + skillCap progression | `[DONE]` | [lib/models/agent_level.dart](../lib/models/agent_level.dart) |
@@ -70,6 +72,8 @@
 | **Server Room cable proximity penalty** | `[TODO]` | Q2–Q3 2026 |
 | **Manager Meeting Room dispatch boost** | `[TODO]` | Q2–Q3 2026 |
 | **Diagnostics panel polish** | `[DONE]` | [lib/widgets/debug/](../lib/widgets/debug/) |
+| **Game Designer hireable role** (мета-роль для дизайну механік/економіки/F2P-петель) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)); обґрунтування: meta-loop "гра дизайнить себе" + контент-хук. |
+| **Strategy Keeper hireable role** ("Неповертайло" — reality-check голос проти drift від плану) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2); обґрунтування: solo-dev needs скептика проти wishful thinking, інакше план дрейфує. |
 
 ---
 
@@ -159,6 +163,8 @@
 
 **Чому критично:** marketplace (E) уже торгує агентами; без абстракції кожна одиниця — лише promptpack. З абстракцією агент стає повноцінним активом, що працює на будь-якому runtime.
 
+**Тригер замість дати** (за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26) #3): починаємо роботу, **коли з'являється другий конкретний backend з реальним користувачем** — не за календарем. До тоді — Claude Agent SDK direct, без передчасної абстракції. Ціль "Q1 2027" вище — early estimate, який може зрушитись до Q2–Q3 2027 без втрати критичного шляху.
+
 ---
 
 ## G. Модельний шар (Foundation + Adapter)
@@ -218,7 +224,7 @@
 | **Grim packs** (real money → in-game currency) | `[TODO]` | Q3 2027 |
 | **Premium agent listings** ($2–10/міс promotion) | `[TODO]` | Q3 2027 |
 | **Real money out** (Grim → cash для top sellers) | `[TODO]` | Q3 2027 |
-| **Юридичний review** (gambling/marketplace регуляції по країнах) | `[TODO]` | Q1 2027 (перед marketplace launch) |
+| **Юридичний review** (gambling/marketplace регуляції по країнах) | `[TODO]` | **Q3 2026** (ДО marketplace launch — порядок виправлено з Q1 2027 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26) #4) |
 
 ---
 
@@ -247,7 +253,7 @@
 | **TikTok / Reels / Shorts** | `[TODO]` | Старт після першого polished demo |
 | **YouTube канал** (1–2 відео/місяць) | `[TODO]` | Місяць 2 від старту contentу |
 | **Reddit** (r/programming, r/FlutterDev, r/MachineLearning, r/gamedev) | `[TODO]` | Старт паралельно з X |
-| **Discord server** | `[TODO]` | Q3 2026 (для Custom Agent Spawn community) |
+| **Discord server** | `[TODO]` | **Q1 2026** (community-фаза має початись раніше за marketplace, інакше liquidity-проблема — див. [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)) |
 | **"Meet the breeders" series** | `[TODO]` | Q4 2026 (після Marketplace v1) |
 | **"Agent battles" content format** | `[TODO]` | Q4 2026 |
 | **LinkedIn presence (B2B)** | `[TODO]` | Q1 2027 |
