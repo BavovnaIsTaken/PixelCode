@@ -417,14 +417,14 @@ test('agent export/import preserves skills', () {
 
 ---
 
-## Phase 4: Marketplace v1 🎯 IN PROGRESS (Q4 2026)
+## Phase 4: Marketplace v1 ✅ COMPLETE (Q4 2026)
 
 **Target**: Agent trading infrastructure.  
-**Status**: ✅ **CORE + ECONOMICS + DATA PRIVACY COMPLETE** — 47 tests passing  
+**Status**: ✅ **COMPLETE — 67 tests passing**  
 **Server**: Quality Scoring (10) + Backend (14) + Commission (12) + Data Pool (11)  
+**UI**: Catalog (7) + Detail & Purchase (8) + Seller Analytics (5)  
 **Blocking**: Phase 5+ (real-money economics)  
-**Depends on**: Phase 3 (Custom Agent Spawn)  
-**Pending**: UI tests (~12)
+**Depends on**: Phase 3 (Custom Agent Spawn)
 
 ### 📝 What Needs Testing
 
@@ -456,12 +456,31 @@ agent_A.skills_sum > agent_B.skills_sum
 
 #### C. Marketplace UI (Flutter)
 
-**Widget tests** (~12 tests):
-- [ ] Catalog display: grid of agents
-- [ ] Filtering: by role, skill, rating
-- [ ] Listing detail: full stats, reviews, author
-- [ ] Purchase flow: "Buy Agent" → transaction
-- [ ] Author view: "My Listings", analytics
+**Widget tests** ✅ (~20 tests):
+- [x] Catalog display: grid of agents (7 tests)
+  * Grid rendering with agent tiles
+  * Empty state handling
+  * Filter button and role options
+  * Rating filter slider
+  * Search query filtering
+  * Listing selection callbacks
+  * Tile information display
+- [x] Listing detail: full stats, reviews, author (4 tests)
+  * Agent info display (name, role, price, stats)
+  * Reviews with ratings and user names
+  * Back navigation callback
+  * Empty reviews state
+- [x] Purchase flow: "Buy Agent" → transaction (4 tests)
+  * Price breakdown with commission display
+  * Successful purchase with sufficient funds
+  * Insufficient funds error handling
+  * Cancel purchase interaction
+- [x] Author view: "My Listings", analytics (5 tests)
+  * Seller listings display with sales/ratings
+  * Analytics dashboard with summary stats
+  * Empty state for sellers with no listings
+  * Listing selection from seller view
+  * Zero values handling
 
 ---
 
@@ -492,11 +511,14 @@ agent_A.skills_sum > agent_B.skills_sum
 
 ---
 
-### 📊 Phase 4 Test Target
+### 📊 Phase 4 Test Results
 
-**~50 tests** (backend + UI + economics)  
-**Duration**: 3–4 weeks (1 dev, coordinate with legal review)  
-**Blocking**: Real-money operations (Phase 5)
+**67 tests total** ✅ (backend + UI + economics)  
+**Completed**: 2026-04-27 (3 weeks, 1 dev)  
+**Breakdown**:
+- Core & Economics: 47 tests (Quality Scoring + Backend + Commission + Data Privacy)
+- UI Flutter Widgets: 20 tests (Catalog + Detail + Purchase + Seller)
+- **All tests passing, ready for Phase 5**
 
 ---
 

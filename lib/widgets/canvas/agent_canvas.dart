@@ -9,6 +9,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -43,6 +44,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   final SpriteManager _sprites = SpriteManager();
   final TransformationController _transformController =
       TransformationController();
+  final FocusNode _keyboardFocusNode = FocusNode();
   Duration _lastElapsed = Duration.zero;
   int _tick = 0;
   double _tickAccum = 0;
@@ -139,6 +141,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _posSyncTimer?.cancel();
     _ticker.dispose();
     _transformController.dispose();
+    _keyboardFocusNode.dispose();
     super.dispose();
   }
 
@@ -475,6 +478,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             ),
           ),
       ],
+      ),
     );
   }
 
