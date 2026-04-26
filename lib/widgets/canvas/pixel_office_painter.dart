@@ -53,6 +53,7 @@ class PixelOfficePainter extends CustomPainter {
   final RoomType? ghostRoomType;
   final int? ghostRoomCol;
   final int? ghostRoomRow;
+  final int ghostRoomRotation;
   final bool ghostIsValid;
 
   PixelOfficePainter({
@@ -71,6 +72,7 @@ class PixelOfficePainter extends CustomPainter {
     this.ghostRoomType,
     this.ghostRoomCol,
     this.ghostRoomRow,
+    this.ghostRoomRotation = 0,
     this.ghostIsValid = true,
   });
 
@@ -929,12 +931,13 @@ class PixelOfficePainter extends CustomPainter {
       final ghostColor =
           ghostIsValid ? const Color(0xFF44FF88) : const Color(0xFFFF4444);
 
-      // Overall ghost footprint (for corridor routing) — single room rect.
+      // Overall ghost footprint (for corridor routing) — accounts for rotation.
       int footLeft = gc, footTop = gr, footRight = gc, footBottom = gr;
       final gtForFoot = ghostRoomType;
       if (gtForFoot != null) {
-        footRight = gc + gtForFoot.widthTiles;
-        footBottom = gr + gtForFoot.heightTiles;
+        final rotated = ghostRoomRotation == 90 || ghostRoomRotation == 270;
+        footRight = gc + (rotated ? gtForFoot.heightTiles : gtForFoot.widthTiles);
+        footBottom = gr + (rotated ? gtForFoot.widthTiles : gtForFoot.heightTiles);
       }
 
       // Corridor preview: connect the ghost footprint to the nearest existing

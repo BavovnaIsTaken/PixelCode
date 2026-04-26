@@ -21,6 +21,7 @@ class BuildModeState {
     this.selectedRoomType,
     this.ghostCol,
     this.ghostRow,
+    this.ghostRotation = 0,
   });
 
   final bool active;
@@ -28,6 +29,18 @@ class BuildModeState {
   final RoomType? selectedRoomType;
   final int? ghostCol;
   final int? ghostRow;
+  /// Room rotation in degrees: 0 / 90 / 180 / 270.
+  final int ghostRotation;
+
+  /// Footprint width after rotation.
+  int get ghostWidth => (ghostRotation == 90 || ghostRotation == 270)
+      ? (selectedRoomType?.heightTiles ?? 0)
+      : (selectedRoomType?.widthTiles ?? 0);
+
+  /// Footprint height after rotation.
+  int get ghostHeight => (ghostRotation == 90 || ghostRotation == 270)
+      ? (selectedRoomType?.widthTiles ?? 0)
+      : (selectedRoomType?.heightTiles ?? 0);
 
   BuildModeState copyWith({
     bool? active,
@@ -35,8 +48,10 @@ class BuildModeState {
     RoomType? selectedRoomType,
     int? ghostCol,
     int? ghostRow,
+    int? ghostRotation,
     bool clearSelectedRoom = false,
     bool clearGhost = false,
+    bool resetRotation = false,
   }) =>
       BuildModeState(
         active: active ?? this.active,
@@ -46,6 +61,7 @@ class BuildModeState {
             : (selectedRoomType ?? this.selectedRoomType),
         ghostCol: clearGhost ? null : (ghostCol ?? this.ghostCol),
         ghostRow: clearGhost ? null : (ghostRow ?? this.ghostRow),
+        ghostRotation: resetRotation ? 0 : (ghostRotation ?? this.ghostRotation),
       );
 }
 
@@ -74,17 +90,20 @@ class BuildModeNotifier extends Notifier<BuildModeState> {
       // section, different intent.
       clearSelectedRoom: true,
       clearGhost: true,
+      resetRotation: true,
     );
   }
 
   /// Toggle a room type — picking the same one again clears the selection.
   void toggleRoom(RoomType type) {
     if (state.selectedRoomType == type) {
-      state = state.copyWith(clearSelectedRoom: true, clearGhost: true);
+      state = state.copyWith(
+          clearSelectedRoom: true, clearGhost: true, resetRotation: true);
     } else {
       state = state.copyWith(
         selectedRoomType: type,
         clearGhost: true,
+        resetRotation: true,
       );
     }
   }
@@ -97,10 +116,21 @@ class BuildModeNotifier extends Notifier<BuildModeState> {
     state = state.copyWith(clearGhost: true);
   }
 
+  void rotateClockwise() {
+    state = state.copyWith(
+        ghostRotation: (state.ghostRotation + 90) % 360, clearGhost: true);
+  }
+
+  void rotateCounterClockwise() {
+    state = state.copyWith(
+        ghostRotation: (state.ghostRotation + 270) % 360, clearGhost: true);
+  }
+
   /// Drop the active room pick (e.g. when entering Edit mode, where the
   /// player is removing rooms instead of placing them).
   void clearSelection() {
-    state = state.copyWith(clearSelectedRoom: true, clearGhost: true);
+    state = state.copyWith(
+        clearSelectedRoom: true, clearGhost: true, resetRotation: true);
   }
 }
 
