@@ -1,6 +1,6 @@
 /// Loads `FacilitatorStyle` presets from bundled assets.
 ///
-/// MVP defaults (Q3 2026): `game_master`, `marina`, `drill_sergeant`.
+/// MVP defaults (Q3 2026): `game_master`, `Mariya`, `drill_sergeant`.
 /// Marketplace styles (Q4 2026, Section E) will be loaded the same way
 /// after being downloaded into a managed-styles directory — same shape,
 /// different `AssetLoader` implementation.
@@ -16,7 +16,7 @@ import '../models/facilitator_style.dart';
 /// shown atop the picker.
 const List<String> defaultStyleIds = [
   'game_master',
-  'marina',
+  'Mariya',
   'drill_sergeant',
 ];
 
