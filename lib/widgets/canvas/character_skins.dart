@@ -29,6 +29,8 @@ const _agents = [
   'security',
   'ui-ux-designer',
   'llm-specialist',
+  'game-designer',
+  'strategy-keeper',
 ];
 
 Map<String, SkinPalette> _buildPalettes(List<SkinPalette> list) {
@@ -99,6 +101,20 @@ final skinDefault = CharacterSkin(
       clothes: Color(0xFF6C2BD9), pants: Color(0xFF1E1B2E),
       boots: Color(0xFF0F0E1A),
     ),
+    // game-designer — gold blazer
+    SkinPalette(
+      hair: Color(0xFF4A3818), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFFFD700),
+      clothes: Color(0xFFCA8A04), pants: Color(0xFF3A2F1E),
+      boots: Color(0xFF1A1408),
+    ),
+    // strategy-keeper — navy lighthouse-keeper, icy sky eye
+    SkinPalette(
+      hair: Color(0xFF1F2937), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF7DD3FC),
+      clothes: Color(0xFF1E3A8A), pants: Color(0xFF1E293B),
+      boots: Color(0xFF0F172A),
+    ),
   ]),
 );
 
@@ -164,6 +180,20 @@ final skinCasual = CharacterSkin(
       skinLight: Color(0xFFF5CDB8), eye: Color(0xFF9B59FF),
       clothes: Color(0xFF5B2EAF), pants: Color(0xFF2E2A48),
       boots: Color(0xFF1A1825),
+    ),
+    // game-designer — yellow hoodie
+    SkinPalette(
+      hair: Color(0xFF4A3818), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFFFD700),
+      clothes: Color(0xFFB58A1A), pants: Color(0xFF383028),
+      boots: Color(0xFF2A2A2A),
+    ),
+    // strategy-keeper — navy hoodie
+    SkinPalette(
+      hair: Color(0xFF1F2937), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF7DD3FC),
+      clothes: Color(0xFF1E40AF), pants: Color(0xFF334155),
+      boots: Color(0xFF1E293B),
     ),
   ]),
 );
@@ -231,6 +261,20 @@ final skinCorporate = CharacterSkin(
       clothes: Color(0xFF2A1F3D), pants: Color(0xFF221833),
       boots: Color(0xFF0E0A14),
     ),
+    // game-designer — charcoal suit, gold tie
+    SkinPalette(
+      hair: Color(0xFF4A3818), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFFFD700),
+      clothes: Color(0xFF3A2E1A), pants: Color(0xFF302410),
+      boots: Color(0xFF120E08),
+    ),
+    // strategy-keeper — deep navy 3-piece suit
+    SkinPalette(
+      hair: Color(0xFF1F2937), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF7DD3FC),
+      clothes: Color(0xFF1E293B), pants: Color(0xFF0F172A),
+      boots: Color(0xFF020617),
+    ),
   ]),
 );
 
@@ -296,6 +340,20 @@ final skinHacker = CharacterSkin(
       skinLight: Color(0xFFE0BCA0), eye: Color(0xFFBE6BFF),
       clothes: Color(0xFF100A18), pants: Color(0xFF0C0810),
       boots: Color(0xFF050308),
+    ),
+    // game-designer — terminal yellow on black
+    SkinPalette(
+      hair: Color(0xFF1A1408), skin: Color(0xFFD0A888),
+      skinLight: Color(0xFFE0BCA0), eye: Color(0xFFFFFF00),
+      clothes: Color(0xFF14120A), pants: Color(0xFF100E08),
+      boots: Color(0xFF080604),
+    ),
+    // strategy-keeper — terminal cyan-blue on black
+    SkinPalette(
+      hair: Color(0xFF080A14), skin: Color(0xFFD0A888),
+      skinLight: Color(0xFFE0BCA0), eye: Color(0xFF00CCFF),
+      clothes: Color(0xFF0A1228), pants: Color(0xFF08101C),
+      boots: Color(0xFF040810),
     ),
   ]),
 );
@@ -363,6 +421,20 @@ final skinCreative = CharacterSkin(
       clothes: Color(0xFF7B1FA2), pants: Color(0xFF311B92),
       boots: Color(0xFF1A0E55),
     ),
+    // game-designer — sun yellow + bright gold
+    SkinPalette(
+      hair: Color(0xFFFFB300), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFFFEA00),
+      clothes: Color(0xFFFFB300), pants: Color(0xFF6E4D00),
+      boots: Color(0xFF4A3000),
+    ),
+    // strategy-keeper — electric sky-blue jacket
+    SkinPalette(
+      hair: Color(0xFF0F172A), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFF38BDF8),
+      clothes: Color(0xFF0EA5E9), pants: Color(0xFF1E3A8A),
+      boots: Color(0xFF1E40AF),
+    ),
   ]),
 );
 
@@ -428,6 +500,20 @@ final skinRetro = CharacterSkin(
       skinLight: Color(0xFFE4CCA8), eye: Color(0xFF9078B8),
       clothes: Color(0xFF6A4878), pants: Color(0xFF403448),
       boots: Color(0xFF2C2434),
+    ),
+    // game-designer — mustard 70s
+    SkinPalette(
+      hair: Color(0xFF3A2818), skin: Color(0xFFD4B898),
+      skinLight: Color(0xFFE4CCA8), eye: Color(0xFFC8A030),
+      clothes: Color(0xFF8E7820), pants: Color(0xFF4A3E28),
+      boots: Color(0xFF302820),
+    ),
+    // strategy-keeper — faded denim
+    SkinPalette(
+      hair: Color(0xFF2E3848), skin: Color(0xFFD4B898),
+      skinLight: Color(0xFFE4CCA8), eye: Color(0xFF6B8AAB),
+      clothes: Color(0xFF506888), pants: Color(0xFF485870),
+      boots: Color(0xFF303848),
     ),
   ]),
 );
@@ -495,6 +581,20 @@ final skinCyberpunk = CharacterSkin(
       clothes: Color(0xFF400070), pants: Color(0xFF0E0818),
       boots: Color(0xFF06030C),
     ),
+    // game-designer — neon yellow on black
+    SkinPalette(
+      hair: Color(0xFF0A0A14), skin: Color(0xFFB8A088),
+      skinLight: Color(0xFFC8B098), eye: Color(0xFFFFD800),
+      clothes: Color(0xFF4A3800), pants: Color(0xFF0C0C12),
+      boots: Color(0xFF040408),
+    ),
+    // strategy-keeper — neon ice-blue on black
+    SkinPalette(
+      hair: Color(0xFF060614), skin: Color(0xFFB8A088),
+      skinLight: Color(0xFFC8B098), eye: Color(0xFF00DDFF),
+      clothes: Color(0xFF001A40), pants: Color(0xFF0A0A1C),
+      boots: Color(0xFF050A14),
+    ),
   ]),
 );
 
@@ -560,6 +660,20 @@ final skinCozy = CharacterSkin(
       skinLight: Color(0xFFF8D4B4), eye: Color(0xFFA888D0),
       clothes: Color(0xFF6A4890), pants: Color(0xFF463848),
       boots: Color(0xFF2E2434),
+    ),
+    // game-designer — honey knit
+    SkinPalette(
+      hair: Color(0xFF6A4828), skin: Color(0xFFE8C0A0),
+      skinLight: Color(0xFFF8D4B4), eye: Color(0xFFCFA040),
+      clothes: Color(0xFF986818), pants: Color(0xFF4A3828),
+      boots: Color(0xFF302418),
+    ),
+    // strategy-keeper — wool navy turtleneck
+    SkinPalette(
+      hair: Color(0xFF1C2030), skin: Color(0xFFE8C0A0),
+      skinLight: Color(0xFFF8D4B4), eye: Color(0xFF88AAC8),
+      clothes: Color(0xFF2A4068), pants: Color(0xFF4A4A5A),
+      boots: Color(0xFF303040),
     ),
   ]),
 );

@@ -623,6 +623,40 @@ const roleCatalog = <RoleCatalogEntry>[
           'Знає Claude SDK напамʼять — оптимізує токени, кеш та інструменти, скорочуючи цикли інтеграції AI-фіч.',
     ),
   ),
+  RoleCatalogEntry(
+    roleType: 'game-designer',
+    baseName: 'Левелер',
+    role: 'Геймдизайнер',
+    specialization:
+        'Дизайн механік, прогресії, економіки, F2P-петель та marketplace; балансування чисел і декомпозиція великих цілей на MVP/v1/v2.',
+    weakness: 'Сам код не пише — здає спеки і дифи в roadmap, реалізацію передає coder/tech-lead.',
+    hireCost: 600,
+    salary: 70,
+    passive: AgentPassive(
+      icon: '🎲',
+      name: 'Game Sense',
+      nameUk: 'Чуття гри',
+      description:
+          'Бачить, що в петлі залипає, а що дратує — підказує, які механіки скоротити чи відполірувати, поки вони не з’їли retention.',
+    ),
+  ),
+  RoleCatalogEntry(
+    roleType: 'strategy-keeper',
+    baseName: 'Неповертайло',
+    role: 'Стратег',
+    specialization:
+        'Reality-check проти drift — звіряє git-історію з ROADMAP, ставить Fermi-питання до оптимістичних дедлайнів, класифікує поза-планові ідеї (polish / off-plan / pivot) і аудитує сам план на невалідовані припущення.',
+    weakness: 'Код не пише — здає вердикти зі scope і точкові дифи у STRATEGY/ROADMAP, які власник застосовує сам.',
+    hireCost: 1000,
+    salary: 90,
+    passive: AgentPassive(
+      icon: '🧭',
+      name: 'Reality Check',
+      nameUk: 'Перевірка реальністю',
+      description:
+          'Тримає курс — раз на період звіряє останні коміти з roadmap і повідомляє, де доки розійшлися з реальністю, поки drift не став хронічним.',
+    ),
+  ),
 ];
 
 RoleCatalogEntry? roleCatalogFor(String roleType) {
@@ -697,6 +731,20 @@ Map<SkillType, int> initialSkillsForRole(String roleType) {
         SkillType.speed: 2,
         SkillType.precision: 4,
         SkillType.creativity: 4,
+        SkillType.insight: 5,
+        SkillType.reliability: 3,
+      },
+    'game-designer' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 2,
+        SkillType.creativity: 4,
+        SkillType.insight: 5,
+        SkillType.reliability: 1,
+      },
+    'strategy-keeper' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 4,
+        SkillType.creativity: 1,
         SkillType.insight: 5,
         SkillType.reliability: 3,
       },
