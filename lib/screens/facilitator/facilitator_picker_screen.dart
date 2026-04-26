@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/facilitator_output.dart';
 import '../../models/facilitator_style.dart';
+import '../../services/localization_service.dart';
 
 /// A pickable style with its visual badge color. Caller supplies the
 /// style; the screen only renders.
@@ -17,20 +18,34 @@ class FacilitatorPickerScreen extends StatelessWidget {
   const FacilitatorPickerScreen({
     super.key,
     required this.styles,
-    this.title = 'Choose your facilitator',
-    this.subtitle =
-        'Pick a style that matches how you want to lead this project. '
-        'You can switch later.',
+    this.title,
+    this.subtitle,
   });
 
+  factory FacilitatorPickerScreen.withDefaults({
+    required List<FacilitatorStyle> styles,
+    Key? key,
+  }) {
+    return FacilitatorPickerScreen(
+      key: key,
+      styles: styles,
+      title: localization.t('facilitator.picker.title'),
+      subtitle: localization.t('facilitator.picker.subtitle'),
+    );
+  }
+
   final List<FacilitatorStyle> styles;
-  final String title;
-  final String subtitle;
+  final String? title;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveTitle = title ?? localization.t('facilitator.picker.title');
+    final effectiveSubtitle =
+        subtitle ?? localization.t('facilitator.picker.subtitle');
+
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(title: Text(effectiveTitle)),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
@@ -38,7 +53,7 @@ class FacilitatorPickerScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                subtitle,
+                effectiveSubtitle,
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 24),
@@ -129,7 +144,7 @@ class _StyleCard extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: onPick,
                   icon: const Icon(Icons.arrow_forward_rounded),
-                  label: const Text('Choose'),
+                  label: Text(localization.t('facilitator.picker.choose')),
                 ),
               ),
             ],
@@ -210,20 +225,30 @@ Color _accentForLaloux(Laloux l) => switch (l) {
     };
 
 String _outputLabel(OutputFormat f) => switch (f) {
-      OutputFormat.questLine => 'Quest line',
-      OutputFormat.missionBriefing => 'Mission briefing',
-      OutputFormat.milestoneTree => 'Milestone tree',
-      OutputFormat.sprintBacklog => 'Sprint backlog',
-      OutputFormat.koanEntry => 'Reflection journal',
+      OutputFormat.questLine => localization.t('facilitator.output.questLine'),
+      OutputFormat.missionBriefing =>
+        localization.t('facilitator.output.missionBriefing'),
+      OutputFormat.milestoneTree =>
+        localization.t('facilitator.output.milestoneTree'),
+      OutputFormat.sprintBacklog =>
+        localization.t('facilitator.output.sprintBacklog'),
+      OutputFormat.koanEntry => localization.t('facilitator.output.koanEntry'),
     };
 
 String _ceremonyLabel(FacilitatorStyle style) {
-  if (style.ceremonySchedule.isEmpty) return 'No ceremonies';
-  final clock = style.ceremonySchedule.where((c) => c.cadence != CeremonyCadence.onEvent).length;
-  final eventDriven = style.ceremonySchedule.length - clock;
-  if (clock > 0 && eventDriven > 0) {
-    return '$clock scheduled · $eventDriven event-driven';
+  if (style.ceremonySchedule.isEmpty) {
+    return localization.t('facilitator.ceremony.none');
   }
-  if (clock > 0) return '$clock scheduled';
-  return '$eventDriven event-driven';
+  final clock = style.ceremonySchedule
+      .where((c) => c.cadence != CeremonyCadence.onEvent)
+      .length;
+  final eventDriven = style.ceremonySchedule.length - clock;
+  final scheduled = localization.t('facilitator.ceremony.scheduled');
+  final eventDrivenLabel = localization.t('facilitator.ceremony.eventDriven');
+
+  if (clock > 0 && eventDriven > 0) {
+    return '$clock $scheduled · $eventDriven $eventDrivenLabel';
+  }
+  if (clock > 0) return '$clock $scheduled';
+  return '$eventDriven $eventDrivenLabel';
 }
