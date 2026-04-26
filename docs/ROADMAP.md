@@ -127,7 +127,7 @@
 | **Per-agent facilitator binding** (manager пам'ятає обраний style) | `[TODO]` | Q3 2026 |
 | **Facilitator lessons namespace** (style-scoped lesson channel) | `[TODO]` | Q3 2026 |
 | **Style switch flow** (UI для зміни facilitator з explanation) | `[TODO]` | Q4 2026 |
-| **Agent busy/idle state + UI badge** (prerequisite для D — без нього team-dispatch + custom agents простоюють) | `[TODO]` | Q3 2026 |
+| **Agent busy/idle state + UI badge** (prerequisite для D — без нього team-dispatch + custom agents простоюють) | `[DONE]` | 2026-04-27 |
 
 Дизайн — у [AGENT_PERSONALIZATION_SYSTEM.md](AGENT_PERSONALIZATION_SYSTEM.md), план — у [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
 

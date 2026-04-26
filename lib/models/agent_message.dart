@@ -60,7 +60,15 @@ class AgentInfo {
 
 // ─── Agent Status ────────────────────────────────────────────────────────────
 
+/// Fine-grained what-the-agent-is-doing-right-now status, driven by server events.
 enum AgentStatus { idle, thinking, typing, reading, running, waiting }
+
+/// Binary occupancy state — is this agent processing anything right now?
+///
+/// Derived from [AgentStatus]: any value except [AgentStatus.idle] maps to [busy].
+/// Use this when you only care about availability, not what the agent is doing
+/// (e.g. team-dispatch routing, roster badge, can-reassign guard).
+enum AgentBusyState { idle, busy }
 
 AgentStatus parseAgentStatus(String s) => switch (s) {
       'thinking' => AgentStatus.thinking,

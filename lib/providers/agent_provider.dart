@@ -433,6 +433,11 @@ class AgentState {
 
   bool get isActive => status != AgentStatus.idle;
 
+  AgentBusyState get busyState =>
+      status == AgentStatus.idle ? AgentBusyState.idle : AgentBusyState.busy;
+
+  bool get isBusy => busyState == AgentBusyState.busy;
+
   AgentState copyWith({
     AgentStatus? status,
     List<ToolActivity>? activeTools,
@@ -636,6 +641,16 @@ class AgentsNotifier extends Notifier<Map<String, AgentState>> {
 final agentsProvider = NotifierProvider<AgentsNotifier, Map<String, AgentState>>(
   AgentsNotifier.new,
 );
+
+/// Binary busy/idle availability map for all hired agents.
+///
+/// Derived from [agentsProvider] — use when routing or badge logic only needs
+/// to know if an agent is occupied, not what it is specifically doing.
+/// Expected consumer: team-dispatch (section D prerequisite) and roster badge.
+final agentBusyProvider = Provider<Map<String, AgentBusyState>>((ref) =>
+    ref
+        .watch(agentsProvider)
+        .map((id, s) => MapEntry(id, s.busyState)));
 
 // ─── Team metrics ───────────────────────────────────────────────────────────
 
