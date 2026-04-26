@@ -427,6 +427,18 @@ class GameEconomyNotifier extends Notifier<GameState> {
     ));
   }
 
+  // ─── Provider ──────────────────────────────────────────────────────────
+
+  void setAgentProvider(String instanceId, AgentProviderType provider) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return;
+
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = agent.copyWith(provider: provider);
+
+    _updateStateAndSync(state.copyWith(agents: updated));
+  }
+
   // ─── Office ────────────────────────────────────────────────────────────
 
   bool canUpgradeOffice() {

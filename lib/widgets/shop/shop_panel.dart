@@ -9,9 +9,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/agent_level.dart';
+import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/gemini_auth_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import 'spinning_coin.dart';
 
@@ -595,6 +597,21 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
           ),
           const SizedBox(height: 16),
 
+          // AI provider
+          _SectionHeader(
+            icon: Icons.hub_outlined,
+            title: 'Провайдер AI',
+            trailing: selectedAgent.provider == AgentProviderType.local
+                ? 'Gemini'
+                : 'Claude',
+          ),
+          const SizedBox(height: 8),
+          _ProviderCard(
+            instanceId: _selectedAgentId!,
+            current: selectedAgent.provider,
+          ),
+          const SizedBox(height: 16),
+
           // Skills
           _SectionHeader(icon: Icons.trending_up, title: 'Навички'),
           const SizedBox(height: 8),
@@ -648,13 +665,39 @@ class _AgentChip extends ConsumerWidget {
                 : Colors.white.withValues(alpha: 0.08),
           ),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
-            fontSize: 10,
-            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+            if (instance?.provider == AgentProviderType.local) ...[
+              const SizedBox(width: 5),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4285F4).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(
+                    color: const Color(0xFF4285F4).withValues(alpha: 0.35),
+                  ),
+                ),
+                child: const Text(
+                  'G',
+                  style: TextStyle(
+                    color: Color(0xFF4285F4),
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -751,6 +794,160 @@ class _HardwareUpgradeCard extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── AI provider card ──────────────────────────────────────────────────────
+
+class _ProviderCard extends ConsumerWidget {
+  final String instanceId;
+  final AgentProviderType current;
+
+  const _ProviderCard({required this.instanceId, required this.current});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final geminiAuth = ref.watch(geminiAuthProvider);
+    final geminiLoggedIn = geminiAuth.valueOrNull?.loggedIn ?? false;
+    final notifier = ref.read(gameEconomyProvider.notifier);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _ProviderOption(
+                label: 'Claude',
+                sublabel: 'claude.ai',
+                icon: Icons.cloud_outlined,
+                active: current == AgentProviderType.cloud,
+                onTap: () =>
+                    notifier.setAgentProvider(instanceId, AgentProviderType.cloud),
+              ),
+              const SizedBox(width: 8),
+              _ProviderOption(
+                label: 'Gemini',
+                sublabel: 'gemini-cli',
+                icon: Icons.auto_awesome_outlined,
+                active: current == AgentProviderType.local,
+                locked: !geminiLoggedIn,
+                onTap: geminiLoggedIn
+                    ? () => notifier.setAgentProvider(
+                        instanceId, AgentProviderType.local)
+                    : null,
+              ),
+            ],
+          ),
+          if (!geminiLoggedIn) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Увійдіть через Google у Налаштуваннях → Обліковий запис',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 10,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ProviderOption extends StatelessWidget {
+  final String label;
+  final String sublabel;
+  final IconData icon;
+  final bool active;
+  final bool locked;
+  final VoidCallback? onTap;
+
+  const _ProviderOption({
+    required this.label,
+    required this.sublabel,
+    required this.icon,
+    required this.active,
+    this.locked = false,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = locked
+        ? Colors.white.withValues(alpha: 0.15)
+        : active
+            ? _accent
+            : Colors.white.withValues(alpha: 0.35);
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+          decoration: BoxDecoration(
+            color: active && !locked
+                ? _accent.withValues(alpha: 0.12)
+                : Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active && !locked
+                  ? _accent.withValues(alpha: 0.4)
+                  : Colors.white.withValues(alpha: 0.07),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                locked ? Icons.lock_outline : icon,
+                size: 13,
+                color: color,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      sublabel,
+                      style: TextStyle(
+                        color: color.withValues(alpha: 0.55),
+                        fontSize: 9,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (active && !locked)
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _accent,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
