@@ -237,11 +237,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         _scheduleSave();
         ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
 
-      case AssistantTextMessage(:final text, :final agentId):
+      case AssistantTextMessage(:final text, :final agentId, :final threadId):
         final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
-            messages.last.isStreaming) {
+            messages.last.isStreaming &&
+            messages.last.threadId == threadId) {
           messages[messages.length - 1] = messages.last.copyWith(
             text: messages.last.text + text,
           );
@@ -251,11 +252,12 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             text: text,
             agentId: agentId,
             isStreaming: true,
+            threadId: threadId,
           ));
         }
         _setAgentMessages(agentId, messages);
 
-      case AssistantDoneMessage(:final text, :final agentId):
+      case AssistantDoneMessage(:final text, :final agentId, :final threadId):
         final messages = [..._agentMessages(agentId)];
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
@@ -269,11 +271,25 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
             role: ChatRole.assistant,
             text: text,
             agentId: agentId,
+            threadId: threadId,
           ));
         }
         _setAgentMessages(agentId, messages);
         _activeStreamAgent = null;
         _scheduleSave();
+
+      case ToolUseMessage(:final agentId, :final status, :final threadId)
+          when threadId != null:
+        _setAgentMessages(agentId, [
+          ..._agentMessages(agentId),
+          ChatMessage(
+            role: ChatRole.assistant,
+            agentId: agentId,
+            text: status,
+            category: MessageCategory.status,
+            threadId: threadId,
+          ),
+        ]);
 
       case ErrorMessage(:final message):
         final agentId = _activeStreamAgent ?? _selectedAgent;

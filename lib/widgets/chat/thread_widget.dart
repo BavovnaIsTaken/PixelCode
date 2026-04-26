@@ -214,11 +214,11 @@ class _ThreadTileState extends State<ThreadTile> {
       padding: const EdgeInsets.only(bottom: 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(6),
+        // Non-uniform border is valid here because borderRadius lives on
+        // ClipRRect, not on the BoxDecoration below.
         child: Container(
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.02),
-            // Non-uniform border is valid here because borderRadius lives on
-            // ClipRRect, not on this BoxDecoration.
             border: Border(
               left: BorderSide(color: accent, width: 3),
               top: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
@@ -230,141 +230,130 @@ class _ThreadTileState extends State<ThreadTile> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-                      // 48px header
-                      GestureDetector(
-                        onTap: () => setState(() => _collapsed = !_collapsed),
-                        behavior: HitTestBehavior.opaque,
-                        child: SizedBox(
-                          height: 48,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.account_tree_outlined,
-                                  size: 12,
-                                  color: accent.withValues(alpha: 0.7),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _title,
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.75),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                ..._typeDots.map(
-                                  (c) => Container(
-                                    width: 6,
-                                    height: 6,
-                                    margin: const EdgeInsets.only(left: 3),
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: c,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.06),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Text(
-                                    _collapsed
-                                        ? '${widget.messages.length} ↓'
-                                        : '▲',
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.45),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ],
+              // 48px header
+              GestureDetector(
+                onTap: () => setState(() => _collapsed = !_collapsed),
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox(
+                  height: 48,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.account_tree_outlined,
+                          size: 12,
+                          color: accent.withValues(alpha: 0.7),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _title,
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.75),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ..._typeDots.map(
+                          (c) => Container(
+                            width: 6,
+                            height: 6,
+                            margin: const EdgeInsets.only(left: 3),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: c,
                             ),
                           ),
                         ),
-                      ),
-                      // Expandable content
-                      AnimatedSize(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        child: _collapsed
-                            ? const SizedBox.shrink()
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                mainAxisSize: MainAxisSize.min,
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            _collapsed
+                                ? '${widget.messages.length} ↓'
+                                : '▲',
+                            style: TextStyle(
+                              color: Colors.white.withValues(alpha: 0.45),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // Expandable content
+              AnimatedSize(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                child: _collapsed
+                    ? const SizedBox.shrink()
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Divider(
+                            height: 1,
+                            thickness: 1,
+                            color: Colors.white.withValues(alpha: 0.05),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                            child: Column(
+                              children: widget.messages
+                                  .map(widget.messageBuilder)
+                                  .toList(),
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => setState(() => _collapsed = true),
+                            behavior: HitTestBehavior.opaque,
+                            child: Container(
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.02),
+                                border: Border(
+                                  top: BorderSide(
+                                    color: Colors.white.withValues(alpha: 0.04),
+                                  ),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Divider(
-                                    height: 1,
-                                    thickness: 1,
-                                    color: Colors.white.withValues(alpha: 0.05),
+                                  Icon(
+                                    Icons.expand_less,
+                                    size: 13,
+                                    color: Colors.white.withValues(alpha: 0.28),
                                   ),
-                                  Padding(
-                                    padding:
-                                        const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                                    child: Column(
-                                      children: widget.messages
-                                          .map(widget.messageBuilder)
-                                          .toList(),
-                                    ),
-                                  ),
-                                  GestureDetector(
-                                    onTap: () =>
-                                        setState(() => _collapsed = true),
-                                    behavior: HitTestBehavior.opaque,
-                                    child: Container(
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                        color: Colors.white
-                                            .withValues(alpha: 0.02),
-                                        border: Border(
-                                          top: BorderSide(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.04),
-                                          ),
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Icon(
-                                            Icons.expand_less,
-                                            size: 13,
-                                            color: Colors.white
-                                                .withValues(alpha: 0.28),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Text(
-                                            'Згорнути',
-                                            style: TextStyle(
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.28),
-                                              fontSize: 10,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Згорнути',
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.28),
+                                      fontSize: 10,
                                     ),
                                   ),
                                 ],
                               ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                ),
               ),
             ],
           ),

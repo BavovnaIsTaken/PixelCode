@@ -199,12 +199,14 @@ export type ServerMessage =
       text: string;
       isPartial: boolean;
       agentId: string;
+      threadId?: string;
     }
   | {
       type: "assistant_message_done";
       messageId: string;
       text: string;
       agentId: string;
+      threadId?: string;
     }
   | {
       type: "chat_history";
@@ -239,6 +241,7 @@ export type ServerMessage =
       toolUseId: string;
       toolName: string;
       status: string;
+      threadId?: string;
     }
   | {
       type: "tool_done";

@@ -156,12 +156,14 @@ class AssistantTextMessage implements ServerMessage {
   final String text;
   final bool isPartial;
   final String agentId;
-  AssistantTextMessage({required this.text, required this.isPartial, this.agentId = 'manager'});
+  final String? threadId;
+  AssistantTextMessage({required this.text, required this.isPartial, this.agentId = 'manager', this.threadId});
   factory AssistantTextMessage.fromJson(Map<String, dynamic> json) =>
       AssistantTextMessage(
         text: json['text'] as String,
         isPartial: json['isPartial'] as bool,
         agentId: json['agentId'] as String? ?? 'manager',
+        threadId: json['threadId'] as String?,
       );
 }
 
@@ -169,12 +171,14 @@ class AssistantDoneMessage implements ServerMessage {
   final String messageId;
   final String text;
   final String agentId;
-  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager'});
+  final String? threadId;
+  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager', this.threadId});
   factory AssistantDoneMessage.fromJson(Map<String, dynamic> json) =>
       AssistantDoneMessage(
         messageId: json['messageId'] as String,
         text: json['text'] as String,
         agentId: json['agentId'] as String? ?? 'manager',
+        threadId: json['threadId'] as String?,
       );
 }
 
@@ -240,17 +244,20 @@ class ToolUseMessage implements ServerMessage {
   final String toolUseId;
   final String toolName;
   final String status;
+  final String? threadId;
   ToolUseMessage({
     required this.agentId,
     required this.toolUseId,
     required this.toolName,
     required this.status,
+    this.threadId,
   });
   factory ToolUseMessage.fromJson(Map<String, dynamic> json) => ToolUseMessage(
         agentId: json['agentId'] as String,
         toolUseId: json['toolUseId'] as String,
         toolName: json['toolName'] as String,
         status: json['status'] as String,
+        threadId: json['threadId'] as String?,
       );
 }
 

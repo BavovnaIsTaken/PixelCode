@@ -1324,14 +1324,14 @@ function createDispatchServer(ws: WebSocket) {
 // ─── Sub-agent message handling ─────────────────────────────────────────────
 
 /** Handle real-time messages from independently running sub-agents. */
-function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, _dispatchId: string): void {
+function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, dispatchId: string): void {
   if (ws.readyState !== WebSocket.OPEN) return;
 
   try {
     switch (message.type) {
       case "assistant": {
         const asst = message as SDKAssistantMessage;
-        // Forward tool uses for status updates
+        // Forward tool uses for status updates and thread status entries
         for (const block of asst.message.content) {
           if (block.type === "tool_use") {
             const input = block.input as Record<string, unknown>;
@@ -1342,6 +1342,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
               toolUseId: block.id,
               toolName: block.name,
               status,
+              threadId: dispatchId,
             });
             emitActivity(ws, agentId, "tool_use", status);
           }
@@ -1352,7 +1353,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         if (text && !asst.parent_tool_use_id) {
           chatHistory.add({ role: "assistant", text, agentId, timestamp: new Date().toISOString() });
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId });
+          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId });
         }
         break;
       }
@@ -1362,7 +1363,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         if (partial.parent_tool_use_id) break;
         const event = partial.event;
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-          broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId });
+          broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId, threadId: dispatchId });
         }
         break;
       }
