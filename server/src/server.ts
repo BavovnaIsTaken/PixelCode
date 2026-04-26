@@ -48,7 +48,9 @@ import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
 import { ChatHistory } from "./chat_history.js";
 import { AgentContextPreparer } from "./agent_context.js";
-import { injectLearnedContext } from "./personalization.js";
+import { injectLearnedContext, applyLlmLessons, type LlmLesson } from "./personalization.js";
+import { profileCache } from "./profile_cache.js";
+import { lessonExtractor } from "./lesson_extractor.js";
 import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./health.js";
 import type { HealthItemId } from "./protocol.js";
 import { loadConfig, type ServerConfig } from "./config.js";
@@ -981,6 +983,7 @@ If nothing notable happened, reply with: []`;
     // Valid lesson targets = hired instanceIds (lessons are per-instance).
     const validAgents = new Set(agentInfoForClient(ws).map(a => a.id));
 
+    const profileBatch: LlmLesson[] = [];
     for (const l of lessons.slice(0, 3)) {
       if (!validAgents.has(l.agentId)) continue;
       if (l.type !== "strength" && l.type !== "weakness") continue;
@@ -995,6 +998,24 @@ If nothing notable happened, reply with: []`;
         l.tag,
         l.lesson,
       );
+
+      profileBatch.push({ agentId: l.agentId, type: l.type, tag: l.tag, lesson: l.lesson });
+    }
+
+    // Phase 4.5.2 — also feed validated lessons into the AgentProfile lifecycle.
+    // Coexists with TraitStore: both surfaces accumulate independently for now.
+    if (PERSONALIZATION_ENABLED) {
+      await applyLlmLessons(profileBatch, {
+        cache: profileCache,
+        extractor: lessonExtractor,
+        userId: "default-user", // TODO(auth): real userId once available
+        onError: (err) =>
+          dbg(
+            "warn",
+            "personalization",
+            `applyLlmLessons failed: ${err instanceof Error ? err.message : String(err)}`
+          ),
+      });
     }
 
     dbg("info", "traits", `Reflection complete: ${lessons.length} lesson(s) extracted.`);

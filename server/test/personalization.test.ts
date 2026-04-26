@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectLearnedContext } from "../src/personalization.ts";
+import {
+  injectLearnedContext,
+  applyLlmLessons,
+  type LlmLesson,
+} from "../src/personalization.ts";
 import { AgentContextPreparer } from "../src/agent_context.ts";
 import {
   ProfileCacheService,
@@ -13,6 +17,7 @@ import {
 import { ChatHistory } from "../src/chat_history.ts";
 import { PromptCacheManager } from "../src/prompt_cache_manager.ts";
 import { CAPACITY_TIERS } from "../src/memory_lifecycle.ts";
+import { LessonExtractor } from "../src/lesson_extractor.ts";
 
 const ARGS = {
   agentId: "a1",
@@ -230,5 +235,130 @@ test("injectLearnedContext — end-to-end with real preparer + populated profile
     );
     assert.match(result, /## Your Learned Strengths/);
     assert.match(result, /Async dispatch/);
+  });
+});
+
+// ─── applyLlmLessons ───────────────────────────────────────────────────────
+
+test("applyLlmLessons — empty array is a no-op (no I/O)", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    await applyLlmLessons([], {
+      cache,
+      extractor,
+      userId: "u1",
+    });
+    // No throw, no profile saved. Verify no profile was created for any agent.
+    const profile = await cache.loadAgentProfile("nobody");
+    assert.equal(profile.strengths.length, 0);
+    assert.equal(profile.weaknesses.length, 0);
+  });
+});
+
+test("applyLlmLessons — filters out invalid types and missing fields", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    await cache.saveUserProfile(makeFreshUserProfile());
+
+    const lessons: LlmLesson[] = [
+      { agentId: "a1", type: "strength", tag: "tag-good", lesson: "ok" },
+      { agentId: "a1", type: "neutral", tag: "tag-bad-type", lesson: "x" }, // wrong type
+      { agentId: "a1", type: "weakness", tag: "", lesson: "no tag" }, // missing tag
+      { agentId: "a1", type: "weakness", tag: "tag", lesson: "" }, // missing lesson
+      { agentId: "", type: "strength", tag: "t", lesson: "no agent" }, // missing agentId
+    ];
+
+    await applyLlmLessons(lessons, { cache, extractor, userId: "u1" });
+
+    const after = await cache.loadAgentProfile("a1");
+    assert.equal(after.strengths.length, 1, "only the valid strength should land");
+    assert.equal(after.strengths[0].skill, "tag-good");
+    assert.equal(after.weaknesses.length, 0);
+  });
+});
+
+test("applyLlmLessons — groups by agentId, loads userProfile once, applies per agent", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    await cache.saveUserProfile(makeFreshUserProfile());
+
+    const lessons: LlmLesson[] = [
+      { agentId: "manager#1", type: "strength", tag: "delegation", lesson: "good calls" },
+      { agentId: "coder#1", type: "weakness", tag: "missed-edge", lesson: "off-by-one" },
+      { agentId: "manager#1", type: "weakness", tag: "vague-brief", lesson: "underspec" },
+    ];
+
+    await applyLlmLessons(lessons, { cache, extractor, userId: "u1" });
+
+    const mgr = await cache.loadAgentProfile("manager#1");
+    assert.equal(mgr.strengths.length, 1);
+    assert.equal(mgr.strengths[0].skill, "delegation");
+    assert.equal(mgr.weaknesses.length, 1);
+    assert.equal(mgr.weaknesses[0].pitfall, "vague-brief");
+
+    const coder = await cache.loadAgentProfile("coder#1");
+    assert.equal(coder.strengths.length, 0);
+    assert.equal(coder.weaknesses.length, 1);
+    assert.equal(coder.weaknesses[0].pitfall, "missed-edge");
+  });
+});
+
+test("applyLlmLessons — initial confidence is 0.7 (per spec baseline)", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    await cache.saveUserProfile(makeFreshUserProfile());
+
+    await applyLlmLessons(
+      [{ agentId: "a", type: "strength", tag: "t", lesson: "l" }],
+      { cache, extractor, userId: "u1" }
+    );
+
+    const after = await cache.loadAgentProfile("a");
+    assert.equal(after.strengths[0].confidence, 0.7);
+  });
+});
+
+test("applyLlmLessons — funnels errors through onError, never throws", async () => {
+  let captured: unknown = null;
+
+  // Force an error by giving a cache stub that throws on loadUserProfile.
+  const exploding = {
+    loadUserProfile: async () => {
+      throw new Error("disk on fire");
+    },
+  } as unknown as ProfileCacheService;
+
+  await applyLlmLessons(
+    [{ agentId: "a", type: "strength", tag: "t", lesson: "l" }],
+    {
+      cache: exploding,
+      extractor: {} as LessonExtractor,
+      userId: "u",
+      onError: (err) => {
+        captured = err;
+      },
+    }
+  );
+
+  assert.ok(captured instanceof Error);
+  assert.match((captured as Error).message, /disk on fire/);
+});
+
+test("applyLlmLessons — second invocation reinforces (observedCount++ + confidence boost)", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    await cache.saveUserProfile(makeFreshUserProfile());
+
+    const lessons: LlmLesson[] = [
+      { agentId: "a", type: "strength", tag: "X", lesson: "first time" },
+    ];
+    await applyLlmLessons(lessons, { cache, extractor, userId: "u1" });
+    await applyLlmLessons(lessons, { cache, extractor, userId: "u1" });
+
+    const after = await cache.loadAgentProfile("a");
+    assert.equal(after.strengths.length, 1, "no duplicate entry");
+    assert.equal(after.strengths[0].observedCount, 2);
+    // 0.7 + 0.05 (confidenceObserveBoost) = 0.75
+    assert.ok(Math.abs(after.strengths[0].confidence - 0.75) < 1e-9);
   });
 });
