@@ -467,5 +467,5 @@ export interface ConnectedClientInfo {
   deviceName: string; // OS hostname, sanitized
   platform: string; // "macos" | "ios" | "android" | "web" | "unknown"
   connectedAt: string; // ISO 8601
-  isHostMachine: boolean; // true if client connects via loopback — shares machine with the server
+  isLocal: boolean; // true if client connects via loopback — shares machine with the server
 }

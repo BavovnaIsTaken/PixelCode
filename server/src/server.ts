@@ -645,7 +645,7 @@ function buildClientsList(): ConnectedClientInfo[] {
       deviceName: client.deviceName,
       platform: client.platform,
       connectedAt: client.connectedAt,
-      isHostMachine: isLoopback(client.remoteAddress),
+      isLocal: isLoopback(client.remoteAddress),
     });
   }
   return list;

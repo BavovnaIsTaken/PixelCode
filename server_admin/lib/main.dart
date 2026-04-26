@@ -707,24 +707,24 @@ class _ClientRow extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (client.isHostMachine) ...[
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: PixelPalette.success),
-                          borderRadius: BorderRadius.circular(3),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: client.isLocal ? PixelPalette.success : PixelPalette.accent,
                         ),
-                        child: Text(
-                          'HOST',
-                          style: pixelFont(
-                            size: 7,
-                            color: PixelPalette.success,
-                            letterSpacing: 1.2,
-                          ),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text(
+                        client.isLocal ? 'LOCAL' : 'REMOTE',
+                        style: pixelFont(
+                          size: 7,
+                          color: client.isLocal ? PixelPalette.success : PixelPalette.accent,
+                          letterSpacing: 1.2,
                         ),
                       ),
-                    ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),

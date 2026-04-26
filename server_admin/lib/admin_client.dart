@@ -214,21 +214,21 @@ class ConnectedClientInfo {
     required this.deviceName,
     required this.platform,
     required this.connectedAt,
-    required this.isHostMachine,
+    required this.isLocal,
   });
 
   final String clientId;
   final String deviceName;
   final String platform;
   final DateTime connectedAt;
-  final bool isHostMachine;
+  final bool isLocal;
 
   factory ConnectedClientInfo.fromJson(Map<String, dynamic> j) => ConnectedClientInfo(
         clientId: j['clientId'] as String? ?? '',
         deviceName: j['deviceName'] as String? ?? '',
         platform: j['platform'] as String? ?? 'unknown',
         connectedAt: DateTime.tryParse(j['connectedAt'] as String? ?? '') ?? DateTime.now(),
-        isHostMachine: j['isHostMachine'] as bool? ?? false,
+        isLocal: j['isLocal'] as bool? ?? false,
       );
 }
 
