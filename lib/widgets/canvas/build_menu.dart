@@ -171,7 +171,7 @@ class BuildMenu extends ConsumerWidget {
               ? c.accent.withValues(alpha: 0.14)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(8),
-          border: isActive ? Border.all(color: c.accent, width: 1) : null,
+          border: isActive ? Border.all(color: c.accent, width: 2) : null,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
