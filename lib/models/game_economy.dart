@@ -1319,21 +1319,63 @@ class PlacedRoom {
   final int col;
   final int row;
 
+  /// Rotation in degrees, 0/90/180/270. v6+.
+  final int rotation;
+
+  /// Optional override of the tier-default wall skin. Null inherits.
+  final String? wallSkinId;
+
+  /// Optional override of the tier-default floor skin. Null inherits.
+  final String? floorSkinId;
+
   const PlacedRoom({
     required this.id,
     required this.type,
     required this.col,
     required this.row,
+    this.rotation = 0,
+    this.wallSkinId,
+    this.floorSkinId,
   });
 
-  int get right => col + type.widthTiles;
-  int get bottom => row + type.heightTiles;
+  /// Footprint width, accounting for 90°/270° rotation that swaps axes.
+  int get footprintWidth =>
+      (rotation == 90 || rotation == 270) ? type.heightTiles : type.widthTiles;
+
+  /// Footprint height, accounting for rotation.
+  int get footprintHeight =>
+      (rotation == 90 || rotation == 270) ? type.widthTiles : type.heightTiles;
+
+  int get right => col + footprintWidth;
+  int get bottom => row + footprintHeight;
+
+  PlacedRoom copyWith({
+    int? col,
+    int? row,
+    int? rotation,
+    String? wallSkinId,
+    String? floorSkinId,
+    bool clearWallSkin = false,
+    bool clearFloorSkin = false,
+  }) =>
+      PlacedRoom(
+        id: id,
+        type: type,
+        col: col ?? this.col,
+        row: row ?? this.row,
+        rotation: rotation ?? this.rotation,
+        wallSkinId: clearWallSkin ? null : (wallSkinId ?? this.wallSkinId),
+        floorSkinId: clearFloorSkin ? null : (floorSkinId ?? this.floorSkinId),
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
         'type': type.index,
         'col': col,
         'row': row,
+        if (rotation != 0) 'rotation': rotation,
+        if (wallSkinId != null) 'wallSkinId': wallSkinId,
+        if (floorSkinId != null) 'floorSkinId': floorSkinId,
       };
 
   factory PlacedRoom.fromJson(Map<String, dynamic> json) => PlacedRoom(
@@ -1341,7 +1383,163 @@ class PlacedRoom {
         type: RoomType.values[json['type'] as int],
         col: json['col'] as int,
         row: json['row'] as int,
+        rotation: json['rotation'] as int? ?? 0,
+        wallSkinId: json['wallSkinId'] as String?,
+        floorSkinId: json['floorSkinId'] as String?,
       );
+}
+
+/// A linear corridor segment — sequence of grid tiles agents walk through.
+/// Modelled separately from [PlacedRoom] because corridors are 1-tile-wide
+/// linear paths, not rectangular bounding boxes.
+class PlacedCorridor {
+  final String id;
+
+  /// Ordered tiles forming the corridor. Each tile is `(col, row)`.
+  final List<({int col, int row})> tiles;
+
+  /// True for 2-tile-wide variant (gives a small agent speed bonus, costs more).
+  final bool wide;
+
+  /// Optional skin override; null inherits the tier theme.
+  final String? skinId;
+
+  const PlacedCorridor({
+    required this.id,
+    required this.tiles,
+    this.wide = false,
+    this.skinId,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'tiles': [
+          for (final t in tiles) {'col': t.col, 'row': t.row},
+        ],
+        if (wide) 'wide': true,
+        if (skinId != null) 'skinId': skinId,
+      };
+
+  factory PlacedCorridor.fromJson(Map<String, dynamic> json) => PlacedCorridor(
+        id: json['id'] as String,
+        tiles: [
+          for (final t in (json['tiles'] as List<dynamic>? ?? []))
+            (
+              col: (t as Map<String, dynamic>)['col'] as int,
+              row: t['row'] as int,
+            ),
+        ],
+        wide: json['wide'] as bool? ?? false,
+        skinId: json['skinId'] as String?,
+      );
+}
+
+// ─── Room templates (one room with pre-baked furniture, single price) ──────
+
+/// A pre-furnished room template — ships a [baseRoom] together with a fixed
+/// set of furniture items already laid out inside, sold as a bundle. Distinct
+/// from the legacy `OfficePreset` which bundled multiple rooms.
+class RoomTemplate {
+  final String id;
+  final String name;
+  final String description;
+  final RoomType baseRoom;
+
+  /// Pre-baked furniture, positioned relative to the room's top-left corner.
+  final List<TemplateFurnitureSlot> furniture;
+
+  /// Bundle discount on top of the raw component sum, in percent (0–100).
+  final int discountPercent;
+
+  const RoomTemplate({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.baseRoom,
+    required this.furniture,
+    this.discountPercent = 8,
+  });
+
+  /// Sum of base room cost + each furniture item cost (without discount).
+  int rawCost(List<FurnitureItem> catalog) {
+    var total = baseRoom.cost;
+    for (final slot in furniture) {
+      final item = _findFurniture(catalog, slot.furnitureId);
+      if (item != null) total += item.cost;
+    }
+    return total;
+  }
+
+  /// Final price after applying [discountPercent].
+  int bundleCost(List<FurnitureItem> catalog) =>
+      (rawCost(catalog) * (100 - discountPercent) / 100).round();
+}
+
+class TemplateFurnitureSlot {
+  final String furnitureId;
+  final int colOffset;
+  final int rowOffset;
+
+  const TemplateFurnitureSlot({
+    required this.furnitureId,
+    required this.colOffset,
+    required this.rowOffset,
+  });
+}
+
+FurnitureItem? _findFurniture(List<FurnitureItem> catalog, String id) {
+  for (final item in catalog) {
+    if (item.id == id) return item;
+  }
+  return null;
+}
+
+// ─── Wall / floor skin packs ───────────────────────────────────────────────
+
+/// A purchasable cosmetic pack that overrides the tier-default wall colours
+/// for a single placed room. Floors live in a parallel [FloorSkinPack] catalog.
+class WallSkinPack {
+  final String id;
+  final String name;
+  final String description;
+  final int cost;
+
+  /// Hex-encoded colour tokens. Painter consumes these in place of the tier
+  /// theme's `wallBase` / `wallTop` / `wallInner`.
+  final int wallBase;
+  final int wallTop;
+  final int wallInner;
+
+  const WallSkinPack({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.cost,
+    required this.wallBase,
+    required this.wallTop,
+    required this.wallInner,
+  });
+}
+
+class FloorSkinPack {
+  final String id;
+  final String name;
+  final String description;
+  final int cost;
+
+  final int floorDark;
+  final int floorLight;
+  final int floorGrid;
+
+  const FloorSkinPack({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.cost,
+    required this.floorDark,
+    required this.floorLight,
+    required this.floorGrid,
+  });
 }
 
 // ─── Game state ────────────────────────────────────────────────────────────
@@ -1349,7 +1547,10 @@ class PlacedRoom {
 class GameState {
   /// Current on-disk schema version. Bump this constant whenever the
   /// serialised shape changes in a breaking way.
-  static const int currentSchemaVersion = 5;
+  ///
+  /// v6 — adds Build System v2: PlacedRoom rotation + per-room skin overrides,
+  /// PlacedCorridor list, owned wall/floor skin pack sets.
+  static const int currentSchemaVersion = 6;
 
   /// The schema version this instance was created with (persisted in JSON).
   final int schemaVersion;
@@ -1390,6 +1591,15 @@ class GameState {
   /// Placed office rooms (Build Mode).
   final List<PlacedRoom> placedRooms;
 
+  /// Placed corridors connecting rooms (Build System v2). v6+.
+  final List<PlacedCorridor> placedCorridors;
+
+  /// IDs of purchased wall skin packs (Build System v2). v6+.
+  final Set<String> ownedWallSkinPacks;
+
+  /// IDs of purchased floor skin packs (Build System v2). v6+.
+  final Set<String> ownedFloorSkinPacks;
+
   /// Epoch millis of the last local mutation. Drives last-write-wins sync
   /// between devices — the server only accepts state with a newer timestamp
   /// than what it already holds.
@@ -1411,6 +1621,9 @@ class GameState {
     this.ownedFurniture = const {},
     this.placedFurniture = const [],
     this.placedRooms = const [],
+    this.placedCorridors = const [],
+    this.ownedWallSkinPacks = const {},
+    this.ownedFloorSkinPacks = const {},
     this.updatedAt = 0,
   });
 
@@ -1485,6 +1698,9 @@ class GameState {
     Set<String>? ownedFurniture,
     List<FurniturePlacement>? placedFurniture,
     List<PlacedRoom>? placedRooms,
+    List<PlacedCorridor>? placedCorridors,
+    Set<String>? ownedWallSkinPacks,
+    Set<String>? ownedFloorSkinPacks,
     int? updatedAt,
   }) =>
       GameState(
@@ -1503,6 +1719,9 @@ class GameState {
         ownedFurniture: ownedFurniture ?? this.ownedFurniture,
         placedFurniture: placedFurniture ?? this.placedFurniture,
         placedRooms: placedRooms ?? this.placedRooms,
+        placedCorridors: placedCorridors ?? this.placedCorridors,
+        ownedWallSkinPacks: ownedWallSkinPacks ?? this.ownedWallSkinPacks,
+        ownedFloorSkinPacks: ownedFloorSkinPacks ?? this.ownedFloorSkinPacks,
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
@@ -1531,6 +1750,11 @@ class GameState {
         'placedRooms': [
           for (final r in placedRooms) r.toJson(),
         ],
+        'placedCorridors': [
+          for (final c in placedCorridors) c.toJson(),
+        ],
+        'ownedWallSkinPacks': ownedWallSkinPacks.toList(),
+        'ownedFloorSkinPacks': ownedFloorSkinPacks.toList(),
         'updatedAt': updatedAt,
       };
 
@@ -1546,25 +1770,36 @@ class GameState {
       for (final p in (json['placedFurniture'] as List<dynamic>?) ?? [])
         FurniturePlacement.fromJson(p as Map<String, dynamic>),
     ];
+    var corridors = [
+      for (final c in (json['placedCorridors'] as List<dynamic>?) ?? [])
+        PlacedCorridor.fromJson(c as Map<String, dynamic>),
+    ];
 
     // Clamp expansions to the number this tier actually supports.
     final maxSteps = level.expansions.length;
     if (expansions < 0) expansions = 0;
     if (expansions > maxSteps) expansions = maxSteps;
 
-    // Drop rooms/furniture that no longer fit in the effective grid (post
-    // migration — e.g. v3 → v4 grids may have shrunk).
+    // Drop rooms/furniture/corridors that no longer fit in the effective grid
+    // (post migration — e.g. v3 → v4 grids may have shrunk).
     final gCols = level.effectiveCols(expansions);
     final gRows = level.effectiveRows(expansions);
     rooms = rooms
         .where((r) =>
             r.col >= 1 &&
             r.row >= 1 &&
-            r.col + r.type.widthTiles <= gCols - 1 &&
-            r.row + r.type.heightTiles <= gRows - 1)
+            r.col + r.footprintWidth <= gCols - 1 &&
+            r.row + r.footprintHeight <= gRows - 1)
         .toList();
     furniture = furniture
         .where((p) => p.col < gCols - 1 && p.row < gRows - 1)
+        .toList();
+    corridors = corridors
+        .where((c) => c.tiles.every((t) =>
+            t.col >= 1 &&
+            t.row >= 1 &&
+            t.col < gCols - 1 &&
+            t.row < gRows - 1))
         .toList();
 
     return GameState(
@@ -1600,6 +1835,17 @@ class GameState {
         },
         placedFurniture: furniture,
         placedRooms: rooms,
+        placedCorridors: corridors,
+        ownedWallSkinPacks: {
+          for (final id
+              in (json['ownedWallSkinPacks'] as List<dynamic>?) ?? [])
+            id as String,
+        },
+        ownedFloorSkinPacks: {
+          for (final id
+              in (json['ownedFloorSkinPacks'] as List<dynamic>?) ?? [])
+            id as String,
+        },
         updatedAt: json['updatedAt'] as int? ?? 0,
       );
   }
@@ -1613,8 +1859,9 @@ class GameState {
   factory GameState.decode(String source) {
     final json = jsonDecode(source) as Map<String, dynamic>;
     final version = json['schemaVersion'] as int? ?? 1;
-    // Accept v2 (empty placedRooms), v3 (no officeExpansions) and v4. Reject
-    // older/unknown.
+    // Accept v2 (empty placedRooms), v3 (no officeExpansions), v4, v5 (no
+    // FacilitatorStyle), and v6 (no corridors / skin packs / room rotation).
+    // Reject older/unknown.
     if (version < 2 || version > currentSchemaVersion) {
       throw const FormatException('Incompatible game state schema');
     }
