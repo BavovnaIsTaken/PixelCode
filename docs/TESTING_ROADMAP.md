@@ -420,11 +420,11 @@ test('agent export/import preserves skills', () {
 ## Phase 4: Marketplace v1 🎯 IN PROGRESS (Q4 2026)
 
 **Target**: Agent trading infrastructure.  
-**Status**: ✅ **CORE + ECONOMICS COMPLETE** — 36 tests passing  
-**Server**: Quality Scoring (10) + Backend (14) + Commission (12)  
+**Status**: ✅ **CORE + ECONOMICS + DATA PRIVACY COMPLETE** — 47 tests passing  
+**Server**: Quality Scoring (10) + Backend (14) + Commission (12) + Data Pool (11)  
 **Blocking**: Phase 5+ (real-money economics)  
 **Depends on**: Phase 3 (Custom Agent Spawn)  
-**Pending**: Crowdsourced data pool (~8), UI tests (~12)
+**Pending**: UI tests (~12)
 
 ### 📝 What Needs Testing
 
@@ -481,12 +481,14 @@ agent_A.skills_sum > agent_B.skills_sum
 
 #### E. Crowdsourced Training Data Pool (Opt-In)
 
-**Tests needed** (~8 tests):
-- [ ] Consent flow: "Share gameplay?"
-- [ ] Anonymization: remove identifying info
-- [ ] Aggregation: batch gameplay data
-- [ ] Opt-out: user can revoke consent
-- [ ] Privacy: no sensitive data leaked
+**Tests completed** ✅ (~11 tests):
+- [x] Consent flow: "Share gameplay?" (opt-in by default)
+- [x] Anonymization: remove identifying info (no PII in pool)
+- [x] Aggregation: batch gameplay data with stats tracking
+- [x] Opt-out: user can revoke consent permanently
+- [x] Privacy: no sensitive data leaked (audit verified)
+- [x] Consent history: append-only log of all changes
+- [x] Independent users: multiple users with separate consent states
 
 ---
 
@@ -605,10 +607,10 @@ agent_A.skills_sum > agent_B.skills_sum
 | **2.UI** | Personalization UI tests | ~12 | ⏳ PENDING | 1w | UI ready |
 | **3** | Custom Agent Spawn (server) | 37 | ✅ DONE | Done | — |
 | **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
-| **4** | Marketplace v1 (server) | 36 | ✅ IN PROGRESS | ~2w | — |
-| **4.X** | Data Pool + UI | ~20 | ⏳ PENDING | 2w | — |
+| **4** | Marketplace v1 (server) | 47 | ✅ IN PROGRESS | ~2w | — |
+| **4.X** | Marketplace UI | ~12 | ⏳ PENDING | 1w | — |
 | **5** | Backend + Training | ~80 | ❌ TODO | 4–6w | Phase 4 |
-| **TOTAL** | — | **~362+ tests** | — | **~15–18w solo** | — |
+| **TOTAL** | — | **~373+ tests** | — | **~15–18w solo** | — |
 
 ---
 
@@ -680,6 +682,6 @@ open coverage/index.html
 
 ---
 
-**Last updated:** 2026-04-26 (Commission tests added)  
+**Last updated:** 2026-04-26 (Commission + Data Privacy tests complete)  
 **Owner**: @danylooliinyk  
 **Sync with**: [ROADMAP.md](ROADMAP.md), [STRATEGY.md](STRATEGY.md)
