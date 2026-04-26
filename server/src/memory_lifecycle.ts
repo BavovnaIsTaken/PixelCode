@@ -20,6 +20,8 @@ export const memoryLifecycleConfig = {
   topicWeightFloor: 0.5,
   defaultTopicAffinity: 0.5,
   compactionEverySessions: 50,
+  /** Token-Jaccard threshold for treating two titles as the same lesson. */
+  similarityThreshold: 0.5,
 };
 
 // ─── Score (time-dependent — recomputed on demand, never cached) ───────────
@@ -47,13 +49,14 @@ export function computeScore(
   return strength * decayFactor * topicWeight;
 }
 
-// ─── Find-by-title helpers (single swap point for future semantic dedup) ───
+// ─── Find-by-title helpers (exact match + similarity-aware) ────────────────
 
 export function findStrength(
   profile: AgentProfile,
   title: string
 ): AgentProfile["strengths"][number] | undefined {
-  // v1: exact-string match. v2: nearest-neighbor over embeddings, threshold-gated.
+  // Exact-string match. For dedup-aware lookup that catches close synonyms,
+  // use findSimilarStrength.
   return profile.strengths.find((s) => s.skill === title);
 }
 
@@ -62,6 +65,78 @@ export function findWeakness(
   title: string
 ): AgentProfile["weaknesses"][number] | undefined {
   return profile.weaknesses.find((w) => w.pitfall === title);
+}
+
+/**
+ * Token-level Jaccard similarity between two titles, scoped to short
+ * kebab-case identifiers ("unclear-delegation-scope"). Normalization:
+ * lowercase + split on hyphen/whitespace/underscore + dedupe tokens.
+ *
+ * Returns 0–1. Designed as a cheap stand-in until embeddings land —
+ * findSimilar*'s signature stays stable so the swap is local.
+ */
+export function tokenJaccard(a: string, b: string): number {
+  const tokens = (s: string): Set<string> =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[-\s_]+/)
+        .filter((t) => t.length > 0)
+    );
+  const sA = tokens(a);
+  const sB = tokens(b);
+  if (sA.size === 0 || sB.size === 0) return 0;
+  let intersect = 0;
+  for (const t of sA) if (sB.has(t)) intersect++;
+  return intersect / (sA.size + sB.size - intersect);
+}
+
+/**
+ * Dedup-aware find: returns the best matching entry whose title's token
+ * Jaccard against `title` is ≥ threshold. Exact-string match always wins
+ * when present. If no entry clears the threshold, returns undefined.
+ *
+ * v2 (future): replace this body with embedding-based brute-force cosine.
+ * Keep the call sites unchanged.
+ */
+export function findSimilarStrength(
+  profile: AgentProfile,
+  title: string,
+  threshold: number = memoryLifecycleConfig.similarityThreshold
+): AgentProfile["strengths"][number] | undefined {
+  const exact = profile.strengths.find((s) => s.skill === title);
+  if (exact) return exact;
+
+  let best: AgentProfile["strengths"][number] | undefined;
+  let bestScore = -1;
+  for (const s of profile.strengths) {
+    const score = tokenJaccard(s.skill, title);
+    if (score >= threshold && score > bestScore) {
+      best = s;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+export function findSimilarWeakness(
+  profile: AgentProfile,
+  title: string,
+  threshold: number = memoryLifecycleConfig.similarityThreshold
+): AgentProfile["weaknesses"][number] | undefined {
+  const exact = profile.weaknesses.find((w) => w.pitfall === title);
+  if (exact) return exact;
+
+  let best: AgentProfile["weaknesses"][number] | undefined;
+  let bestScore = -1;
+  for (const w of profile.weaknesses) {
+    const score = tokenJaccard(w.pitfall, title);
+    if (score >= threshold && score > bestScore) {
+      best = w;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 // ─── Transient batch indexes (build inside hot loops, never persist) ───────

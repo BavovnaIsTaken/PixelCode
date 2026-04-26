@@ -286,6 +286,88 @@ test("applyLessons — evicts the lowest-scored entry when over MAX_STRENGTHS", 
   });
 });
 
+test("applyLessons — synonym variation reinforces existing entry instead of duplicating", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    const userProfile = makeFreshUserProfile();
+
+    await extractor.applyLessons(
+      "a",
+      [
+        {
+          category: "weakness",
+          title: "unclear-delegation-scope",
+          context: "manager unclear about scope",
+          confidence: 0.7,
+        },
+      ],
+      userProfile
+    );
+
+    // Synonym variation — same idea, different word for "unclear"
+    await extractor.applyLessons(
+      "a",
+      [
+        {
+          category: "weakness",
+          title: "vague-delegation-scope",
+          context: "another phrasing",
+          confidence: 0.7,
+        },
+      ],
+      userProfile
+    );
+
+    const profile = await cache.loadAgentProfile("a");
+    assert.equal(
+      profile.weaknesses.length,
+      1,
+      "synonym variation must fold into existing entry, not create a duplicate"
+    );
+    assert.equal(profile.weaknesses[0].pitfall, "unclear-delegation-scope");
+    assert.equal(profile.weaknesses[0].observedCount, 2);
+    // 0.7 + 0.05 (confidenceObserveBoost) = 0.75
+    assert.ok(Math.abs(profile.weaknesses[0].avoidanceScore - 0.75) < 1e-9);
+  });
+});
+
+test("applyLessons — semantically distant lesson creates a new entry", async () => {
+  await withTempCache(async (cache) => {
+    const extractor = new LessonExtractor(cache);
+    const userProfile = makeFreshUserProfile();
+
+    await extractor.applyLessons(
+      "a",
+      [
+        {
+          category: "weakness",
+          title: "unclear-delegation-scope",
+          context: "x",
+          confidence: 0.7,
+        },
+      ],
+      userProfile
+    );
+    await extractor.applyLessons(
+      "a",
+      [
+        {
+          category: "weakness",
+          title: "missing-null-checks",
+          context: "y",
+          confidence: 0.7,
+        },
+      ],
+      userProfile
+    );
+
+    const profile = await cache.loadAgentProfile("a");
+    assert.equal(profile.weaknesses.length, 2, "different lessons must remain separate entries");
+    const titles = profile.weaknesses.map((w) => w.pitfall).sort();
+    assert.deepEqual(titles, ["missing-null-checks", "unclear-delegation-scope"]);
+  });
+});
+
 test("applyLessons — evicts the lowest-scored entry when over MAX_WEAKNESSES", async () => {
   await withTempCache(async (cache) => {
     const extractor = new LessonExtractor(cache, () => CAPACITY_TIERS.haiku);
