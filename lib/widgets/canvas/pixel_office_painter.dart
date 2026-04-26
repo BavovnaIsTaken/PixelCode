@@ -55,11 +55,6 @@ class PixelOfficePainter extends CustomPainter {
   final int? ghostRoomRow;
   final bool ghostIsValid;
 
-  /// When a preset is selected in Build Mode, this is its slot list anchored
-  /// at [ghostRoomCol]/[ghostRoomRow]. Mutually exclusive with
-  /// [ghostRoomType]. [ghostIsValid] applies to whichever is set.
-  final OfficePreset? ghostPreset;
-
   PixelOfficePainter({
     required this.gameState,
     this.sprites,
@@ -77,7 +72,6 @@ class PixelOfficePainter extends CustomPainter {
     this.ghostRoomCol,
     this.ghostRoomRow,
     this.ghostIsValid = true,
-    this.ghostPreset,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -935,18 +929,10 @@ class PixelOfficePainter extends CustomPainter {
       final ghostColor =
           ghostIsValid ? const Color(0xFF44FF88) : const Color(0xFFFF4444);
 
-      // Overall ghost footprint (for corridor routing). For a single room
-      // it's the room's own rect; for a preset it's the bounding box of all
-      // slots.
+      // Overall ghost footprint (for corridor routing) — single room rect.
       int footLeft = gc, footTop = gr, footRight = gc, footBottom = gr;
-      final gpForFoot = ghostPreset;
       final gtForFoot = ghostRoomType;
-      if (gpForFoot != null) {
-        footLeft = gc;
-        footTop = gr;
-        footRight = gc + gpForFoot.widthTiles;
-        footBottom = gr + gpForFoot.heightTiles;
-      } else if (gtForFoot != null) {
+      if (gtForFoot != null) {
         footRight = gc + gtForFoot.widthTiles;
         footBottom = gr + gtForFoot.heightTiles;
       }
@@ -954,9 +940,7 @@ class PixelOfficePainter extends CustomPainter {
       // Corridor preview: connect the ghost footprint to the nearest existing
       // room with an L-shaped 1-tile strip. Skip if no rooms yet or ghost
       // overlaps (handled as invalid).
-      if (ghostIsValid &&
-          placedRooms.isNotEmpty &&
-          (gpForFoot != null || gtForFoot != null)) {
+      if (ghostIsValid && placedRooms.isNotEmpty && gtForFoot != null) {
         final gcx = (footLeft + footRight) / 2.0;
         final gcy = (footTop + footBottom) / 2.0;
         PlacedRoom? nearest;
@@ -1066,18 +1050,8 @@ class PixelOfficePainter extends CustomPainter {
               ..strokeWidth = 1.5);
       }
 
-      final gp = ghostPreset;
       final gt = ghostRoomType;
-      if (gp != null) {
-        for (final slot in gp.rooms) {
-          drawGhostRect(
-            (gc + slot.colOffset) * kTileSize,
-            (gr + slot.rowOffset) * kTileSize,
-            slot.type.widthTiles * kTileSize,
-            slot.type.heightTiles * kTileSize,
-          );
-        }
-      } else if (gt != null) {
+      if (gt != null) {
         drawGhostRect(
           gc * kTileSize,
           gr * kTileSize,

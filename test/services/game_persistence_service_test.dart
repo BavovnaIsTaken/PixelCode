@@ -41,4 +41,107 @@ void main() {
 
     expect(loaded.grymni, 777);
   });
+
+  test('soft-migrates one-version-back save additively (v5 → v6)', () async {
+    final prevVersion = GameState.currentSchemaVersion - 1;
+    // A v5 save with placed rooms / agents / furniture — none of which the
+    // hard-wipe whitelist would have preserved. Soft migration must keep them.
+    final json = '{'
+        '"schemaVersion":$prevVersion,'
+        '"grymni":4321,'
+        '"totalEarned":12345,'
+        '"placedRooms":[{"id":"r1","type":0,"col":1,"row":1}],'
+        '"placedFurniture":[{"itemId":"old_desk","col":2,"row":2}],'
+        '"agents":{"inst_a":{"instanceId":"inst_a","roleType":"coder",'
+            '"nickname":"Test","hardware":0}}'
+        '}';
+    SharedPreferences.setMockInitialValues({'pixelcode_game_state': json});
+    final prefs = await SharedPreferences.getInstance();
+    final loaded = GamePersistenceService.load(prefs);
+
+    // Schema bumped to current.
+    expect(loaded.schemaVersion, GameState.currentSchemaVersion);
+    // No reset flag — soft migration is silent.
+    expect(prefs.getBool('schemaResetFlag'), isNot(isTrue));
+    // Pre-migration data preserved verbatim.
+    expect(loaded.grymni, 4321);
+    expect(loaded.totalEarned, 12345);
+    expect(loaded.placedRooms, hasLength(1));
+    expect(loaded.placedRooms.first.id, 'r1');
+    expect(loaded.placedFurniture, hasLength(1));
+    expect(loaded.agents, contains('inst_a'));
+    // New v6 fields default to safe empties.
+    expect(loaded.placedCorridors, isEmpty);
+    expect(loaded.ownedWallSkinPacks, isEmpty);
+    expect(loaded.ownedFloorSkinPacks, isEmpty);
+  });
+
+  test('PlacedRoom v5 JSON loads with default rotation/skin overrides', () {
+    final v5Json = {
+      'id': 'r1',
+      'type': 0, // RoomType.workstation
+      'col': 2,
+      'row': 3,
+    };
+    final room = PlacedRoom.fromJson(v5Json);
+    expect(room.rotation, 0);
+    expect(room.wallSkinId, isNull);
+    expect(room.floorSkinId, isNull);
+    expect(room.footprintWidth, room.type.widthTiles);
+    expect(room.footprintHeight, room.type.heightTiles);
+  });
+
+  test('PlacedRoom rotation 90/270 swaps footprint axes', () {
+    final base = PlacedRoom(
+      id: 'r1',
+      type: RoomType.meetingRoom, // 3×2
+      col: 1,
+      row: 1,
+    );
+    expect(base.footprintWidth, 3);
+    expect(base.footprintHeight, 2);
+
+    final rotated = base.copyWith(rotation: 90);
+    expect(rotated.footprintWidth, 2);
+    expect(rotated.footprintHeight, 3);
+
+    final rotated180 = base.copyWith(rotation: 180);
+    expect(rotated180.footprintWidth, 3);
+    expect(rotated180.footprintHeight, 2);
+  });
+
+  test('PlacedRoom skin overrides round-trip through JSON', () {
+    final original = PlacedRoom(
+      id: 'r1',
+      type: RoomType.workstation,
+      col: 1,
+      row: 1,
+      rotation: 270,
+      wallSkinId: 'brick_pack',
+      floorSkinId: 'carpet_pack',
+    );
+    final round = PlacedRoom.fromJson(original.toJson());
+    expect(round.rotation, 270);
+    expect(round.wallSkinId, 'brick_pack');
+    expect(round.floorSkinId, 'carpet_pack');
+  });
+
+  test('PlacedCorridor round-trips through JSON', () {
+    final original = PlacedCorridor(
+      id: 'c1',
+      tiles: const [
+        (col: 1, row: 1),
+        (col: 2, row: 1),
+        (col: 3, row: 1),
+      ],
+      wide: true,
+      skinId: 'corridor_neon',
+    );
+    final round = PlacedCorridor.fromJson(original.toJson());
+    expect(round.id, 'c1');
+    expect(round.tiles, hasLength(3));
+    expect(round.tiles[1].col, 2);
+    expect(round.wide, isTrue);
+    expect(round.skinId, 'corridor_neon');
+  });
 }

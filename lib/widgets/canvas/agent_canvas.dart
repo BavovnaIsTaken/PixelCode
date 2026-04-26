@@ -10,14 +10,16 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import 'build_picker_rail.dart';
+import 'build_menu.dart';
 import 'character_sprites.dart';
 import 'foreman_overlay_painter.dart';
 import 'office_game_state.dart';
@@ -51,17 +53,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   /// so chat context and name overlays remain addressable.
   bool _selectionVisible = true;
 
-  // Build Mode state
-  bool _buildMode = false;
-  BuildCategory? _buildCategory;
-  RoomType? _selectedRoomType;
-
-  /// When set, the ghost previews a whole preset bundle (multiple rooms) and
-  /// [_selectedRoomType] is null. Mutually exclusive with [_selectedRoomType].
-  OfficePreset? _selectedPreset;
-
-  int? _ghostCol;
-  int? _ghostRow;
+  // Build Mode state lives in `buildModeProvider` — agent_canvas is just one
+  // of two surfaces that consume it (the other is hub_screen, which mounts
+  // the menu in the chat-panel slot on desktop).
 
   // Track last synced level/rooms to avoid rebuilding tile map every frame
   OfficeLevel? _lastLevel;
@@ -72,6 +66,17 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   StreamSubscription<ServerMessage>? _msgSub;
   Timer? _posSyncTimer;
 
+  /// True until the player has tapped the foreman at least once. Drives the
+  /// bouncing onboarding chevron above the foreman's head. Persisted across
+  /// launches so the chevron doesn't re-appear after every restart.
+  bool _foremanIntroPending = true;
+
+  /// True while a desktop pointer is hovering over the foreman hit rect.
+  /// Drives the diegetic "Збудуємо?" speech bubble.
+  bool _foremanHovering = false;
+
+  static const String _foremanIntroSeenKey = 'foremanIntroSeen';
+
   @override
   void initState() {
     super.initState();
@@ -80,7 +85,23 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     _sprites.load().then((_) {
       if (mounted) setState(() {});
     });
+    _loadForemanIntroFlag();
     _startPositionSync();
+  }
+
+  Future<void> _loadForemanIntroFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seen = prefs.getBool(_foremanIntroSeenKey) ?? false;
+    if (mounted && seen) {
+      setState(() => _foremanIntroPending = false);
+    }
+  }
+
+  Future<void> _markForemanIntroSeen() async {
+    if (!_foremanIntroPending) return;
+    setState(() => _foremanIntroPending = false);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_foremanIntroSeenKey, true);
   }
 
   void _startPositionSync() {
@@ -256,19 +277,27 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
     final officeLevel = gameEconomy.officeLevel;
     final editMode = ref.watch(furnitureEditModeProvider);
-    final trayOpen = _buildMode && _buildCategory != null;
-    final railSpace = _buildMode ? BuildPickerRail.kRailWidth : 0.0;
-    final traySpace = trayOpen ? BuildPickerRail.kTrayHeight : 0.0;
+    final buildMode = ref.watch(buildModeProvider);
+
+    // BuildMenu sits in the chat-panel slot on wide viewports — agent_canvas
+    // doesn't render it there. On narrow viewports the canvas hosts a 200dp
+    // bottom sheet so the canvas stays visible above it during placement.
+    final viewportWidth = MediaQuery.of(context).size.width;
+    final wideMenu = viewportWidth >= BuildMenu.kBreakpoint;
+    final menuBottomSpace = buildMode.active && !wideMenu
+        ? BuildMenu.kBottomSheetHeight
+        : 0.0;
 
     return Stack(
       children: [
-        // Canvas — shrinks when build-mode panels are open so the office
-        // fits the remaining rectangle instead of being covered over.
+        // Canvas — shrinks only when the mobile bottom sheet is open. On
+        // desktop the menu takes the chat slot, so canvas keeps its full
+        // share of this column.
         Positioned(
           left: 0,
           top: 0,
-          right: railSpace,
-          bottom: traySpace,
+          right: 0,
+          bottom: menuBottomSpace,
           child: LayoutBuilder(
             builder: (context, constraints) {
               return Stack(
@@ -283,7 +312,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                         _updateBuildGhost(event.localPosition, constraints);
                       },
                       onExit: (_) {
-                        setState(() => _hoveredAgentId = null);
+                        setState(() {
+                          _hoveredAgentId = null;
+                          _foremanHovering = false;
+                        });
                       },
                       child: GestureDetector(
                         onTapDown: (d) =>
@@ -307,25 +339,21 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                   editMode: editMode,
                                   selectedFurnitureId:
                                       ref.watch(selectedFurnitureIdProvider),
-                                  buildMode: _buildMode,
-                                  ghostRoomType:
-                                      editMode ? null : _selectedRoomType,
-                                  ghostPreset:
-                                      editMode ? null : _selectedPreset,
-                                  ghostRoomCol: _ghostCol,
-                                  ghostRoomRow: _ghostRow,
-                                  ghostIsValid: _selectedPreset != null
-                                      ? _presetGhostIsValid(
-                                          gameEconomy.placedRooms)
-                                      : _ghostIsValid(
-                                          gameEconomy.placedRooms),
+                                  buildMode: buildMode.active,
+                                  ghostRoomType: editMode
+                                      ? null
+                                      : buildMode.selectedRoomType,
+                                  ghostRoomCol: buildMode.ghostCol,
+                                  ghostRoomRow: buildMode.ghostRow,
+                                  ghostIsValid: _ghostIsValid(
+                                      buildMode, gameEconomy.placedRooms),
                                 ),
                               ),
                             ),
                             // Foreman + back-wall door — diegetic entry
                             // points to Build mode and the upgrade dialog.
                             // Hidden while the player is already building.
-                            if (!_buildMode)
+                            if (!buildMode.active)
                               Positioned.fill(
                                 child: IgnorePointer(
                                   child: CustomPaint(
@@ -337,6 +365,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       sprites: _sprites,
                                       attention: _renovationAttention(
                                           gameEconomy),
+                                      firstTimePrompt: _foremanIntroPending,
+                                      hovering: _foremanHovering,
                                       nextTier: officeLevel.nextLevel,
                                       doorAffordable: ref
                                           .read(gameEconomyProvider.notifier)
@@ -384,75 +414,16 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
           ),
         ),
 
-        // Build rail + tray: Positioned.fill but the internal widgets only
-        // occupy the right strip + bottom strip, so the canvas above sees the
-        // reduced area and they never overlap.
-        if (_buildMode)
-          Positioned.fill(
-            child: BuildPickerRail(
-              economy: gameEconomy,
-              selectedRoomType: _selectedRoomType,
-              selectedPreset: _selectedPreset,
-              activeCategory: _buildCategory,
-              tick: _tick,
-              isEditMode: editMode,
-              showConfirmHint: _ghostCol != null &&
-                  (_selectedRoomType != null ||
-                      _selectedPreset != null),
-              onCategoryTap: (cat) => setState(() {
-                _buildCategory = cat;
-                // Switching category exits edit mode — the user is picking
-                // new things to place, not modifying existing ones.
-                if (editMode) {
-                  ref.read(furnitureEditModeProvider.notifier).state = false;
-                }
-              }),
-              onSelectRoom: (rt) => setState(() {
-                _selectedRoomType =
-                    _selectedRoomType == rt ? null : rt;
-                _selectedPreset = null;
-                _ghostCol = null;
-                _ghostRow = null;
-                if (editMode) {
-                  ref.read(furnitureEditModeProvider.notifier).state = false;
-                }
-              }),
-              onSelectPreset: (preset) => setState(() {
-                _selectedPreset =
-                    _selectedPreset?.id == preset.id ? null : preset;
-                _selectedRoomType = null;
-                _ghostCol = null;
-                _ghostRow = null;
-                if (editMode) {
-                  ref.read(furnitureEditModeProvider.notifier).state = false;
-                }
-              }),
-              onToggleEdit: () {
-                final next = !ref.read(furnitureEditModeProvider);
-                ref.read(furnitureEditModeProvider.notifier).state = next;
-                if (next) {
-                  setState(() {
-                    // Can't place and edit at the same time — clear the
-                    // current ghost selection when entering edit mode.
-                    _selectedRoomType = null;
-                    _selectedPreset = null;
-                    _ghostCol = null;
-                    _ghostRow = null;
-                  });
-                }
-              },
-              onExit: () => setState(() {
-                _buildMode = false;
-                _buildCategory = null;
-                _selectedRoomType = null;
-                _selectedPreset = null;
-                _ghostCol = null;
-                _ghostRow = null;
-                if (editMode) {
-                  ref.read(furnitureEditModeProvider.notifier).state = false;
-                }
-              }),
-            ),
+        // BuildMenu — narrow viewport only. On wide viewports the menu lives
+        // in the chat-panel slot rendered by hub_screen, leaving the canvas
+        // its full share of this column.
+        if (buildMode.active && !wideMenu)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: BuildMenu.kBottomSheetHeight,
+            child: const BuildMenu(),
           ),
       ],
     );
@@ -473,14 +444,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   void _enterBuildMode() {
-    setState(() {
-      _buildMode = true;
-      _buildCategory = BuildCategory.compact;
-      _selectedRoomType = null;
-      _selectedPreset = null;
-      _ghostCol = null;
-      _ghostRow = null;
-    });
+    ref.read(buildModeProvider.notifier).enter();
+    // Hide hover bubble — pointer is now over the build menu, not the foreman.
+    if (_foremanHovering) setState(() => _foremanHovering = false);
+    // Persist that the player has discovered the foreman entry — chevron
+    // never re-appears on subsequent launches.
+    _markForemanIntroSeen();
   }
 
   /// Hit-test the Foreman sprite (world-space rect from foreman_overlay_painter).
@@ -534,6 +503,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     if (hit != _hoveredAgentId) {
       setState(() => _hoveredAgentId = hit);
     }
+    // Foreman hover only matters outside build mode (where the entry exists).
+    final isBuildMode = ref.read(buildModeProvider).active;
+    final overForeman =
+        !isBuildMode && _hitTestForeman(pos, constraints);
+    if (overForeman != _foremanHovering) {
+      setState(() => _foremanHovering = overForeman);
+    }
   }
 
   void _scheduleOverlayHover(String agentId) {
@@ -544,9 +520,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   void _onCanvasTap(Offset pos, BoxConstraints constraints) {
     final isEditMode = ref.read(furnitureEditModeProvider);
+    final isBuildMode = ref.read(buildModeProvider).active;
 
     // Build mode: edit mode removes placed rooms/furniture; otherwise place.
-    if (_buildMode) {
+    if (isBuildMode) {
       if (isEditMode) {
         _handleEditModeTap(pos, constraints);
       } else {
@@ -699,10 +676,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
         (screenPos.dx - ox) / scale, (screenPos.dy - oy) / scale);
   }
 
-  bool _ghostIsValid(List<PlacedRoom> rooms) {
-    final rt = _selectedRoomType;
-    final gc = _ghostCol;
-    final gr = _ghostRow;
+  bool _ghostIsValid(BuildModeState mode, List<PlacedRoom> rooms) {
+    final rt = mode.selectedRoomType;
+    final gc = mode.ghostCol;
+    final gr = mode.ghostRow;
     if (rt == null || gc == null || gr == null) return false;
     final gCols = _gameState.gridCols;
     final gRows = _gameState.gridRows;
@@ -732,70 +709,36 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final col = (world.dx / kTileSize).floor();
     final row = (world.dy / kTileSize).floor();
 
+    final mode = ref.read(buildModeProvider);
+    final notifier = ref.read(buildModeProvider.notifier);
+
     // Two-step placement: the first tap positions the ghost (preview only),
     // the second tap on the same tile commits. Tapping a different tile
     // moves the ghost without placing.
-    final isRepeatTap = _ghostCol == col && _ghostRow == row;
+    final isRepeatTap = mode.ghostCol == col && mode.ghostRow == row;
     if (!isRepeatTap) {
-      setState(() {
-        _ghostCol = col;
-        _ghostRow = row;
-      });
+      notifier.setGhost(col: col, row: row);
       return;
     }
 
-    final notifier = ref.read(gameEconomyProvider.notifier);
-
-    final preset = _selectedPreset;
-    if (preset != null) {
-      if (!_presetGhostIsValid(rooms)) return;
-      notifier.applyPreset(
-        preset: preset,
-        col: col,
-        row: row,
-        blockedTiles: _gameState.blockedTiles,
-      );
-      setState(() {
-        _ghostCol = null;
-        _ghostRow = null;
-      });
-      return;
-    }
-
-    final rt = _selectedRoomType;
+    final rt = mode.selectedRoomType;
     if (rt == null) return;
-    if (!_ghostIsValid(rooms)) return;
+    // Re-read mode here in case ghost was just set above and we need fresh
+    // values; this branch only runs on a repeat-tap so the values are stable.
+    if (!_ghostIsValid(mode, rooms)) return;
 
-    notifier.placeRoom(rt, col, row);
-    setState(() {
-      _ghostCol = null;
-      _ghostRow = null;
-    });
-  }
-
-  bool _presetGhostIsValid(List<PlacedRoom> rooms) {
-    final preset = _selectedPreset;
-    final gc = _ghostCol;
-    final gr = _ghostRow;
-    if (preset == null || gc == null || gr == null) return false;
-    return ref.read(gameEconomyProvider.notifier).canApplyPreset(
-          preset: preset,
-          col: gc,
-          row: gr,
-          blockedTiles: _gameState.blockedTiles,
-        );
+    ref.read(gameEconomyProvider.notifier).placeRoom(rt, col, row);
+    notifier.clearGhost();
   }
 
   void _updateBuildGhost(Offset screenPos, BoxConstraints constraints) {
-    if (!_buildMode) return;
+    final mode = ref.read(buildModeProvider);
+    if (!mode.active) return;
     final world = _screenToWorld(screenPos, constraints);
     final col = (world.dx / kTileSize).floor();
     final row = (world.dy / kTileSize).floor();
-    if (col != _ghostCol || row != _ghostRow) {
-      setState(() {
-        _ghostCol = col;
-        _ghostRow = row;
-      });
+    if (col != mode.ghostCol || row != mode.ghostRow) {
+      ref.read(buildModeProvider.notifier).setGhost(col: col, row: row);
     }
   }
 
