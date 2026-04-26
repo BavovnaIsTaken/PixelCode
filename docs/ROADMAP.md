@@ -84,9 +84,9 @@
 | Компонент | Статус | Файли / Notes |
 |---|---|---|
 | Schema bump v5→v6 (PlacedRoom rotation, per-room wall/floor skin IDs, PlacedCorridor, RoomTemplate model, WallSkinPack/FloorSkinPack model, ownedWall/FloorSkinPacks sets) + soft additive migration v5→v6 | `[DONE]` | [lib/models/game_economy.dart](../lib/models/game_economy.dart), [lib/services/game_persistence_service.dart](../lib/services/game_persistence_service.dart) |
-| Прибрати legacy `OfficePreset` / Presets категорію з UI + provider | `[TODO]` | [lib/widgets/canvas/build_picker_rail.dart](../lib/widgets/canvas/build_picker_rail.dart), [lib/providers/game_economy_provider.dart](../lib/providers/game_economy_provider.dart) |
-| Builder NPC entry point (sprite + 48 dp Stack hitbox + bouncing chevron + 3-line dialogue) | `[TODO]` | [lib/widgets/canvas/](../lib/widgets/canvas/) |
-| Новий BuildMenu shell (NavigationRail desktop / bottom sheet mobile / iPad адаптивно, 6 секцій: Rooms / Templates / Corridors / Walls / Floors / Decor & Plants) | `[TODO]` | замінює `build_picker_rail.dart` |
+| Прибрати legacy `OfficePreset` / Presets категорію з UI + provider | `[DONE]` | модель, провайдер і `pixel_office_painter` зачищені; `build_picker_rail.dart` видалено |
+| Foreman NPC polish (onboarding chevron + hover speech bubble "Збудуємо?" + persistence) | `[DONE]` | [lib/widgets/canvas/foreman_overlay_painter.dart](../lib/widgets/canvas/foreman_overlay_painter.dart), [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). Foreman вже існував як entry point; додано onboarding cues + diegetic tooltip |
+| Новий BuildMenu shell (NavigationRail desktop / bottom sheet mobile, 6 секцій: Rooms / Templates / Corridors / Walls / Floors / Decor) | `[DONE]` | [lib/widgets/canvas/build_menu.dart](../lib/widgets/canvas/build_menu.dart). Stage 1 видає тільки Rooms; решта секцій — placeholder "скоро у Stage 2" |
 | Listener-based gesture layer (1-finger placement vs 2-finger pan, hover ghost, cursor variants, R/Shift+R rotate) | `[TODO]` | — |
 | Room placement flow (drag-place, snap-to-grid, ghost color valid/invalid, place bar `[X][↺][↻][✓ ₲N]`, adjacency hints зеленою пунктиром у preview) | `[TODO]` | — |
 
