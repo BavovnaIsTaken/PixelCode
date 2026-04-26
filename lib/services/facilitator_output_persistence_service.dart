@@ -16,15 +16,19 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/facilitator_output.dart';
+import '../models/milestone_tree.dart';
+import '../models/mission_briefing.dart';
 import '../models/quest_line.dart';
 
 typedef OutputDecoder = FacilitatorOutput Function(Map<String, dynamic> json);
 
 class FacilitatorOutputPersistenceService {
-  // Decoders are mutable to allow new styles to register without touching
-  // this file. Default registry: Game Master (QuestLine).
+  // Default registry covers every MVP output format. Tests can replace
+  // entries via [registerDecoder] for plug-in scenarios.
   static final Map<OutputFormat, OutputDecoder> _decoders = {
     OutputFormat.questLine: (json) => QuestLine.fromJson(json),
+    OutputFormat.missionBriefing: (json) => MissionBriefing.fromJson(json),
+    OutputFormat.milestoneTree: (json) => MilestoneTree.fromJson(json),
   };
 
   /// Register (or replace) a decoder for an output format. Called by each
@@ -32,6 +36,13 @@ class FacilitatorOutputPersistenceService {
   static void registerDecoder(OutputFormat format, OutputDecoder decoder) {
     _decoders[format] = decoder;
   }
+
+  /// Remove a decoder. Returns the previously-registered decoder, or
+  /// `null` if none was set. Useful for tests that need to assert the
+  /// "no decoder" path, and for marketplace teardown when a style is
+  /// uninstalled.
+  static OutputDecoder? removeDecoder(OutputFormat format) =>
+      _decoders.remove(format);
 
   static String _storageKey(String projectPath) =>
       projectPath.replaceAll('/', '-').replaceAll(RegExp('^-'), '');
