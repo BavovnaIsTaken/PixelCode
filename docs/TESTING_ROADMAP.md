@@ -522,10 +522,10 @@ agent_A.skills_sum > agent_B.skills_sum
 
 ---
 
-## Phase 5: Backend Abstraction 🚀 IN PROGRESS (Q2 2026)
+## Phase 5: Backend Abstraction ✅ COMPLETE (Q2 2026)
 
-**Target**: Pluggable agent execution backends + dependency injection.  
-**Status**: ✅ **44 tests COMPLETE — Tier 1 (Interface & Routing)**  
+**Target**: Pluggable agent execution backends + dependency injection + server infrastructure.  
+**Status**: ✅ **93 tests COMPLETE — Tier 1 (Interface & Routing + Server Infrastructure)**  
 **Completed**: 2026-04-27  
 **Depends on**: Phase 4 (Marketplace v1 API established)
 
@@ -601,15 +601,48 @@ agent_A.skills_sum > agent_B.skills_sum
 
 ---
 
+#### E. Server Infrastructure ✅
+
+**Tests completed** (49 tests):
+
+**TaskQueue** (`server/test/task_queue.test.ts` — 27 tests):
+- [x] Empty queue dequeues as undefined
+- [x] Single task enqueue → dequeue
+- [x] FIFO ordering within same priority level
+- [x] Priority ordering: critical > high > normal > low
+- [x] Mixed priorities: correct sequence
+- [x] `size` reflects queue length
+- [x] `isEmpty` before and after drain
+- [x] `peek()` returns next without removal
+- [x] `removeForClient()` removes all matching tasks
+- [x] `snapshot()` returns ordered copy without mutation
+
+**ChatHistory** (`server/test/chat_history.test.ts` — 22 tests):
+- [x] Empty history has 0 messages
+- [x] Add user and assistant messages
+- [x] Clear resets to empty
+- [x] `getContextMessages()` respects token budget
+- [x] Long messages truncated at token limit
+- [x] Always includes most recent message
+- [x] `markForCache()` sets cache_control on latest message
+- [x] Save/load round-trip (all messages preserved)
+- [x] Load from corrupt file leaves history empty
+- [x] Multiple saves overwrite safely
+
+**Implementation**: `server/src/task_queue.ts`, `server/src/chat_history.ts`
+
+---
+
 ### 📊 Phase 5 Tier 1 Test Results
 
-**44 tests total** ✅ (44 new tests + 257 existing all passing)  
+**93 tests total** ✅ (93 new tests + 257 existing all passing)  
 **Breakdown**:
 - AgentBackend Interface: 8 tests
 - ClaudeAgentSdkBackend refactor: 14 tests
 - LocalRuntimeBackend: 10 tests
 - TierRouter: 12 tests
-- **Total: 301 server tests passing (0 failures)**
+- Server Infrastructure (TaskQueue + ChatHistory): 49 tests
+- **Total: 350 server tests passing (0 failures)**
 
 ---
 
@@ -687,6 +720,50 @@ agent_A.skills_sum > agent_B.skills_sum
 
 ---
 
+## Flutter Data Model Coverage ✅ COMPLETE (2026-04-27)
+
+**Target**: Unit tests for all Flutter data models with non-trivial logic.  
+**Status**: ✅ **234 tests COMPLETE — 7 model files**  
+**Completed**: 2026-04-27
+
+These are cross-cutting unit tests that verify the Flutter-side data layer independently of any server or widget. They form a fast safety net (~2–3s total) for the entire model layer.
+
+### ✅ Covered Models
+
+| File | Tests | What's Tested |
+|---|---|---|
+| `test/models/agent_message_test.dart` | 70 | `parseAgentStatus`, `AgentInfo.fromJson` (roleType derivation, provider), `HealthItemId.fromWire` (all 9 + round-trip), `HealthItem.fromJson` (status/fixable/null-id), `HealthItem.copyWith`, `ChatMessage` toJson/fromJson/copyWith (omit-when-null, category), `ServerMessage.fromJson` routing (12 types), `RemoteCharPosition.fromJson`, `OutputFormat.fromKey` round-trip |
+| `test/models/task_board_test.dart` | 39 | `TaskColumn.fromKey`, `TaskPriority.fromKey`, `StickyColor.fromKey`, `TaskDifficultyExt.requiredLevel`, `TaskAttachment.isImage`, `TaskCard` defaults/copyWith/fromJson/toJson (omit-when-null attachments), `BoardState.tasksInColumn`, `BoardState.encode/decode` |
+| `test/models/session_profile_test.dart` | 29 | `isSecure` (6 host patterns), `wsUrl` (6 code paths: tunnelUrl priority, bare hostname, wss/ws prefix, Cloudflare/Tailscale domains, LAN fallback), `copyWith`, `fromJson/toJson`, `encodeList/decodeList` |
+| `test/models/deploy_state_test.dart` | 26 | `isBusy` (checking/building=busy, idle/ready/error=not), all defaults, `copyWith` with `clearSelectedSerial` flag (precedence rules), `AndroidDevice.isReady`, `AndroidDevice.fromJson` (all fields + empty defaults) |
+| `test/models/project_test.dart` | 26 | `storageKey` (slash→dash, leading-dash strip), `displayName` (name vs path fallback), `copyWith`, `fromJson/toJson`, `fromPath`, `listFromJson/listToJson`, equality/hashCode/Set deduplication |
+| `test/models/local_server_config_test.dart` | 21 | `hasApiKey` (null/empty=false), all defaults (port=9720, autoStart=false), `copyWith` with nullable-closure pattern for `apiKey`, `fromJson/toJson` (omit apiKey when null), `encode/decode` round-trip |
+| `test/models/project_memory_test.dart` | 23 | `MemoryTier` (fresh/recent/old boundaries), `applyDecay` (30d cutoff, word truncation per tier, 2400-char budget, newest-first sort), `formatForPrompt` (bullet lines, time-ago prefix), `fromJson/toJson`, `listFromJson/listToJson` |
+
+### 📊 Flutter Model Coverage Metrics
+
+| Metric | Value |
+|--------|-------|
+| Total tests | 234 |
+| Files | 7 new test files |
+| Execution time | ~2–3s |
+| Previously untested models | 7 |
+
+---
+
+**Run Flutter model tests:**
+```bash
+flutter test test/models/agent_message_test.dart \
+              test/models/task_board_test.dart \
+              test/models/session_profile_test.dart \
+              test/models/deploy_state_test.dart \
+              test/models/project_test.dart \
+              test/models/local_server_config_test.dart \
+              test/models/project_memory_test.dart
+```
+
+---
+
 ## Summary Table
 
 | Phase | Component | Tests | Status | Duration | Blocker |
@@ -698,9 +775,10 @@ agent_A.skills_sum > agent_B.skills_sum
 | **3.UI** | Custom Spawn UI + integration | ~16 | ⏳ PENDING | 2w | UI ready |
 | **4** | Marketplace v1 (server) | 47 | ✅ DONE | Done | — |
 | **4.UI** | Marketplace UI | 20 | ✅ DONE | Done | — |
-| **5.T1** | Backend Abstraction (Tier 1) | 44 | ✅ IN PROGRESS | Done | — |
+| **5.T1** | Backend Abstraction (Tier 1) | 93 | ✅ DONE | Done | — |
 | **5.T2** | Backend Training (Tier 2) | ~36 | ⏳ PENDING | 3–4w | Phase 5.T1 |
-| **TOTAL** | — | **~398 tests** | — | **~18–20w solo** | — |
+| **Flutter** | Data Model Coverage | 234 | ✅ DONE | Done | — |
+| **TOTAL** | — | **~680 tests** | — | **~18–20w solo** | — |
 
 ---
 
@@ -772,6 +850,6 @@ open coverage/index.html
 
 ---
 
-**Last updated:** 2026-04-26 (Commission + Data Privacy tests complete)  
+**Last updated:** 2026-04-27 (Flutter Data Model Coverage: 234 tests; Phase 5 server infrastructure: 49 tests)  
 **Owner**: @danylooliinyk  
 **Sync with**: [ROADMAP.md](ROADMAP.md), [STRATEGY.md](STRATEGY.md)
