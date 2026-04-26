@@ -92,4 +92,99 @@ void main() {
     expect(s.selectedRoomType, isNull);
     expect(s.ghostCol, isNull);
   });
+
+  // ─── Rotation ────────────────────────────────────────────────────────────
+
+  test('ghostRotation starts at 0', () {
+    c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom);
+    expect(c.read(buildModeProvider).ghostRotation, 0);
+  });
+
+  test('rotateClockwise increments by 90° and wraps at 360', () {
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom);
+
+    n.rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 90);
+    n.rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 180);
+    n.rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 270);
+    n.rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 0);
+  });
+
+  test('rotateCounterClockwise decrements by 90° and wraps', () {
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom);
+
+    n.rotateCounterClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 270);
+    n.rotateCounterClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 180);
+  });
+
+  test('ghostWidth/ghostHeight swap axes at 90° and 270° for non-square room', () {
+    // meetingRoom is 3 wide × 2 tall
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom);
+
+    var s = c.read(buildModeProvider);
+    expect(s.ghostWidth, 3);
+    expect(s.ghostHeight, 2);
+
+    n.rotateClockwise(); // 90°
+    s = c.read(buildModeProvider);
+    expect(s.ghostWidth, 2);
+    expect(s.ghostHeight, 3);
+
+    n.rotateClockwise(); // 180°
+    s = c.read(buildModeProvider);
+    expect(s.ghostWidth, 3);
+    expect(s.ghostHeight, 2);
+
+    n.rotateClockwise(); // 270°
+    s = c.read(buildModeProvider);
+    expect(s.ghostWidth, 2);
+    expect(s.ghostHeight, 3);
+  });
+
+  test('toggleRoom resets rotation to 0', () {
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom)
+      ..rotateClockwise()
+      ..rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 180);
+
+    // Switching to another room resets rotation.
+    n.toggleRoom(RoomType.workstation);
+    expect(c.read(buildModeProvider).ghostRotation, 0);
+  });
+
+  test('setSection resets rotation to 0', () {
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom)
+      ..rotateClockwise();
+    expect(c.read(buildModeProvider).ghostRotation, 90);
+
+    n.setSection(BuildSection.decor);
+    expect(c.read(buildModeProvider).ghostRotation, 0);
+  });
+
+  test('clearSelection resets rotation to 0', () {
+    final n = c.read(buildModeProvider.notifier)
+      ..enter()
+      ..toggleRoom(RoomType.meetingRoom)
+      ..rotateClockwise();
+
+    n.clearSelection();
+    expect(c.read(buildModeProvider).ghostRotation, 0);
+  });
 }

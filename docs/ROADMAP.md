@@ -88,8 +88,8 @@
 | Foreman NPC polish (onboarding chevron + hover speech bubble "Збудуємо?" + persistence) | `[DONE]` | [lib/widgets/canvas/foreman_overlay_painter.dart](../lib/widgets/canvas/foreman_overlay_painter.dart), [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). Foreman вже існував як entry point; додано onboarding cues + diegetic tooltip |
 | Новий BuildMenu shell (NavigationRail desktop / bottom sheet mobile, 6 секцій: Rooms / Templates / Corridors / Walls / Floors / Decor) | `[DONE]` | [lib/widgets/canvas/build_menu.dart](../lib/widgets/canvas/build_menu.dart). Stage 1 видає тільки Rooms; решта секцій — placeholder "скоро у Stage 2" |
 | BuildMenu mount: replaces ChatPanel у лівому 440dp слоті на десктопі (build state ⇒ `buildModeProvider`); мобільна форма лишається bottom-sheet поверх canvas | `[DONE]` | [lib/providers/build_mode_provider.dart](../lib/providers/build_mode_provider.dart), [lib/screens/hub/hub_screen.dart](../lib/screens/hub/hub_screen.dart). Канвас на десктопі більше не звужується — займає всю праву колонку повністю |
-| Listener-based gesture layer (1-finger placement vs 2-finger pan, hover ghost, cursor variants, R/Shift+R rotate) | `[WIP]` | Q2 2026 |
-| Room placement flow (drag-place, snap-to-grid, ghost color valid/invalid, place bar `[X][↺][↻][✓ ₲N]`, adjacency hints зеленою пунктиром у preview) | `[TODO]` | Q2 2026 |
+| Listener-based gesture layer (1-finger placement vs 2-finger pan, hover ghost, cursor variants, R/Shift+R rotate) | `[DONE]` | [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). KeyboardListener (R/Shift+R rotate, Esc cancel); hover ghost via MouseRegion._updateBuildGhost; two-step tap placement |
+| Room placement flow (drag-place, snap-to-grid, ghost color valid/invalid, place bar `[X][↺][↻][✓ ₲N]`, adjacency hints зеленою пунктиром у preview) | `[DONE]` | [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). _PlaceBar float widget; ghostRotation у BuildModeState + rotateClockwise/CCW; rotation-aware _ghostIsValid; placeRoom приймає rotation |
 
 **Stage 2 — контент і міграція (наступний цикл).**
 
@@ -127,6 +127,7 @@
 | **Per-agent facilitator binding** (manager пам'ятає обраний style) | `[TODO]` | Q3 2026 |
 | **Facilitator lessons namespace** (style-scoped lesson channel) | `[TODO]` | Q3 2026 |
 | **Style switch flow** (UI для зміни facilitator з explanation) | `[TODO]` | Q4 2026 |
+| **Agent busy/idle state + UI badge** (prerequisite для D — без нього team-dispatch + custom agents простоюють) | `[TODO]` | Q3 2026 |
 
 Дизайн — у [AGENT_PERSONALIZATION_SYSTEM.md](AGENT_PERSONALIZATION_SYSTEM.md), план — у [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
 
