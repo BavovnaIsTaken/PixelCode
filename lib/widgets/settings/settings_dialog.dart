@@ -13,8 +13,6 @@ import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
-import '../../providers/deepseek_auth_provider.dart';
-import '../../providers/gemini_auth_provider.dart';
 import '../../providers/energy_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/session_provider.dart';
@@ -25,6 +23,7 @@ import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_program.dart' show kDefaultLogoPathScript;
 import '../painters/pixel_glitch_painter.dart';
 import '../session/session_form_dialog.dart';
+import 'auth_providers_section.dart';
 import 'claude_avatar.dart';
 import 'diagnostics_section.dart';
 import 'logo_path_editor.dart';
@@ -866,8 +865,6 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
   @override
   Widget build(BuildContext context) {
     final claudeAuthAsync = ref.watch(claudeAuthProvider);
-    final geminiAuthAsync = ref.watch(geminiAuthProvider);
-    final deepseekAuthAsync = ref.watch(deepseekAuthProvider);
     final game = ref.watch(gameEconomyProvider);
     final claudeLoggedIn = claudeAuthAsync.valueOrNull?.loggedIn ?? false;
 
@@ -1174,9 +1171,9 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
         const SizedBox(height: 16),
 
         // Login / Logout / API-key buttons
-        SizedBox(
+        const SizedBox(
           width: double.infinity,
-          child: _buildAuthSection(ref, claudeAuthAsync, geminiAuthAsync, deepseekAuthAsync),
+          child: AuthProvidersSection(),
         ),
 
         const SizedBox(height: 32),
@@ -1280,306 +1277,6 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     );
   }
 
-  Widget _buildAuthSection(
-    WidgetRef ref,
-    AsyncValue<ClaudeAuthStatus> claudeAuthAsync,
-    AsyncValue<GeminiAuthStatus> geminiAuthAsync,
-    AsyncValue<DeepSeekAuthStatus> deepseekAuthAsync,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildProviderRow(
-          button: _buildAuthProviderButton(
-            ref,
-            provider: 'Claude',
-            icon: Icons.login_rounded,
-            claudeAuth: claudeAuthAsync,
-          ),
-          connected: claudeAuthAsync.valueOrNull?.loggedIn ?? false,
-          isLoading: claudeAuthAsync.isLoading,
-        ),
-        const SizedBox(height: 10),
-        _buildProviderRow(
-          button: _buildAuthProviderButton(
-            ref,
-            provider: 'Google (Gemini)',
-            icon: Icons.login_rounded,
-            geminiAuth: geminiAuthAsync,
-          ),
-          connected: geminiAuthAsync.valueOrNull?.loggedIn ?? false,
-          isLoading: geminiAuthAsync.isLoading,
-        ),
-        const SizedBox(height: 10),
-        _buildProviderRow(
-          button: _buildAuthProviderButton(
-            ref,
-            provider: 'DeepSeek',
-            icon: Icons.key_outlined,
-            deepseekAuth: deepseekAuthAsync,
-          ),
-          connected: deepseekAuthAsync.valueOrNull?.linked ?? false,
-          isLoading: deepseekAuthAsync.isLoading,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildProviderRow({
-    required Widget button,
-    required bool connected,
-    bool isLoading = false,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        button,
-        const Spacer(),
-        _buildPixelStatusBadge(connected: connected, isLoading: isLoading),
-      ],
-    );
-  }
-
-  Widget _buildPixelStatusBadge({required bool connected, bool isLoading = false}) {
-    final Color color;
-    final String label;
-    if (isLoading) {
-      color = Colors.white.withValues(alpha: 0.2);
-      label = '· · ·';
-    } else if (connected) {
-      color = const Color(0xFF22C55E);
-      label = 'CONNECTED';
-    } else {
-      color = Colors.white.withValues(alpha: 0.18);
-      label = 'OFFLINE';
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(
-        border: Border.all(color: color.withValues(alpha: connected ? 0.65 : 0.3)),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 7,
-          fontFamily: 'monospace',
-          letterSpacing: 1.5,
-          fontWeight: FontWeight.w700,
-          height: 1.0,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAuthProviderButton(
-    WidgetRef ref, {
-    required String provider,
-    required IconData icon,
-    AsyncValue<ClaudeAuthStatus>? claudeAuth,
-    AsyncValue<GeminiAuthStatus>? geminiAuth,
-    AsyncValue<DeepSeekAuthStatus>? deepseekAuth,
-  }) {
-    if (claudeAuth != null) {
-      return claudeAuth.when(
-        loading: () => _buildLoadingButton(),
-        error: (_, _) => _buildErrorButton(
-          onPressed: () => ref.read(claudeAuthProvider.notifier).refresh(),
-        ),
-        data: (status) {
-          if (status.loggedIn) {
-            return _buildLoggedInButton(
-              label: 'Вийти (Claude)',
-              onPressed: () => ref.read(claudeAuthProvider.notifier).logout(),
-            );
-          }
-          return _buildLoginButton(
-            label: 'Увійти через claude.ai',
-            icon: icon,
-            onPressed: () => ref.read(claudeAuthProvider.notifier).login(),
-          );
-        },
-      );
-    } else if (geminiAuth != null) {
-      return geminiAuth.when(
-        loading: () => _buildLoadingButton(),
-        error: (_, _) => _buildErrorButton(
-          onPressed: () => ref.read(geminiAuthProvider.notifier).refresh(),
-        ),
-        data: (status) {
-          if (status.loggedIn) {
-            return _buildLoggedInButton(
-              label: 'Вийти (Google)',
-              onPressed: () => ref.read(geminiAuthProvider.notifier).logout(),
-            );
-          }
-          return _buildLoginButton(
-            label: 'Увійти через Google (gemini-cli)',
-            icon: icon,
-            onPressed: () => ref.read(geminiAuthProvider.notifier).login(),
-          );
-        },
-      );
-    } else if (deepseekAuth != null) {
-      return deepseekAuth.when(
-        loading: () => _buildLoadingButton(),
-        error: (_, _) => _buildErrorButton(
-          onPressed: () => ref.read(deepseekAuthProvider.notifier).refresh(),
-        ),
-        data: (status) {
-          if (status.linked) {
-            return _buildLoggedInButton(
-              label: 'Очистити ключ DeepSeek (${status.maskedKey})',
-              onPressed: () => ref.read(deepseekAuthProvider.notifier).clearKey(),
-            );
-          }
-          return _buildLoginButton(
-            label: 'Додати API ключ DeepSeek',
-            icon: icon,
-            onPressed: () => _showDeepSeekKeyDialog(ref),
-          );
-        },
-      );
-    }
-    return const SizedBox.shrink();
-  }
-
-  void _showDeepSeekKeyDialog(WidgetRef ref) {
-    final controller = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A1F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text(
-          'DeepSeek API ключ',
-          style: TextStyle(color: Colors.white, fontSize: 15),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Ключ зберігається локально і надсилається тільки на api.deepseek.com.',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
-                fontSize: 11,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: controller,
-              obscureText: true,
-              style: const TextStyle(color: Colors.white, fontSize: 13),
-              decoration: InputDecoration(
-                hintText: 'sk-...',
-                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.05),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFF00C0D1)),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text(
-              'Скасувати',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
-            ),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF00C0D1),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            onPressed: () {
-              final key = controller.text.trim();
-              if (key.isNotEmpty) {
-                ref.read(deepseekAuthProvider.notifier).saveKey(key);
-              }
-              Navigator.of(ctx).pop();
-            },
-            child: const Text('Зберегти'),
-          ),
-        ],
-      ),
-    ).then((_) => controller.dispose());
-  }
-
-  Widget _buildLoadingButton() => FilledButton(
-    onPressed: null,
-    style: FilledButton.styleFrom(
-      backgroundColor: Colors.white.withValues(alpha: 0.05),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-    ),
-    child: SizedBox(
-      width: 18,
-      height: 18,
-      child: CircularProgressIndicator(
-        strokeWidth: 2,
-        color: Colors.white.withValues(alpha: 0.3),
-      ),
-    ),
-  );
-
-  Widget _buildErrorButton({required VoidCallback onPressed}) =>
-      OutlinedButton.icon(
-        onPressed: onPressed,
-        icon: const Icon(Icons.refresh, size: 16),
-        label: const Text('Спробувати знову'),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: const Color(0xFF00C0D1),
-          side: BorderSide(
-            color: const Color(0xFF00C0D1).withValues(alpha: 0.3),
-          ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
-
-  Widget _buildLoginButton({
-    required String label,
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) =>
-      FilledButton.icon(
-        onPressed: onPressed,
-        icon: Icon(icon, size: 16),
-        label: Text(label),
-        style: FilledButton.styleFrom(
-          backgroundColor: const Color(0xFF00C0D1),
-          foregroundColor: Colors.black,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
-
-  Widget _buildLoggedInButton({
-    required String label,
-    required VoidCallback onPressed,
-  }) =>
-      OutlinedButton(
-        onPressed: onPressed,
-        style: OutlinedButton.styleFrom(
-          foregroundColor: Colors.white.withValues(alpha: 0.5),
-          side: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-        child: Text(label),
-      );
 }
 
 // ─── Session profile tile ──────────────────────────────────────────────────
