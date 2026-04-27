@@ -17,7 +17,7 @@
  *   anything → crash; record exit code, do not respawn (surface in /status).
  */
 
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, exec, type ChildProcess } from "child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { request as httpRequest } from "http";
 import { resolve } from "path";
@@ -121,6 +121,19 @@ export function runLauncher(opts: LauncherOptions): void {
     }
     return false;
   };
+
+  const freeServerPort = (): Promise<void> =>
+    new Promise((resolve) => {
+      exec(`lsof -ti :${opts.serverPort}`, (_err, stdout) => {
+        const pids = stdout.trim().split(/\s+/).filter(Boolean);
+        if (pids.length === 0) { resolve(); return; }
+        log(`port ${opts.serverPort} occupied by PID(s) ${pids.join(", ")} — evicting orphan…`);
+        for (const pid of pids) {
+          try { process.kill(parseInt(pid, 10), "SIGKILL"); } catch {}
+        }
+        setTimeout(resolve, 300);
+      });
+    });
 
   const spawnChild = (): { ok: boolean; reason?: string } => {
     if (state.child) return { ok: true };
@@ -255,6 +268,7 @@ export function runLauncher(opts: LauncherOptions): void {
       sendJson(res, 200, { ok: true, alreadyRunning: true, pid: currentPid() });
       return;
     }
+    await freeServerPort();
     const { ok, reason } = spawnChild();
     if (!ok) {
       sendJson(res, 500, { ok: false, error: reason ?? "spawn failed" });
@@ -343,8 +357,10 @@ export function runLauncher(opts: LauncherOptions): void {
   httpServer.listen(opts.launcherPort, "127.0.0.1", () => {
     log(`HTTP API listening on http://127.0.0.1:${opts.launcherPort}/launcher/`);
     if (opts.autostart) {
-      const { ok, reason } = spawnChild();
-      if (!ok) log(`autostart failed: ${reason}`);
+      void freeServerPort().then(() => {
+        const { ok, reason } = spawnChild();
+        if (!ok) log(`autostart failed: ${reason}`);
+      });
     } else {
       log("autostart disabled — server will idle until POST /launcher/start");
     }
