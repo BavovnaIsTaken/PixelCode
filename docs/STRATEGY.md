@@ -38,6 +38,23 @@ PixelCode (v0.4.0+) — **візуальна платформа для орке�
 - Експорт/імпорт як JSON → початок community trades без marketplace-інфраструктури
 - Discord/Reddit thread для обміну агентами
 
+### Phase 1.5: Curated Roster v1 (Q3 2026)
+
+Між Custom Agent Spawn (Phase 1) і Marketplace v1 (Phase 2) — крок-проміжок: **запечений roster іменованих персонажів** як hiring UX і marketplace mental-model rehearsal. Гравець наймає не "Developer на DeepSeek", а "Андрія, Code Specialist".
+
+- 5–7 named characters на старті (далі +; решта — на основі телеметрії), кожен має `{name, portrait, statWeights, promptBias, defaultBackend, price}`
+- **Character identity = stat weights + personality**, не provider. Свап провайдера ≠ зміна персонажа.
+- **Soft vendor-disclosure (не firewall):** lore і name — character-first, але `powered by X` видно дрібним шрифтом з можливістю свапу. PixelCode позиціонується як прозорий marketplace, де гравець свідомо вибирає модель за ціною/якістю/задачею.
+- **Brand-guidelines compliance:** для Anthropic / OpenAI використовувати тільки дозволені forms ("powered by Claude", без модифікацій лого); версії моделей живуть у single-source-of-truth catalog для централізованого оновлення.
+- **Portrait pipeline:** reuse існуючої 8-skin × 9-class sprite system + palette swaps + accessory overlays — без нових base sprites (combinatorial space ~1440 unique looks з ~10 нових pixel assets).
+- Catalog UI: filter/sort за статами, ціною, спеціалізацією → reused як stats-card компонент для Marketplace v1 (E).
+
+**Чому це не суперечить §2 (tier-based, не provider-based):** провайдер = `defaultBackend` runtime field, не identity. Identity = `{name, portrait, statWeights, promptBias}` — стабільна між backend-свапами. Tier-based routing (Haiku/Sonnet/Opus per task) працює всередині будь-якого character-а як раніше.
+
+**Чому це не Marketplace v1 (E):** немає commission infra, listings flow, reviews, P2P trade, anti-collusion. Це curated roster від розробника, не user-generated trade ground.
+
+**Monetization:** cosmetic-only (portrait skins, accessories, voice-stings, idle animations). Stats фіксовані per character — F2P гравець може дотягти top-комбо без платежу. Узгоджено з §3 "no pay-to-progress".
+
 ### Phase 2: Marketplace v1 (Q4 2026)
 
 - Каталог агентів: рейтинг, відгуки, статистика

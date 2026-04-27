@@ -145,10 +145,39 @@
 | **Agent signature/identity** (унікальний ID, історія тренування) | `[TODO]` | Q3 2026 |
 | **Personality presets** (templates для швидкого старту) | `[TODO]` | Q3 2026 |
 | **Custom facilitator spawn** (user-defined persona_prompt + lexicon) | `[TODO]` | Q3 2027 |
-| **Agent stats card** — для marketplace listing (XP, success rate, specializations) | `[TODO]` | Q3 2026 |
+| **Agent stats card** — для marketplace listing (XP, success rate, specializations); shareable з Roster v1 (D.1) | `[TODO]` | Q3 2026 |
 | **Discord/Reddit thread** — перший community trade ground (поза-аппка) | `[TODO]` | Q3 2026 |
 
 **Залежності:** C (Personalization UI) має бути готова раніше, бо Custom Agent Spawn зливається з нею в одне UI.
+
+### D.1 Curated Roster v1 (Q3 2026)
+
+UX-rehearsal для Marketplace v1 — запечений roster named characters, де гравець наймає "Андрія, Code Specialist" замість абстрактної ролі. **Soft vendor-disclosure**: provider видно дрібним шрифтом з опцією свапу, але lore та name — character-first. Дизайн ухвалено [STRATEGY §Phase 1.5](STRATEGY.md#phase-15-curated-roster-v1-q3-2026); рішення зафіксовано 2026-04-27 (1C/2A/3A: soft firewall + sprite reuse + cosmetic-only monetization).
+
+| Компонент | Статус | ETA |
+|---|---|---|
+| **Character data schema** (`name`, `portrait`, `statWeights`, `promptBias`, `defaultBackend`, `price`) | `[TODO]` | Q3 2026 |
+| **Starter roster (7 characters)** — Андрій / Оля / Богдан / Тетяна / Дмитро / Соня / Максим; бюджет 18pt, max=7, min=1, spread≥4 (специфікація 2026-04-27) | `[TODO]` | Q3 2026 |
+| **Capability formula review** — UI/UX-designer creativity-heavy (creativity weight=0.1) → haiku-locked. Або підняти creativity weight у formula, або role-specific override | `[TODO]` | Q3 2026 (перед D.1 launch) |
+| **Adjacency × stat interaction guard** — Server Room speed bonus + speed=7 character не повинні стакати без cap (diminishing returns) | `[TODO]` | Q3 2026 |
+| **Roster telemetry hooks** (hire-rate per character, time-to-second-hire, retention rate, task success rate per role, backend-swap rate) | `[TODO]` | Q3 2026 (з L — Telemetry opt-in) |
+| **Provider catalog single-source-of-truth** (versioning: DeepSeek V2/V3, model snapshots) | `[TODO]` | Q3 2026 |
+| **Roster catalog UI** (filter/sort cards: stats, ціна, role) — shareable component з Marketplace v1 stats-card | `[TODO]` | Q3 2026 |
+| **Hire-flow refactor** — role+provider абстракція → character picker; backward-compat з існуючим `AgentGameData.provider` | `[TODO]` | Q3 2026 |
+| **Backend-swap UI** (advanced settings — змінити provider для найнятого character без втрати identity) | `[TODO]` | Q3 2026 |
+| **Soft vendor-disclosure styling** (`powered by X` дрібним шрифтом під portrait) + Anthropic/OpenAI brand guideline compliance | `[TODO]` | Q3 2026 |
+| **Portrait pipeline: palette swaps + accessory overlays** на базі існуючого 8-skin × 9-class sprite system | `[TODO]` | Q3 2026 |
+| **Cosmetic shop slot для characters** (portrait variants, accessories, voice-stings — stats const) | `[TODO]` | Q4 2026 (з cosmetics shop в I) |
+
+**Залежності:**
+- D.1 — UX-rehearsal для Marketplace v1 (E). Stats-card компонент має бути shareable між обома, інакше double-work у Q4 2026.
+- D (Custom Agent Spawn) і D.1 не competition: roster characters позиціонуються як "starting templates" → personalize через C → list на marketplace в E.
+- Brand guideline review (Anthropic/OpenAI ToS) — перед launch, не в production.
+
+**Risk-watch:**
+- Soft firewall маркетинг-дисципліна: при описах характерів у social не валитись назад у "це Claude-агент"; характер описується через persona/stats.
+- Балансування 5–7 hand-tuned characters може зжерти час D — старт з 5, додаткових 2 за результатом playtests.
+- Cannibalize Custom Spawn: позиціонувати roster як templates для personalization, не final product.
 
 ---
 
@@ -343,8 +372,8 @@ Facilitator — модальність взаємодії manager-агента, 
 ```
 A (Foundation) ─────────────────────────────────────────────► все інше
 B (Game Layer) ─┐
-                ├──► D (Custom Spawn) ──► E (Marketplace) ──► F (Backend abstraction)
-C (Personalization) ─┘                                              │
+                ├──► D (Custom Spawn) ──► D.1 (Curated Roster) ──► E (Marketplace) ──► F (Backend abstraction)
+C (Personalization) ─┘                                                                       │
                                                                     ▼
                                                               G (Foundation Model)
                                                                     │
@@ -363,7 +392,7 @@ L (Infra) — підтримує все
 **Критичний шлях до 2027:**
 
 ```
-C (Personalization UI) → D (Custom Agent Spawn) → E (Marketplace v1)
+C (Personalization UI) → D (Custom Agent Spawn) → D.1 (Curated Roster) → E (Marketplace v1)
   → F (AgentBackend abstraction) → G (Foundation Model) → H (Training)
 ```
 
@@ -377,6 +406,7 @@ C (Personalization UI) → D (Custom Agent Spawn) → E (Marketplace v1)
 |---|---|
 | C — Personalization UI | 3–4 weeks |
 | D — Custom Agent Spawn | 4–6 weeks |
+| D.1 — Curated Roster v1 | 3–4 weeks (з ×1.5 буфером для portrait variations + balance) |
 | E — Marketplace v1 | 6–8 weeks |
 | F — Backend abstraction | 6–10 weeks |
 | G — Foundation Model | 4–6 weeks (плюс GPU witty) |
