@@ -181,6 +181,7 @@
 | Компонент | Статус | ETA |
 |---|---|---|
 | **Gemini CLI integration foundation** (auth + provider routing) | `[PARTIAL]` | Q2 2026 — каркас є, agent routing попереду |
+| **DeepSeek API integration** — `deepseek_backend.ts`, API-key linking у Settings, "втомлений" стан агентів; interim до AgentBackend abstraction | `[DONE]` | Q2 2026 |
 | **`AgentBackend` interface** | `[TODO]` | Q1 2027 |
 | **`ClaudeAgentSdkBackend`** (refactor існуючого коду) | `[TODO]` | Q1 2027 |
 | **`OpenAgentBackend`** (для open-source agent frameworks) | `[TODO]` | Q1 2027 |

@@ -109,9 +109,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
           },
         };
       }
-      final deepseekKey = ref.read(deepseekAuthProvider).valueOrNull?.linked == true
-          ? await DeepSeekAuthService.getApiKey()
-          : null;
+      final deepseekKey = ref.read(deepseekAuthProvider).valueOrNull?.apiKey;
       ref.read(wsServiceProvider).setGameState(
             instances: instances,
             fullState: gs.encode(),

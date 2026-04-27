@@ -20,13 +20,7 @@ class DeepSeekAuthService {
     final prefs = await SharedPreferences.getInstance();
     final key = prefs.getString(_kDeepSeekApiKey);
     if (key == null || key.isEmpty) return DeepSeekAuthStatus.notLinked;
-    final masked = _maskKey(key);
-    return DeepSeekAuthStatus(linked: true, maskedKey: masked);
-  }
-
-  static Future<String?> getApiKey() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kDeepSeekApiKey);
+    return DeepSeekAuthStatus(linked: true, apiKey: key, maskedKey: _maskKey(key));
   }
 
   static Future<void> saveKey(String key) async {

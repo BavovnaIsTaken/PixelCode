@@ -1729,7 +1729,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             duration_ms: res.duration_ms,
             session_id: "local",
             parent_tool_use_id: null,
-          } as SDKAssistantMessage;
+          } as unknown as SDKAssistantMessage;
 
           // Mimic result message
           yield {
@@ -1773,7 +1773,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
               duration_ms: res.durationMs,
               session_id: "deepseek",
               parent_tool_use_id: null,
-            } as SDKAssistantMessage;
+            } as unknown as SDKAssistantMessage;
 
             yield {
               type: "result",
