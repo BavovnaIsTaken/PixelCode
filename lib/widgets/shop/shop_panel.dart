@@ -13,6 +13,7 @@ import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import 'spinning_coin.dart';
@@ -599,9 +600,11 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
           _SectionHeader(
             icon: Icons.hub_outlined,
             title: 'Провайдер AI',
-            trailing: selectedAgent.provider == AgentProviderType.local
-                ? 'Gemini'
-                : 'Claude',
+            trailing: switch (selectedAgent.provider) {
+              AgentProviderType.local => 'Gemini',
+              AgentProviderType.deepseek => 'DeepSeek',
+              _ => 'Claude',
+            },
           ),
           const SizedBox(height: 8),
           _ProviderCard(
@@ -641,61 +644,105 @@ class _AgentChip extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Prefer the instance's current nickname; fall back to the role's base
-    // name if the instance is not (yet) in state.
     final instance =
         ref.watch(gameEconomyProvider.select((g) => g.agents[agentId]));
     final label = instance?.nickname ??
         roleCatalogFor(roleTypeFromInstanceId(agentId))?.baseName ??
         agentId;
+
+    final geminiLoggedIn =
+        ref.watch(geminiAuthProvider).valueOrNull?.loggedIn ?? false;
+    final deepseekLinked =
+        ref.watch(deepseekAuthProvider).valueOrNull?.linked ?? false;
+
+    final tired = switch (instance?.provider) {
+      AgentProviderType.local => !geminiLoggedIn,
+      AgentProviderType.deepseek => !deepseekLinked,
+      _ => false,
+    };
+
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? _accent.withValues(alpha: 0.15)
-              : Colors.white.withValues(alpha: 0.04),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(
+      child: Opacity(
+        opacity: tired ? 0.45 : 1.0,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
             color: isSelected
-                ? _accent.withValues(alpha: 0.4)
-                : Colors.white.withValues(alpha: 0.08),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-              ),
+                ? _accent.withValues(alpha: 0.15)
+                : Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isSelected
+                  ? _accent.withValues(alpha: 0.4)
+                  : Colors.white.withValues(alpha: 0.08),
             ),
-            if (instance?.provider == AgentProviderType.local) ...[
-              const SizedBox(width: 5),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4285F4).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(3),
-                  border: Border.all(
-                    color: const Color(0xFF4285F4).withValues(alpha: 0.35),
-                  ),
-                ),
-                child: const Text(
-                  'G',
-                  style: TextStyle(
-                    color: Color(0xFF4285F4),
-                    fontSize: 8,
-                    fontWeight: FontWeight.w700,
-                  ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? _accent : Colors.white.withValues(alpha: 0.4),
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                 ),
               ),
+              if (instance?.provider == AgentProviderType.local) ...[
+                const SizedBox(width: 5),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4285F4).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(
+                      color: const Color(0xFF4285F4).withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: const Text(
+                    'G',
+                    style: TextStyle(
+                      color: Color(0xFF4285F4),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (instance?.provider == AgentProviderType.deepseek) ...[
+                const SizedBox(width: 5),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4D6BFE).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(
+                      color: const Color(0xFF4D6BFE).withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Text(
+                    tired ? 'zzz' : 'DS',
+                    style: const TextStyle(
+                      color: Color(0xFF4D6BFE),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (tired && instance?.provider == AgentProviderType.local) ...[
+                const SizedBox(width: 5),
+                Text(
+                  'zzz',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.25),
+                    fontSize: 8,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -809,7 +856,15 @@ class _ProviderCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final geminiAuth = ref.watch(geminiAuthProvider);
     final geminiLoggedIn = geminiAuth.valueOrNull?.loggedIn ?? false;
+    final deepseekAuth = ref.watch(deepseekAuthProvider);
+    final deepseekLinked = deepseekAuth.valueOrNull?.linked ?? false;
     final notifier = ref.read(gameEconomyProvider.notifier);
+
+    final String? hint = !geminiLoggedIn && current == AgentProviderType.local
+        ? 'Увійдіть через Google у Налаштуваннях → Обліковий запис'
+        : !deepseekLinked && current == AgentProviderType.deepseek
+            ? 'Додайте API ключ DeepSeek у Налаштуваннях → Обліковий запис'
+            : null;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -843,12 +898,24 @@ class _ProviderCard extends ConsumerWidget {
                         instanceId, AgentProviderType.local)
                     : null,
               ),
+              const SizedBox(width: 8),
+              _ProviderOption(
+                label: 'DeepSeek',
+                sublabel: 'api.deepseek.com',
+                icon: Icons.key_outlined,
+                active: current == AgentProviderType.deepseek,
+                locked: !deepseekLinked,
+                onTap: deepseekLinked
+                    ? () => notifier.setAgentProvider(
+                        instanceId, AgentProviderType.deepseek)
+                    : null,
+              ),
             ],
           ),
-          if (!geminiLoggedIn) ...[
+          if (hint != null) ...[
             const SizedBox(height: 8),
             Text(
-              'Увійдіть через Google у Налаштуваннях → Обліковий запис',
+              hint,
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.25),
                 fontSize: 10,

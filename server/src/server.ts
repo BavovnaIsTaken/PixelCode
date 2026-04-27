@@ -38,6 +38,7 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
+import { DeepSeekBackend } from "./deepseek_backend.js";
 
 const localGemini = new LocalGeminiRunner();
 import { runDungeon, getChallenge } from "./dungeon.js";
@@ -565,6 +566,9 @@ const clientBypassPermissions = new WeakMap<WebSocket, boolean>();
 
 /** Per-client game economy state (hired agents, hardware, skills). */
 const clientGameState = new WeakMap<WebSocket, GameStateData>();
+
+/** Per-client DeepSeek API key, forwarded from client SharedPreferences. */
+const clientDeepSeekKey = new WeakMap<WebSocket, string>();
 
 /**
  * Per-client Facilitator System runtime state. Survives across messages on
@@ -1690,7 +1694,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       promptParam = prefixedPrompt;
     }
 
-    const q = (targetInstance?.provider === 1) // 1 = local
+    const q = (targetInstance?.provider === 1) // 1 = local (Gemini CLI)
       ? (async function*() {
           // Local execution bridge
           const res = await localGemini.query({
@@ -1735,10 +1739,53 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             total_cost_usd: 0,
           } as unknown as SDKMessage;
         })()
-      : query({
-          prompt: promptParam,
-          options: queryOptions,
-        });
+      : (targetInstance?.provider === 3) // 3 = deepseek
+        ? (async function*() {
+            const apiKey = clientDeepSeekKey.get(ws);
+            if (!apiKey) throw new Error("DeepSeek API key not set — link account in Settings");
+
+            const backend = new DeepSeekBackend(apiKey);
+            const res = await backend.execute(
+              prefixedPrompt,
+              finalSystemPrompt,
+              targetModel,
+            );
+
+            send(ws, {
+              type: "assistant_text",
+              text: res.text,
+              isPartial: false,
+              agentId: targetAgentId,
+            });
+
+            yield {
+              type: "assistant",
+              subtype: "message",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: res.text }],
+              },
+              usage: {
+                input_tokens: 0,
+                output_tokens: 0,
+                total_cost_usd: res.costUsd,
+              },
+              duration_ms: res.durationMs,
+              session_id: "deepseek",
+              parent_tool_use_id: null,
+            } as SDKAssistantMessage;
+
+            yield {
+              type: "result",
+              result: res.text,
+              duration_ms: res.durationMs,
+              total_cost_usd: res.costUsd,
+            } as unknown as SDKMessage;
+          })()
+        : query({
+            prompt: promptParam,
+            options: queryOptions,
+          });
 
     let messageCount = 0;
     for await (const message of q) {
@@ -3323,6 +3370,7 @@ wss.on("connection", (ws, request) => {
         case "set_game_state": {
           const gs: GameStateData = { instances: msg.instances };
           clientGameState.set(ws, gs);
+          if (msg.deepseekApiKey) clientDeepSeekKey.set(ws, msg.deepseekApiKey);
           const instanceIds = Object.keys(gs.instances);
           const teamSummary = instanceIds
             .map((id) => `${id} (${gs.instances[id].nickname}, hw=${gs.instances[id].hardware})`)

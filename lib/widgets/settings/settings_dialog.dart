@@ -13,6 +13,7 @@ import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
+import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';
 import '../../providers/energy_provider.dart';
 import '../../providers/game_economy_provider.dart';
@@ -866,6 +867,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
   Widget build(BuildContext context) {
     final claudeAuthAsync = ref.watch(claudeAuthProvider);
     final geminiAuthAsync = ref.watch(geminiAuthProvider);
+    final deepseekAuthAsync = ref.watch(deepseekAuthProvider);
     final game = ref.watch(gameEconomyProvider);
     final claudeLoggedIn = claudeAuthAsync.valueOrNull?.loggedIn ?? false;
 
@@ -1171,11 +1173,10 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
 
         const SizedBox(height: 16),
 
-        // Login / Logout button
+        // Login / Logout / API-key buttons
         SizedBox(
           width: double.infinity,
-          height: 44,
-          child: _buildAuthSection(ref, claudeAuthAsync, geminiAuthAsync),
+          child: _buildAuthSection(ref, claudeAuthAsync, geminiAuthAsync, deepseekAuthAsync),
         ),
 
         const SizedBox(height: 32),
@@ -1283,6 +1284,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     WidgetRef ref,
     AsyncValue<ClaudeAuthStatus> claudeAuthAsync,
     AsyncValue<GeminiAuthStatus> geminiAuthAsync,
+    AsyncValue<DeepSeekAuthStatus> deepseekAuthAsync,
   ) {
     return Column(
       children: [
@@ -1299,6 +1301,13 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
           icon: Icons.login_rounded,
           geminiAuth: geminiAuthAsync,
         ),
+        const SizedBox(height: 8),
+        _buildAuthProviderButton(
+          ref,
+          provider: 'DeepSeek',
+          icon: Icons.key_outlined,
+          deepseekAuth: deepseekAuthAsync,
+        ),
       ],
     );
   }
@@ -1309,6 +1318,7 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     required IconData icon,
     AsyncValue<ClaudeAuthStatus>? claudeAuth,
     AsyncValue<GeminiAuthStatus>? geminiAuth,
+    AsyncValue<DeepSeekAuthStatus>? deepseekAuth,
   }) {
     if (claudeAuth != null) {
       return claudeAuth.when(
@@ -1350,8 +1360,104 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
           );
         },
       );
+    } else if (deepseekAuth != null) {
+      return deepseekAuth.when(
+        loading: () => _buildLoadingButton(),
+        error: (_, _) => _buildErrorButton(
+          onPressed: () => ref.read(deepseekAuthProvider.notifier).refresh(),
+        ),
+        data: (status) {
+          if (status.linked) {
+            return _buildLoggedInButton(
+              label: 'Очистити ключ DeepSeek (${status.maskedKey})',
+              onPressed: () => ref.read(deepseekAuthProvider.notifier).clearKey(),
+            );
+          }
+          return _buildLoginButton(
+            label: 'Додати API ключ DeepSeek',
+            icon: icon,
+            onPressed: () => _showDeepSeekKeyDialog(ref),
+          );
+        },
+      );
     }
     return const SizedBox.shrink();
+  }
+
+  void _showDeepSeekKeyDialog(WidgetRef ref) {
+    final controller = TextEditingController();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A1F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text(
+          'DeepSeek API ключ',
+          style: TextStyle(color: Colors.white, fontSize: 15),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Ключ зберігається локально і надсилається тільки на api.deepseek.com.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 11,
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              obscureText: true,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              decoration: InputDecoration(
+                hintText: 'sk-...',
+                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.25)),
+                filled: true,
+                fillColor: Colors.white.withValues(alpha: 0.05),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Color(0xFF00C0D1)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(
+              'Скасувати',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF00C0D1),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () {
+              final key = controller.text.trim();
+              if (key.isNotEmpty) {
+                ref.read(deepseekAuthProvider.notifier).saveKey(key);
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Зберегти'),
+          ),
+        ],
+      ),
+    ).then((_) => controller.dispose());
   }
 
   Widget _buildLoadingButton() => FilledButton(

@@ -358,12 +358,14 @@ class AgentWsService {
     required Map<String, Map<String, dynamic>> instances,
     String? fullState,
     int? stateUpdatedAt,
+    String? deepseekApiKey,
   }) {
     _send({
       'type': 'set_game_state',
       'instances': instances,
       'fullState': fullState,
       'stateUpdatedAt': stateUpdatedAt,
+      'deepseekApiKey': deepseekApiKey,
     });
   }
 

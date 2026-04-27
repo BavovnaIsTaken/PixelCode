@@ -9,9 +9,10 @@ import 'quest_line.dart' show ScopeScore;
 import 'task_board.dart';
 
 enum AgentProviderType {
-  cloud, // Anthropic / Vertex AI via Server
-  local, // Gemini CLI / Local Model
-  ollama // Future support
+  cloud,    // Anthropic / Vertex AI via Server
+  local,    // Gemini CLI / Local Model
+  ollama,   // Future: Ollama / MLX / llama.cpp
+  deepseek, // DeepSeek API (cloud, API-key based)
 }
 
 // ─── Agent Info ──────────────────────────────────────────────────────────────

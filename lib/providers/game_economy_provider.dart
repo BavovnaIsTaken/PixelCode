@@ -15,6 +15,7 @@ import '../models/app_theme.dart';
 import '../models/game_economy.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
+import 'deepseek_auth_provider.dart';
 import 'energy_provider.dart';
 import 'settings_provider.dart';
 
@@ -108,10 +109,14 @@ class GameEconomyNotifier extends Notifier<GameState> {
           },
         };
       }
+      final deepseekKey = ref.read(deepseekAuthProvider).valueOrNull?.linked == true
+          ? await DeepSeekAuthService.getApiKey()
+          : null;
       ref.read(wsServiceProvider).setGameState(
             instances: instances,
             fullState: gs.encode(),
             stateUpdatedAt: gs.updatedAt,
+            deepseekApiKey: deepseekKey,
           );
     });
   }
