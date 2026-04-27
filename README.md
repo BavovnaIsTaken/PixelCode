@@ -107,7 +107,7 @@ Node.js-сервер ([server/](server/)) зв'язує Flutter-клієнт і�
 - **Мораль від Break Room** — +20% продуктивності коли агенти відпочивають; поки не активне.
 - **Штраф за довгий кабель до Server Room** — −5% швидкості, якщо workstation далі ніж 8 клітинок від Server Room.
 - **Буст Meeting Room для менеджера** — зараз просто +1 до капасіті; у планах — прискорення диспатчу задач менеджером.
-- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд уже зібрано в пайплайн: пер-агент profile cache + execution hooks ([server/src/profile_cache.ts](server/src/profile_cache.ts), [server/src/hooks/](server/src/hooks/)), memory lifecycle зі score / decay / capacity-tier eviction ([server/src/memory_lifecycle.ts](server/src/memory_lifecycle.ts)), lesson extractor ([server/src/lesson_extractor.ts](server/src/lesson_extractor.ts)), prompt cache manager для system prompt + learned-context ([server/src/prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)), agent context preparer ([server/src/agent_context.ts](server/src/agent_context.ts)) і cross-project profile migration ([server/src/project_context_manager.ts](server/src/project_context_manager.ts)). Дизайн і план — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/IMPLEMENTATION_GUIDE.md](docs/IMPLEMENTATION_GUIDE.md). UI-інтеграція наступна (Q3 2026).
+- **Agent personalization system** — персистентні "уроки" з минулих запусків для тюнінгу промптів. Бекенд готовий: profile cache, execution hooks, memory lifecycle, lesson extractor, prompt cache manager, agent context preparer. Дизайн — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md). UI-інтеграція наступна (Q3 2026).
 - **Custom Agent Spawn** (Q3 2026) — дозволити користувачам створювати й тренувати своїх унікальних агентів через UI.
 - **Marketplace v1** (Q4 2026) — торгівля агентами, рейтинги, merge-механіка.
 - **Android-деплой** — iOS через Wi-Fi вже готовий; для Android є скелет.
@@ -250,60 +250,9 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 | Гілка | Версія | Опис |
 |-------|--------|------|
 | [`alpha-test`](../../tree/alpha-test) | `0.3.0+1` | Поточний реліз-кандидат для тестерів. Артефакти macOS — у [GitHub Releases](../../releases). |
-| [`develop`](../../tree/develop) | `0.3.1-dev+1` | Активна розробка, попереду `alpha-test`. |
+| [`develop`](../../tree/develop) | поточна | Активна розробка. |
 
-### v0.3.0-alpha.1 — 2026-04-26
-
-**Architecture**
-- Сервер відокремлено від клієнта: PixelCode-аппка більше не спавнить Node.js — стала чистим WebSocket-клієнтом ([952fd24](../../commit/952fd24)). `lib/services/server_process_service.dart` видалено; за життям сервера тепер відповідає launcher-демон.
-- **Launcher daemon** ([server/src/launcher.ts](server/src/launcher.ts)) — always-on супервізор сервера з respawn-on-75, ring-buffer boot-логів і `/launcher/*` HTTP-API на `:9719`.
-- **`pixelcode-server` CLI** — глобальний бінарник (`npm link` в `server/`) з командами `start` / `stop` / `restart` / `status` / `logs` / `config`.
-- **Layered config** — defaults → `~/.pixelcode/server.json` → ENV → CLI; live-edit через `/admin/api/config`.
-- SDK-сесія тепер тримається спільно між реконнектами клієнтів, рестартами сервера і зміною пристроїв.
-
-**Features — PixelDock (нова аппка)**
-- Окрема Flutter desktop / iOS аппка `server_admin/` для адміністрування сервера: start / stop / restart, інлайн-конфіг (port, projectCwd, OTA hostname), стрім серверних і boot-логів.
-- Pixel-art ребрендинг: glow-індикатор стану, золото-cyan акценти, узгоджена тема з основною аппкою.
-- VS Code launch-конфіги "PixelDock (macOS)" / "PixelDock (iOS)" поряд з PixelCode-конфігами.
-
-**Features — Agent Personalization System (бекенд-скелет)**
-- Memory lifecycle: score / decay / capacity-tier eviction ([memory_lifecycle.ts](server/src/memory_lifecycle.ts)).
-- Lesson extractor — pattern recognition + apply with eviction ([lesson_extractor.ts](server/src/lesson_extractor.ts)).
-- Prompt cache manager: system prompt + learned-context fragment ([prompt_cache_manager.ts](server/src/prompt_cache_manager.ts)).
-- Agent context preparer: fragment + cacheKey + recent messages ([agent_context.ts](server/src/agent_context.ts)).
-- Project context manager — cross-project profile migration ([project_context_manager.ts](server/src/project_context_manager.ts)).
-- Profile cache + execution hooks ([profile_cache.ts](server/src/profile_cache.ts), [hooks/](server/src/hooks/)).
-- Дизайн-документ і план імплементації — [docs/AGENT_PERSONALIZATION_SYSTEM.md](docs/AGENT_PERSONALIZATION_SYSTEM.md), [docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md](docs/AGENT_PERSONALIZATION_IMPLEMENTATION.md).
-
-**Features — Client UX**
-- Connection terminal indicator у хедері хаба — наочний статус WS-з'єднання.
-
-**Docs / Infra**
-- README перероблено під split server/client + PixelDock + новий getting-started flow.
-- `.vscode/launch.json` тепер у репо: PixelCode (macOS / iOS profile) + PixelDock (macOS / iOS).
-
-### v0.2.1-alpha.1 — 2026-04-25
-
-**Features**
-- Agent-level XP + `skillCap` progression — замінює per-skill XP, кап на 20-му рівні.
-- Capability-oriented 5-stat skill model: `precision` / `insight` / `reliability` / `creativity` / `speed` — визначає маршрутизацію на Haiku / Sonnet / Opus.
-- Energy meter — daily token meter як явний ігровий ресурс, прив'язаний до витрат субагентів.
-- Task outcome: roll bug / crit / incomplete на testing-done з XP та crit-бонусом.
-- Board assign gating — перевірка ролі + рівня агента при призначенні задачі (з SnackBar-фідбеком).
-- Role-biased initial skills при наймі — замість рівномірних 1/1/1/1/1.
-- Diegetic build / upgrade entry — вхід у магазин апгрейдів через ігровий світ.
-
-**Fixes**
-- Server: завжди надсилає `chat_history` snapshot при підключенні клієнта.
-- Energy коректно прив'язано до subagent cost, виправлено copy у тостах.
-- Chat merge fix, переробка контуру notch.
-- `difficulty` / `roles` тепер пробрасуються в task creation на сервер.
-
-**Docs / Infra**
-- OSS readiness: `LICENSE` (PolyForm Noncommercial 1.0.0), `CONTRIBUTING.md`, розширений README.
-- Переписана документація з iOS deployment.
-- Tailscale Funnel health-probe на сервері.
-- Pod checksum refresh для macOS.
+Детальна історія змін — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Натхнення
 

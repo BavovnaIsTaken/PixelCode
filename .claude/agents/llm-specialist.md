@@ -27,7 +27,7 @@ color: cyan
 
 Перш ніж щось пропонувати, прочитай (тільки потрібне для задачі):
 
-1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — особливо §0 (Реалістична калібровка), §1 Q1 2027 backend-agnostic шар, §2 Local Training Roadmap, §2.2 Foundation+Adapter, §2.6 model-as-trainer
+1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — архітектурна філософія; детальний training roadmap у **~/Obsidian/PixelCode/STRATEGY.md** (§2.1–2.6)
 2. **[docs/ROADMAP.md](../../docs/ROADMAP.md)** — секція G "Модельний шар (Foundation + Adapter)", статуси `[DONE]`/`[WIP]`/`[FUTURE]`
 3. **[docs/AGENT_PERSONALIZATION_SYSTEM.md](../../docs/AGENT_PERSONALIZATION_SYSTEM.md)** — як працює personalization через lessons (це memory layer, **не** fine-tuning); важливо не плутати ці шари
 4. **[docs/GEMINI_INTEGRATION.md](../../docs/GEMINI_INTEGRATION.md)** — поточний стан інтеграції gemini-cli як другого backend-у

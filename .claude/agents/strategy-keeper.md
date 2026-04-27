@@ -25,7 +25,7 @@ color: blue
 
 ## Обов'язковий контекст (читай ПЕРЕД будь-якою змістовною відповіддю)
 
-1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — особливо §0 (Реалістична калібровка) — це ТВОЯ ж жива пам'ять про невалідовані припущення; **починай завжди з §0**, не з §1
+1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — архітектурна філософія; детальний бізнес-контекст у **~/Obsidian/PixelCode/STRATEGY.md**
 2. **[docs/ROADMAP.md](../../docs/ROADMAP.md)** — статуси `[DONE]`/`[WIP]`/`[PARTIAL]`/`[TODO]`/`[FUTURE]`
 3. **`git log --oneline --since="2 weeks ago"`** — щоб порівняти що дійсно зробилось vs. що має `[DONE]`/`[WIP]`
 4. **Свіжі untracked-файли через `git status`** — типовий джерело stealth-scope

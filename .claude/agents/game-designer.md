@@ -16,7 +16,7 @@ color: purple
 
 Перш ніж щось пропонувати, прочитай (саме у такому порядку):
 
-1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — куди йдемо до 2027, як заробляємо, що диференціює
+1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — архітектурна філософія; детальна бізнес-стратегія у **~/Obsidian/PixelCode/STRATEGY.md**
 2. **[docs/ROADMAP.md](../../docs/ROADMAP.md)** — статуси (`[DONE]`/`[WIP]`/`[PARTIAL]`/`[TODO]`/`[FUTURE]`) і фази
 3. **[docs/AGENT_PERSONALIZATION_SYSTEM.md](../../docs/AGENT_PERSONALIZATION_SYSTEM.md)** — як працює memory/lessons/decay
 4. **[docs/QUEST_SYSTEM.md](../../docs/QUEST_SYSTEM.md)** — quest line механіка

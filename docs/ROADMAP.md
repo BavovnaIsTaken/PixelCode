@@ -1,9 +1,9 @@
 # PixelCode — Roadmap та План Реалізації
 
-> Високорівневе ТЗ і трекер прогресу. Базується на стратегії з [STRATEGY.md](STRATEGY.md).
+> Високорівневе ТЗ і трекер прогресу. Базується на архітектурній стратегії з [STRATEGY.md](STRATEGY.md).
 > Кожен пункт має статус і прив'язку до фази/кварталу.
 >
-> **Реалістичний буфер:** дати тут — "early estimate" для соло-розробника. Реалістичний множник ×1.5 на тайм-лайн (див. [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)). Slippage передбачуваний, не катастрофа.
+> **Буфер на часові оцінки:** дати тут — "early estimate" для соло-розробника. Враховуй резерв часу для розчистки залежностей та неочікуваних проблем.
 
 ## Статуси
 
@@ -238,23 +238,23 @@
 
 ## I. Монетизація
 
-Поетапне впровадження доходових потоків. Перший крок — license + cosmetics; останні — marketplace commission і training credits як основні.
+Поетапне впровадження доходових потоків та лікензування. Деталі в Obsidian vault `~/Obsidian/PixelCode/STRATEGY.md` (pricing, unit economics, content strategy).
 
 | Компонент | Статус | ETA |
 |---|---|---|
 | **Перехід на dual license** (PolyForm Noncommercial → особисте + комерційне) | `[TODO]` | Q4 2026 |
 | **Pro tier subscription infrastructure** (auth, billing, entitlement check) | `[TODO]` | Q4 2026 |
 | **Pro tier features** (cloud sync, unlimited projects, advanced analytics) | `[TODO]` | Q4 2026 |
-| **Cosmetics shop** (скіни, меблі, теми — $2–5 each) | `[TODO]` | Q4 2026 |
-| **Cloud server (managed)** — для Pro tier (без потреби Mac у юзера) | `[TODO]` | Q4 2026 |
+| **Cosmetics shop** (скіни, меблі, теми) | `[TODO]` | Q4 2026 |
+| **Cloud server (managed)** — для Pro tier | `[TODO]` | Q4 2026 |
 | **Companion PWA** (моніторинг офісу з браузера) | `[TODO]` | Q4 2026 |
-| **Marketplace commission (15–20%)** | `[TODO]` | Q4 2026 |
-| **B2B team license** ($29/міс/team, shared agent pools) | `[TODO]` | Q1 2027 |
-| **Training credits packs** ($0.05–0.20 per run) | `[TODO]` | Q2 2027 |
+| **Marketplace commission infrastructure** | `[TODO]` | Q4 2026 |
+| **B2B team license** (shared agent pools) | `[TODO]` | Q1 2027 |
+| **Training credits economy** | `[TODO]` | Q2 2027 |
 | **Grim packs** (real money → in-game currency) | `[TODO]` | Q3 2027 |
-| **Premium agent listings** ($2–10/міс promotion) | `[TODO]` | Q3 2027 |
-| **Real money out** (Grim → cash для top sellers) | `[TODO]` | Q3 2027 |
-| **Юридичний review** (gambling/marketplace регуляції по країнах) | `[TODO]` | **Q3 2026** (ДО marketplace launch — порядок виправлено з Q1 2027 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26) #4) |
+| **Premium agent listings** (marketplace promotion) | `[TODO]` | Q3 2027 |
+| **Real money out infrastructure** (for top sellers) | `[TODO]` | Q3 2027 |
+| **Юридичний review** (marketplace/trading регуляції) | `[TODO]` | **Q3 2026** (ДО marketplace launch) |
 
 ---
 
@@ -388,11 +388,12 @@ C (Personalization UI) → D (Custom Agent Spawn) → E (Marketplace v1)
 
 ---
 
-## Що відкрите (open questions)
+## Відкрані архітектурні питання
 
-1. **Foundation Model — будувати самим чи партнеритися?** Якщо партнеритися (наприклад, з Ollama чи Mistral), economy training credits спрощується.
-2. **Real money out — через Stripe Connect, чи інший шлях?** Залежить від країн, де запускаємось.
-3. **Marketplace — централізований каталог чи P2P?** Централізований простіше для quality control, P2P більш censorship-resistant.
-4. **GPU provider для cloud-shot training — Modal, RunPod, Lambda, чи власне?** Визначить unit economics.
-5. **Foundation Model license** — open weights чи власна? Open weights це credibility, але більший R&D effort.
-6. **Mobile App Store policies** — як обходити обмеження на in-app purchase для Marketplace? (Apple бере 30%)
+1. **Backend diversity — коли додаємо нові runtime крім Claude SDK?** Тригер замість дати: коли z'явиться другий конкретний backend з реальним користувачем.
+2. **Foundation Model path** — self-build, партнерство чи open-source base?
+3. **GPU provider для тренування** — infrastructure выбір визначить unit economics.
+4. **On-device training arrival** — залежить від нового покоління NPU (train-ops, а не тільки inference).
+5. **Community-driven Foundation updates** — як обновлюватить модель без централізованого сервера?
+
+Деталі та бізнес-контекст див. у Obsidian vault `~/Obsidian/PixelCode/ROADMAP_internal.md`.

@@ -16,10 +16,10 @@ color: pink
 
 Перш ніж щось пропонувати, прочитай (саме у такому порядку, тільки потрібне для задачі):
 
-1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — куди йдемо до 2027, який feel продукту
+1. **[docs/STRATEGY.md](../../docs/STRATEGY.md)** — архітектурна філософія і feel продукту
 2. **[docs/ROADMAP.md](../../docs/ROADMAP.md)** — статуси (`[DONE]`/`[WIP]`/`[PARTIAL]`/`[TODO]`/`[FUTURE]`); не пропонуй редизайн того, що ще не побудоване
 3. **[docs/office_design.md](../../docs/office_design.md)** — pixel-art офіс, 5 tier-ів (Garage 20×14 → Campus 52×28), кімнати, adjacency — основа візуального tone-of-voice
-4. **[docs/QUEST_SYSTEM.md](../../docs/QUEST_SYSTEM.md)** і **[docs/AGENT_PERSONALIZATION_SYSTEM.md](../../docs/AGENT_PERSONALIZATION_SYSTEM.md)** — як працюють основні петлі, які UI має обслуговувати
+4. **[docs/AGENT_PERSONALIZATION_SYSTEM.md](../../docs/AGENT_PERSONALIZATION_SYSTEM.md)** — як працює memoria агентів і персоналізація
 5. **MCP `pixelcode-game-assets`** — твоя авторитетна довідка для pixel-art-у. **Перш ніж пропонувати** новий sprite/palette/animation викликай:
    - `get_sprite_system_spec` — якa pipeline у `CustomPainter`-ах і як sprite-и описуються
    - `get_color_palettes` — канонічні палітри на офіс/персонажів
