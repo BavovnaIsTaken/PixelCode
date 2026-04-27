@@ -12,9 +12,11 @@ import '../../models/agent_level.dart';
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
+import '../../models/roster_catalog.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';
+import '../../providers/kimi_auth_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import 'spinning_coin.dart';
 
@@ -114,7 +116,7 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
                 controller: _tabCtrl,
                 physics: const BouncingScrollPhysics(),
                 children: const [
-                  RepaintBoundary(child: _HiringTab()),
+                  RepaintBoundary(child: _RosterTab()),
                   RepaintBoundary(child: _SkillsTab()),
                   RepaintBoundary(child: _OfficeTab()),
                   RepaintBoundary(child: _CosmeticsTab()),
@@ -199,291 +201,196 @@ class _BalanceHeader extends StatelessWidget {
   }
 }
 
-// ─── Hiring tab ────────────────────────────────────────────────────────────
+// ─── Roster (Hiring) tab ───────────────────────────────────────────────────
 
-class _HiringTab extends ConsumerWidget {
-  const _HiringTab();
+class _RosterTab extends ConsumerStatefulWidget {
+  const _RosterTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RosterTab> createState() => _RosterTabState();
+}
+
+class _RosterTabState extends ConsumerState<_RosterTab> {
+  /// Currently selected role filter (null = show all roster characters).
+  String? _filterRole;
+
+  @override
+  Widget build(BuildContext context) {
     final game = ref.watch(gameEconomyProvider);
     final notifier = ref.read(gameEconomyProvider.notifier);
 
-    // Pre-group agents by role for efficiency (O(N) instead of O(roles * N))
-    final agentsByRole = <String, List<AgentGameData>>{};
-    for (final a in game.agents.values) {
-      agentsByRole.putIfAbsent(a.roleType, () => []).add(a);
+    final hired = game.agents.values.toList();
+
+    // Roles present in the curated roster, in catalog order, deduplicated.
+    final rosterRoles = <String>[];
+    for (final c in rosterCatalog) {
+      if (!rosterRoles.contains(c.roleType)) rosterRoles.add(c.roleType);
+    }
+
+    final filtered = _filterRole == null
+        ? rosterCatalog
+        : rosterCatalog.where((c) => c.roleType == _filterRole).toList();
+
+    // Count of how many of each character are already on the team.
+    final hiredByCharacter = <String, int>{};
+    for (final a in hired) {
+      final cid = a.characterId;
+      if (cid != null) {
+        hiredByCharacter[cid] = (hiredByCharacter[cid] ?? 0) + 1;
+      }
     }
 
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // Capacity indicator
         _SectionHeader(
           icon: Icons.groups_outlined,
           title: 'Команда',
-          trailing:
-              '${game.hiredCount}/${game.officeLevel.maxAgents} місць',
+          trailing: '${game.hiredCount}/${game.officeLevel.maxAgents} місць',
         ),
         const SizedBox(height: 8),
-        for (final role in roleCatalog)
-          _RoleHireCard(
-            role: role,
-            instances: agentsByRole[role.roleType] ?? [],
-            canHire: notifier.canHire(role.roleType),
+        _TeamSection(
+          agents: hired,
+          onFire: notifier.fireAgent,
+        ),
+        const SizedBox(height: 18),
+        _SectionHeader(
+          icon: Icons.storefront_outlined,
+          title: 'Доступні персонажі',
+        ),
+        const SizedBox(height: 8),
+        _RoleFilterBar(
+          roles: rosterRoles,
+          selected: _filterRole,
+          onSelect: (r) => setState(() => _filterRole = r),
+        ),
+        const SizedBox(height: 12),
+        for (final character in filtered)
+          _RosterCharacterCard(
+            character: character,
+            ownedCount: hiredByCharacter[character.id] ?? 0,
+            canHire: notifier.canHireCharacter(character.id),
             canHireMore: game.canHireMore,
-            onHire: () => notifier.hireAgent(role.roleType),
-            onFire: (instanceId) => notifier.fireAgent(instanceId),
+            onHire: () => notifier.hireCharacter(character.id),
           ),
       ],
     );
   }
 }
 
-/// Card for a single role — shows summary, passive, and a list of every
-/// hired instance of that role with per-instance actions.
-class _RoleHireCard extends StatelessWidget {
-  final RoleCatalogEntry role;
-  final List<AgentGameData> instances;
-  final bool canHire;
-  final bool canHireMore;
-  final VoidCallback onHire;
+// ─── Team section (currently hired agents) ─────────────────────────────────
+
+class _TeamSection extends StatelessWidget {
+  final List<AgentGameData> agents;
   final ValueChanged<String> onFire;
 
-  const _RoleHireCard({
-    required this.role,
-    required this.instances,
-    required this.canHire,
-    required this.canHireMore,
-    required this.onHire,
-    required this.onFire,
-  });
-
-  bool get _hasAny => instances.isNotEmpty;
+  const _TeamSection({required this.agents, required this.onFire});
 
   @override
   Widget build(BuildContext context) {
-    final countLabel = role.singleton
-        ? (_hasAny ? 'є' : 'немає')
-        : '${instances.length}';
+    if (agents.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 12),
+        decoration: BoxDecoration(
+          color: _cardBg,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Text(
+          'Команда поки порожня — найми когось зі списку нижче.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.4),
+            fontSize: 11,
+          ),
+        ),
+      );
+    }
+
+    // Manager first; rest by instanceId for stable order.
+    final sorted = [...agents]..sort((a, b) {
+        if (a.roleType == 'manager' && b.roleType != 'manager') return -1;
+        if (b.roleType == 'manager' && a.roleType != 'manager') return 1;
+        return a.instanceId.compareTo(b.instanceId);
+      });
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _cardBg,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: _hasAny
-              ? _green.withValues(alpha: 0.2)
-              : Colors.white.withValues(alpha: 0.06),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: role name + count
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _hasAny
-                      ? _green
-                      : Colors.white.withValues(alpha: 0.15),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                role.role,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: _accent.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  countLabel,
-                  style: TextStyle(
-                    color: _accent.withValues(alpha: 0.8),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              const Spacer(),
-              // Hire-another button
-              _ActionButton(
-                label: role.hireCost > 0
-                    ? '+ Найняти · ${_formatNumber(role.hireCost)}₲'
-                    : '+ Найняти',
-                color: canHire ? _accent : Colors.white.withValues(alpha: 0.15),
-                onTap: canHire ? onHire : null,
-                subtitle: !canHireMore
-                    ? 'Немає місць'
-                    : (role.singleton && _hasAny ? 'Лише один' : null),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          // Specialization / weakness blurbs
-          Text(
-            '💪 ${role.specialization}',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.45),
-              fontSize: 10,
+          for (var i = 0; i < sorted.length; i++) ...[
+            _TeamRow(
+              instance: sorted[i],
+              onFire: () => onFire(sorted[i].instanceId),
             ),
-          ),
-          Text(
-            '⚠️  ${role.weakness}',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.3),
-              fontSize: 10,
-            ),
-          ),
-          // Passive ability badge
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: _accent.withValues(alpha: 0.07),
-                borderRadius: BorderRadius.circular(5),
-                border:
-                    Border.all(color: _accent.withValues(alpha: 0.15)),
+            if (i < sorted.length - 1)
+              Divider(
+                height: 1,
+                color: Colors.white.withValues(alpha: 0.05),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(role.passive.icon, style: const TextStyle(fontSize: 10)),
-                  const SizedBox(width: 4),
-                  Text(
-                    role.passive.name,
-                    style: TextStyle(
-                      color: _accent.withValues(alpha: 0.8),
-                      fontSize: 8,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.2,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          // Per-instance rows
-          if (instances.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Column(
-                children: [
-                  for (final inst in instances)
-                    _InstanceRow(
-                      instance: inst,
-                      role: role,
-                      canFire: !role.singleton || instances.length > 1,
-                      onFire: () => onFire(inst.instanceId),
-                    ),
-                ],
-              ),
-            ),
+          ],
         ],
       ),
     );
   }
 }
 
-/// A single instance row inside a [_RoleHireCard].
-class _InstanceRow extends StatelessWidget {
+class _TeamRow extends StatelessWidget {
   final AgentGameData instance;
-  final RoleCatalogEntry role;
-  final bool canFire;
   final VoidCallback onFire;
 
-  const _InstanceRow({
-    required this.instance,
-    required this.role,
-    required this.canFire,
-    required this.onFire,
-  });
+  const _TeamRow({required this.instance, required this.onFire});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-      ),
+    final role = roleCatalogFor(instance.roleType);
+    final isManager = instance.roleType == 'manager';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       child: Row(
         children: [
+          Text(
+            role?.passive.icon ?? '👤',
+            style: const TextStyle(fontSize: 14),
+          ),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
-                    Text(
-                      instance.nickname,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+                    Flexible(
+                      child: Text(
+                        instance.nickname,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 6),
-                    Text(
-                      instance.instanceId,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.25),
-                        fontSize: 9,
-                        fontFamily: 'monospace',
-                      ),
-                    ),
+                    _VendorPill(provider: instance.provider),
                   ],
                 ),
                 const SizedBox(height: 2),
-                Row(
-                  children: [
-                    _MiniStat(
-                      icon: instance.hardware.shortLabel,
-                      label: instance.hardware.label,
-                    ),
-                    const SizedBox(width: 8),
-                    _MiniStat(
-                      icon: '⭐',
-                      label: 'Lv ${instance.level}',
-                    ),
-                    const SizedBox(width: 8),
-                    _MiniStat(
-                      icon: '💰',
-                      label: '${role.salary}₲/задача',
-                    ),
-                  ],
+                Text(
+                  '${role?.role ?? instance.roleType} · Lv ${instance.level} · ${instance.hardware.label}',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.4),
+                    fontSize: 9,
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          if (canFire)
-            _ActionButton(
-              label: 'Звільнити',
-              color: _red,
-              onTap: onFire,
-            )
-          else
+          if (isManager)
             Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -499,8 +406,345 @@ class _InstanceRow extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+            )
+          else
+            _ActionButton(
+              label: 'Звільнити',
+              color: _red,
+              onTap: onFire,
             ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── Filter bar ────────────────────────────────────────────────────────────
+
+class _RoleFilterBar extends StatelessWidget {
+  final List<String> roles;
+  final String? selected;
+  final ValueChanged<String?> onSelect;
+
+  const _RoleFilterBar({
+    required this.roles,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _FilterChip(
+            label: 'Усі',
+            isSelected: selected == null,
+            onTap: () => onSelect(null),
+          ),
+          for (final role in roles) ...[
+            const SizedBox(width: 6),
+            _FilterChip(
+              label: roleCatalogFor(role)?.role ?? role,
+              isSelected: selected == role,
+              onTap: () => onSelect(role),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? _accent.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected
+                ? _accent.withValues(alpha: 0.4)
+                : Colors.white.withValues(alpha: 0.08),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? _accent : Colors.white.withValues(alpha: 0.5),
+            fontSize: 10,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Roster character card ─────────────────────────────────────────────────
+
+class _RosterCharacterCard extends StatelessWidget {
+  final RosterCharacter character;
+  final int ownedCount;
+  final bool canHire;
+  final bool canHireMore;
+  final VoidCallback onHire;
+
+  const _RosterCharacterCard({
+    required this.character,
+    required this.ownedCount,
+    required this.canHire,
+    required this.canHireMore,
+    required this.onHire,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final role = roleCatalogFor(character.roleType);
+    final owned = ownedCount > 0;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: owned
+              ? _green.withValues(alpha: 0.25)
+              : Colors.white.withValues(alpha: 0.06),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Portrait placeholder — signature stat icon on tinted square.
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: _accent.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _accent.withValues(alpha: 0.2)),
+                ),
+                child: Center(
+                  child: Text(
+                    character.signatureStat.icon,
+                    style: const TextStyle(fontSize: 22),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            character.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        _VendorPill(provider: character.defaultProvider),
+                        if (owned) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: _green.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              ownedCount > 1
+                                  ? '×$ownedCount'
+                                  : 'найнятий',
+                              style: const TextStyle(
+                                color: _green,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      role?.role ?? character.roleType,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.45),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _ActionButton(
+                label: character.price > 0
+                    ? '${_formatNumber(character.price)}₲'
+                    : 'Безкоштовно',
+                color: canHire ? _accent : Colors.white.withValues(alpha: 0.15),
+                onTap: canHire ? onHire : null,
+                subtitle: !canHireMore ? 'Немає місць' : null,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            character.tagline,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.55),
+              fontSize: 10,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _StatBars(weights: character.statWeights),
+          const SizedBox(height: 6),
+          Text(
+            '💪 ${character.strength}',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 9,
+            ),
+          ),
+          Text(
+            '⚠️  ${character.weakness}',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.28),
+              fontSize: 9,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBars extends StatelessWidget {
+  final Map<SkillType, int> weights;
+  const _StatBars({required this.weights});
+
+  static Color _barColor(int v) {
+    if (v >= 6) return _gold;
+    if (v >= 4) return _accent;
+    if (v >= 2) return _accent.withValues(alpha: 0.5);
+    return Colors.white.withValues(alpha: 0.25);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final stat in SkillType.values)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 1.5),
+            child: Row(
+              children: [
+                Text(stat.icon, style: const TextStyle(fontSize: 9)),
+                const SizedBox(width: 5),
+                SizedBox(
+                  width: 70,
+                  child: Text(
+                    stat.label,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      value:
+                          ((weights[stat] ?? 0) / rosterStatMax).clamp(0.0, 1.0),
+                      minHeight: 4,
+                      backgroundColor: Colors.white.withValues(alpha: 0.07),
+                      valueColor:
+                          AlwaysStoppedAnimation(_barColor(weights[stat] ?? 0)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 14,
+                  child: Text(
+                    '${weights[stat] ?? 0}',
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ─── Vendor pill ───────────────────────────────────────────────────────────
+
+class _VendorPill extends StatelessWidget {
+  final AgentProviderType provider;
+  const _VendorPill({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (provider) {
+      AgentProviderType.cloud => ('Claude', const Color(0xFFD97706)),
+      AgentProviderType.local => ('Gemini', const Color(0xFF4285F4)),
+      AgentProviderType.deepseek => ('DeepSeek', const Color(0xFF4D6BFE)),
+      AgentProviderType.kimi => ('Kimi', const Color(0xFFFF6A3D)),
+      AgentProviderType.ollama => ('Local', Color(0xFF22C55E)),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 8,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }
@@ -603,6 +847,7 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
             trailing: switch (selectedAgent.provider) {
               AgentProviderType.local => 'Gemini',
               AgentProviderType.deepseek => 'DeepSeek',
+              AgentProviderType.kimi => 'Kimi',
               _ => 'Claude',
             },
           ),
@@ -654,10 +899,13 @@ class _AgentChip extends ConsumerWidget {
         ref.watch(geminiAuthProvider).valueOrNull?.loggedIn ?? false;
     final deepseekLinked =
         ref.watch(deepseekAuthProvider).valueOrNull?.linked ?? false;
+    final kimiLinked =
+        ref.watch(kimiAuthProvider).valueOrNull?.linked ?? false;
 
     final tired = switch (instance?.provider) {
       AgentProviderType.local => !geminiLoggedIn,
       AgentProviderType.deepseek => !deepseekLinked,
+      AgentProviderType.kimi => !kimiLinked,
       _ => false,
     };
 
@@ -725,6 +973,27 @@ class _AgentChip extends ConsumerWidget {
                     tired ? 'zzz' : 'DS',
                     style: const TextStyle(
                       color: Color(0xFF4D6BFE),
+                      fontSize: 8,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+              if (instance?.provider == AgentProviderType.kimi) ...[
+                const SizedBox(width: 5),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFF6A3D).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(
+                      color: const Color(0xFFFF6A3D).withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Text(
+                    tired ? 'zzz' : 'KM',
+                    style: const TextStyle(
+                      color: Color(0xFFFF6A3D),
                       fontSize: 8,
                       fontWeight: FontWeight.w700,
                     ),
@@ -858,13 +1127,17 @@ class _ProviderCard extends ConsumerWidget {
     final geminiLoggedIn = geminiAuth.valueOrNull?.loggedIn ?? false;
     final deepseekAuth = ref.watch(deepseekAuthProvider);
     final deepseekLinked = deepseekAuth.valueOrNull?.linked ?? false;
+    final kimiAuth = ref.watch(kimiAuthProvider);
+    final kimiLinked = kimiAuth.valueOrNull?.linked ?? false;
     final notifier = ref.read(gameEconomyProvider.notifier);
 
     final String? hint = !geminiLoggedIn && current == AgentProviderType.local
         ? 'Увійдіть через Google у Налаштуваннях → Обліковий запис'
         : !deepseekLinked && current == AgentProviderType.deepseek
             ? 'Додайте API ключ DeepSeek у Налаштуваннях → Обліковий запис'
-            : null;
+            : !kimiLinked && current == AgentProviderType.kimi
+                ? 'Додайте API ключ Kimi у Налаштуваннях → Обліковий запис'
+                : null;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -889,7 +1162,7 @@ class _ProviderCard extends ConsumerWidget {
               const SizedBox(width: 8),
               _ProviderOption(
                 label: 'Gemini',
-                sublabel: 'gemini-cli',
+                sublabel: 'gemini',
                 icon: Icons.auto_awesome_outlined,
                 active: current == AgentProviderType.local,
                 locked: !geminiLoggedIn,
@@ -908,6 +1181,18 @@ class _ProviderCard extends ConsumerWidget {
                 onTap: deepseekLinked
                     ? () => notifier.setAgentProvider(
                         instanceId, AgentProviderType.deepseek)
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              _ProviderOption(
+                label: 'Kimi',
+                sublabel: 'api.moonshot.ai',
+                icon: Icons.key_outlined,
+                active: current == AgentProviderType.kimi,
+                locked: !kimiLinked,
+                onTap: kimiLinked
+                    ? () => notifier.setAgentProvider(
+                        instanceId, AgentProviderType.kimi)
                     : null,
               ),
             ],
