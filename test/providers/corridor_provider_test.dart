@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
 
@@ -140,6 +141,57 @@ void main() {
       n.placeCorridor(_tiles(6), wide: true);
 
       expect(c.read(gameEconomyProvider).placedCorridors, isEmpty);
+    });
+  });
+
+  group('removeCorridor', () {
+    test('removes corridor from placedCorridors', () async {
+      final c = await _makeContainer();
+      addTearDown(c.dispose);
+      final n = c.read(gameEconomyProvider.notifier);
+      n.placeCorridor(_tiles(4));
+      final corridorId = c.read(gameEconomyProvider).placedCorridors.first.id;
+
+      n.removeCorridor(corridorId);
+
+      expect(c.read(gameEconomyProvider).placedCorridors, isEmpty);
+    });
+
+    test('refunds 50% of narrow corridor cost', () async {
+      final c = await _makeContainer();
+      addTearDown(c.dispose);
+      final n = c.read(gameEconomyProvider.notifier);
+      n.placeCorridor(_tiles(4)); // 4 × 50 = 200 ₲
+      final corridorId = c.read(gameEconomyProvider).placedCorridors.first.id;
+      final grymniAfterPlace = c.read(gameEconomyProvider).grymni;
+
+      n.removeCorridor(corridorId);
+
+      // refund = floor(200 × 0.5) = 100 ₲
+      expect(c.read(gameEconomyProvider).grymni, grymniAfterPlace + 100);
+    });
+
+    test('unknown corridorId is a no-op at model level', () {
+      final corridor = PlacedCorridor(id: 'c1', tiles: _tiles(3));
+      final state = GameState(placedCorridors: [corridor], grymni: 500);
+
+      final after = state.removeCorridor('no_such_id');
+
+      expect(after.placedCorridors.length, 1);
+      expect(after.grymni, 500);
+    });
+
+    test('decrements placedCorridors.length by 1', () async {
+      final c = await _makeContainer();
+      addTearDown(c.dispose);
+      final n = c.read(gameEconomyProvider.notifier);
+      n.placeCorridor(_tiles(2));
+      n.placeCorridor(_tiles(3), wide: true);
+      final corridorId = c.read(gameEconomyProvider).placedCorridors.first.id;
+
+      n.removeCorridor(corridorId);
+
+      expect(c.read(gameEconomyProvider).placedCorridors.length, 1);
     });
   });
 

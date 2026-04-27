@@ -570,7 +570,7 @@ class OfficeGameState {
           tileMap[tile.row][tile.col] = TileType.floor;
         }
         // Wide corridors occupy two columns
-        if (corridor.wide && tile.col + 1 < gridCols && tile.row >= 0 && tile.row < gridRows) {
+        if (corridor.wide && tile.col + 1 >= 0 && tile.col + 1 < gridCols && tile.row >= 0 && tile.row < gridRows) {
           tileMap[tile.row][tile.col + 1] = TileType.floor;
         }
       }
