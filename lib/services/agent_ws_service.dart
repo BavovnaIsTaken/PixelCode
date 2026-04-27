@@ -359,6 +359,7 @@ class AgentWsService {
     String? fullState,
     int? stateUpdatedAt,
     String? deepseekApiKey,
+    String? kimiApiKey,
   }) {
     _send({
       'type': 'set_game_state',
@@ -366,6 +367,7 @@ class AgentWsService {
       'fullState': fullState,
       'stateUpdatedAt': stateUpdatedAt,
       'deepseekApiKey': deepseekApiKey,
+      'kimiApiKey': kimiApiKey,
     });
   }
 

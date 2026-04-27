@@ -70,13 +70,14 @@ export type ClientMessage =
           roleType: string; // "coder", "reviewer", "manager", etc.
           nickname: string;
           hardware: number; // HardwareTier enum index (0..5)
-          provider?: number; // AgentProviderType enum index (0=cloud, 1=local, 3=deepseek)
+          provider?: number; // AgentProviderType enum index (0=cloud, 1=local, 3=deepseek, 4=kimi)
           skills: Record<string, number>; // skillType index → level (1-10)
         }
       >;
       fullState?: string; // JSON-encoded full GameState for cross-device sync
       stateUpdatedAt?: number; // epoch ms — last-write-wins guard, server rejects older
       deepseekApiKey?: string; // forwarded from client SharedPreferences, used by DeepSeek backend
+      kimiApiKey?: string; // forwarded from client SharedPreferences, used by Kimi backend
     }
   // Agent traits
   | { type: "get_traits" }
