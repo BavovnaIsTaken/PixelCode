@@ -16,7 +16,7 @@ import '../models/game_economy.dart';
 import '../models/roster_catalog.dart';
 import '../widgets/personalization/custom_agent_spawn_form.dart';
 import '../services/game_persistence_service.dart';
-import 'agent_provider.dart';
+import 'ws_provider.dart';
 import 'deepseek_auth_provider.dart';
 import 'kimi_auth_provider.dart';
 import 'energy_provider.dart';
@@ -403,13 +403,6 @@ class GameEconomyNotifier extends Notifier<GameState> {
       ..remove(instanceId);
 
     final refund = (role?.hireCost ?? 0) ~/ 2;
-
-    // If the fired instance was selected, switch back to a manager instance.
-    if (ref.read(selectedAgentProvider) == instanceId) {
-      final managers = state.instancesOfRole('manager');
-      ref.read(selectedAgentProvider.notifier).state =
-          managers.isNotEmpty ? managers.first.instanceId : 'manager';
-    }
 
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni + refund,

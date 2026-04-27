@@ -13,6 +13,7 @@ import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/roster_catalog.dart';
+import '../../providers/agent_provider.dart' show selectedAgentProvider;
 import '../../providers/game_economy_provider.dart';
 import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';

@@ -52,7 +52,15 @@ class _RosterTabState extends ConsumerState<RosterTab> {
         const SizedBox(height: 8),
         _TeamSection(
           agents: hired,
-          onFire: notifier.fireAgent,
+          onFire: (id) {
+            final wasSelected = ref.read(selectedAgentProvider) == id;
+            notifier.fireAgent(id);
+            if (wasSelected) {
+              final managers = ref.read(gameEconomyProvider).instancesOfRole('manager');
+              ref.read(selectedAgentProvider.notifier).state =
+                  managers.isNotEmpty ? managers.first.instanceId : 'manager#1';
+            }
+          },
         ),
         const SizedBox(height: 18),
         _SectionHeader(
