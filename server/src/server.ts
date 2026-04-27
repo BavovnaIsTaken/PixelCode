@@ -56,6 +56,7 @@ import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, Ta
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
   formatTraitsForPrompt, getAllTraits,
+  isConsentEnabled, setConsent, getAllConsent,
   type TraitStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
@@ -845,6 +846,8 @@ function autoLearnLesson(
   tag: string,
   lesson: string,
 ): void {
+  if (!isConsentEnabled(traitStore, agentId)) return;
+
   const result = recordLesson(PROJECT_CWD, traitStore, {
     agentId, type, category, tag, lesson,
   });
@@ -930,6 +933,8 @@ function getQueryActivities(ws: WebSocket): Array<{ agentId: string; event: stri
  * Non-blocking — called after result is sent to client.
  */
 async function reflectOnQuery(ws: WebSocket, targetAgentId: string): Promise<void> {
+  if (!isConsentEnabled(traitStore, targetAgentId)) return;
+
   const activities = getQueryActivities(ws);
   if (activities.length === 0) return;
 
@@ -3555,6 +3560,25 @@ wss.on("connection", (ws, request) => {
             sendDebug(ws, "info", "traits", `Lesson removed: ${msg.lessonId}`);
           }
           sendTraits(ws);
+          break;
+        }
+
+        case "set_consent": {
+          const { agentId, enabled } = msg;
+          setConsent(PROJECT_CWD, traitStore, agentId, enabled);
+          dbg("info", "traits", `Consent ${enabled ? "enabled" : "disabled"} for ${agentId}`);
+          sendDebug(ws, "info", "traits", `Learning consent ${enabled ? "enabled" : "disabled"} for ${agentId}`);
+          const consentMsg: ServerMessage = { type: "consent_state", consent: getAllConsent(traitStore) };
+          for (const client of wss.clients) {
+            if (client.readyState === WebSocket.OPEN) {
+              send(client, consentMsg);
+            }
+          }
+          break;
+        }
+
+        case "get_consent": {
+          send(ws, { type: "consent_state", consent: getAllConsent(traitStore) });
           break;
         }
 

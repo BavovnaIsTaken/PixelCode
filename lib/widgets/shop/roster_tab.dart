@@ -74,6 +74,32 @@ class _RosterTabState extends ConsumerState<RosterTab> {
             canHireMore: game.canHireMore,
             onHire: () => notifier.hireCharacter(character.id),
           ),
+        const SizedBox(height: 8),
+        _SpawnCustomAgentCard(
+          canSpawn: game.canHireMore,
+          onTap: () async {
+            final data = await showModalBottomSheet<CustomAgentSpawnData>(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: const Color(0xFF0E1117),
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+              ),
+              builder: (_) => DraggableScrollableSheet(
+                initialChildSize: 0.85,
+                minChildSize: 0.5,
+                maxChildSize: 0.95,
+                expand: false,
+                builder: (_, sc) => SingleChildScrollView(
+                  controller: sc,
+                  child: CustomAgentSpawnForm(),
+                ),
+              ),
+            );
+            if (data != null) notifier.spawnCustomAgent(data);
+          },
+        ),
+        const SizedBox(height: 12),
       ],
     );
   }
@@ -145,12 +171,35 @@ class _TeamRow extends StatelessWidget {
 
   const _TeamRow({required this.instance, required this.onFire});
 
+  void _showMemories(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.35,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (_, scrollController) => ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          child: PersonalizationPanel(
+            agentId: instance.instanceId,
+            agentName: instance.nickname,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final role = roleCatalogFor(instance.roleType);
     final isManager = instance.roleType == 'manager';
 
-    return Padding(
+    return GestureDetector(
+      onTap: () => showAgentDetailDrawer(context, instance),
+      child: Padding(
       key: Key('team-row-${instance.instanceId}'),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       child: Row(
@@ -192,6 +241,21 @@ class _TeamRow extends StatelessWidget {
               ],
             ),
           ),
+          GestureDetector(
+            onTap: () => _showMemories(context),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: Tooltip(
+                message: 'Пам\'ять агента',
+                child: Icon(
+                  Icons.psychology_outlined,
+                  size: 15,
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 2),
           if (isManager)
             Container(
               padding:
@@ -216,6 +280,71 @@ class _TeamRow extends StatelessWidget {
               onTap: onFire,
             ),
         ],
+      ),
+    ),
+    );
+  }
+}
+
+// ─── Spawn custom agent card ──────────────────────────────────────────────
+
+class _SpawnCustomAgentCard extends StatelessWidget {
+  final bool canSpawn;
+  final VoidCallback onTap;
+
+  const _SpawnCustomAgentCard({required this.canSpawn, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = canSpawn ? _accent : Colors.white.withValues(alpha: 0.15);
+    return GestureDetector(
+      onTap: canSpawn ? onTap : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: canSpawn
+              ? _accent.withValues(alpha: 0.06)
+              : Colors.white.withValues(alpha: 0.02),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: color.withValues(alpha: 0.3),
+            style: BorderStyle.solid,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.add_circle_outline, size: 18, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Власний агент',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    canSpawn
+                        ? 'Налаштуй роль, prompt і навички вручну'
+                        : 'Немає вільних місць у команді',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (canSpawn)
+              Icon(Icons.chevron_right,
+                  size: 16, color: color.withValues(alpha: 0.6)),
+          ],
+        ),
       ),
     );
   }

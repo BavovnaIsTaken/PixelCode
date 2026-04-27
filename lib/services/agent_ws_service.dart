@@ -126,6 +126,7 @@ class AgentWsService {
       _reconnectTimer?.cancel();
       _log('Connected to $url');
       _sendClientInfo();
+      getTraits();
 
       _wsSub = _ws!.listen(
         (data) {

@@ -1,21 +1,27 @@
 /// Provides agent traits/lessons for UI display.
+/// Derives from [traitsProvider] (WS-backed) in [agent_provider.dart].
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pixelcode/models/agent_trait.dart';
+import 'package:pixelcode/providers/agent_provider.dart';
 
-/// Mock provider — returns sample traits for an agent.
-/// In production, this would fetch from server/local storage.
+/// All traits for a specific agent, sorted by frequency descending.
 final agentTraitsProvider =
-    FutureProvider.family<List<AgentTrait>, String>((ref, agentId) async {
-  // Placeholder: return empty list. Real implementation would fetch from service.
-  return [];
+    Provider.family<List<AgentTrait>, String>((ref, agentId) {
+  return ref
+      .watch(traitsProvider)
+      .where((t) => t.agentId == agentId)
+      .toList()
+    ..sort((a, b) => b.frequency.compareTo(a.frequency));
 });
 
 /// Filter traits by type (strength vs weakness).
-final agentTraitsByTypeProvider = FutureProvider.family<List<AgentTrait>,
-    (String agentId, TraitType type)>((ref, args) async {
+final agentTraitsByTypeProvider =
+    Provider.family<List<AgentTrait>, (String, TraitType)>((ref, args) {
   final (agentId, type) = args;
-  final allTraits = await ref.watch(agentTraitsProvider(agentId).future);
-  return allTraits.where((t) => t.type == type).toList();
+  return ref
+      .watch(agentTraitsProvider(agentId))
+      .where((t) => t.type == type)
+      .toList();
 });

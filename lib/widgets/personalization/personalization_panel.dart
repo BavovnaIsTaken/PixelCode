@@ -1,10 +1,27 @@
-/// Displays agent lessons, traits, and learning history.
+/// Agent memory panel — shows learned traits, allows deletion and consent control.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pixelcode/models/agent_trait.dart';
+import 'package:pixelcode/providers/agent_provider.dart';
 import 'package:pixelcode/providers/agent_traits_provider.dart';
+import 'package:pixelcode/providers/settings_provider.dart';
+
+// ─── Color palette (dark-theme pixel-office style) ──────────────────────────
+
+const _bg = Color(0xFF0E1117);
+const _surface = Color(0xFF161B22);
+const _border = Color(0xFF1E2A36);
+const _accent = Color(0xFF58A6FF);
+const _green = Color(0xFF3FB950);
+const _red = Color(0xFFFF7B72);
+const _gold = Color(0xFFD29922);
+const _textHigh = Color(0xFFE6EDF3);
+const _textMid = Color(0xFF8B949E);
+const _textLow = Color(0xFF484F58);
+
+// ─── Panel ──────────────────────────────────────────────────────────────────
 
 class PersonalizationPanel extends ConsumerWidget {
   final String agentId;
@@ -18,143 +35,407 @@ class PersonalizationPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final strengthsAsync =
+    final strengths =
         ref.watch(agentTraitsByTypeProvider((agentId, TraitType.strength)));
-    final weaknessesAsync =
+    final weaknesses =
         ref.watch(agentTraitsByTypeProvider((agentId, TraitType.weakness)));
+    final consent =
+        ref.watch(settingsProvider.select((s) => s.learningConsentEnabled));
+    final notifier = ref.read(traitsProvider.notifier);
+    final settingsNotifier = ref.read(settingsProvider.notifier);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    final totalCount = strengths.length + weaknesses.length;
+
+    return Container(
+      color: _bg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Header(
+            agentName: agentName,
+            totalCount: totalCount,
+            learningEnabled: consent,
+            onToggleLearning: settingsNotifier.setLearningConsentEnabled,
+          ),
+          const Divider(height: 1, color: _border),
+          Expanded(
+            child: totalCount == 0
+                ? _EmptyState(learningEnabled: consent)
+                : ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: [
+                      if (strengths.isNotEmpty) ...[
+                        _SectionTitle(
+                          label: 'Сильні сторони',
+                          count: strengths.length,
+                          color: _green,
+                          icon: Icons.bolt_outlined,
+                        ),
+                        const SizedBox(height: 6),
+                        for (final t in strengths)
+                          _TraitCard(
+                            trait: t,
+                            onDelete: () => notifier.removeLesson(t.id),
+                          ),
+                        const SizedBox(height: 14),
+                      ],
+                      if (weaknesses.isNotEmpty) ...[
+                        _SectionTitle(
+                          label: 'Слабкі сторони',
+                          count: weaknesses.length,
+                          color: _red,
+                          icon: Icons.warning_amber_outlined,
+                        ),
+                        const SizedBox(height: 6),
+                        for (final t in weaknesses)
+                          _TraitCard(
+                            trait: t,
+                            onDelete: () => notifier.removeLesson(t.id),
+                          ),
+                      ],
+                      if (totalCount > 0) ...[
+                        const SizedBox(height: 20),
+                        _ClearAllButton(
+                          onClear: () => _clearAll(ref, agentId),
+                        ),
+                      ],
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _clearAll(WidgetRef ref, String agentId) {
+    final all = ref.read(agentTraitsProvider(agentId));
+    final notifier = ref.read(traitsProvider.notifier);
+    for (final t in all) {
+      notifier.removeLesson(t.id);
+    }
+  }
+}
+
+// ─── Header ──────────────────────────────────────────────────────────────────
+
+class _Header extends StatelessWidget {
+  final String agentName;
+  final int totalCount;
+  final bool learningEnabled;
+  final ValueChanged<bool> onToggleLearning;
+
+  const _Header({
+    required this.agentName,
+    required this.totalCount,
+    required this.learningEnabled,
+    required this.onToggleLearning,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Text(
-                agentName,
-                style: Theme.of(context).textTheme.titleLarge,
+              const Icon(Icons.psychology_outlined, size: 16, color: _accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  agentName,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _textHigh,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Learning & Traits',
-                style: Theme.of(context).textTheme.labelSmall,
+              if (totalCount > 0)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _accent.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '$totalCount урок${_lessonSuffix(totalCount)}',
+                    style: const TextStyle(
+                      color: _accent,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome_outlined, size: 12, color: _textLow),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Авто-навчання',
+                  style: TextStyle(color: _textMid, fontSize: 11),
+                ),
+              ),
+              Transform.scale(
+                scale: 0.75,
+                alignment: Alignment.centerRight,
+                child: Switch(
+                  value: learningEnabled,
+                  onChanged: onToggleLearning,
+                  activeThumbColor: _accent,
+                ),
               ),
             ],
           ),
-        ),
-        Expanded(
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                _buildTraitSection(context, 'Strengths', strengthsAsync,
-                    TraitType.strength),
-                _buildTraitSection(context, 'Weaknesses', weaknessesAsync,
-                    TraitType.weakness),
-              ],
-            ),
+        ],
+      ),
+    );
+  }
+
+  static String _lessonSuffix(int n) {
+    if (n % 10 == 1 && n % 100 != 11) return '';
+    if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) {
+      return 'и';
+    }
+    return 'ів';
+  }
+}
+
+// ─── Section title ─────────────────────────────────────────────────────────────
+
+class _SectionTitle extends StatelessWidget {
+  final String label;
+  final int count;
+  final Color color;
+  final IconData icon;
+
+  const _SectionTitle({
+    required this.label,
+    required this.count,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 12, color: color),
+        const SizedBox(width: 5),
+        Text(
+          '$label ($count)',
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
     );
   }
+}
 
-  Widget _buildTraitSection(
-    BuildContext context,
-    String title,
-    AsyncValue<List<AgentTrait>> traitsAsync,
-    TraitType type,
-  ) {
-    return traitsAsync.when(
-      loading: () => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
+// ─── Trait card ───────────────────────────────────────────────────────────────
+
+class _TraitCard extends StatelessWidget {
+  final AgentTrait trait;
+  final VoidCallback onDelete;
+
+  const _TraitCard({required this.trait, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
+    final (emphColor, emphLabel) = switch (trait.emphasis) {
+      TraitEmphasis.critical => (_red, 'критично'),
+      TraitEmphasis.important => (_gold, 'важливо'),
+      TraitEmphasis.note => (_textLow, 'нотатка'),
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.fromLTRB(10, 8, 6, 8),
+      decoration: BoxDecoration(
+        color: _surface,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: emphColor.withValues(alpha: 0.25)),
       ),
-      error: (err, _) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text('Error: $err'),
-      ),
-      data: (traits) => Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Text(
-              '$title (${traits.length})',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelLarge
-                  ?.copyWith(fontWeight: FontWeight.bold),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    _CategoryBadge(category: trait.category),
+                    const SizedBox(width: 6),
+                    _FrequencyPip(
+                      frequency: trait.frequency,
+                      emphColor: emphColor,
+                      emphLabel: emphLabel,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  trait.lesson,
+                  style: const TextStyle(color: _textHigh, fontSize: 11),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  trait.tag,
+                  style: const TextStyle(color: _textLow, fontSize: 9),
+                ),
+              ],
             ),
           ),
-          if (traits.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'No ${title.toLowerCase()} yet',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            )
-          else
-            ...traits.map((trait) => _buildTraitTile(context, trait)),
+          GestureDetector(
+            onTap: onDelete,
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.delete_outline, size: 14, color: _textLow),
+            ),
+          ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildTraitTile(BuildContext context, AgentTrait trait) {
-    final emphasisColor = switch (trait.emphasis) {
-      TraitEmphasis.critical => Colors.red,
-      TraitEmphasis.important => Colors.orange,
-      TraitEmphasis.note => Colors.grey,
-    };
+class _CategoryBadge extends StatelessWidget {
+  final String category;
+  const _CategoryBadge({required this.category});
 
+  static const _labels = <String, String>{
+    'code_quality': 'якість',
+    'architecture': 'архіт.',
+    'testing': 'тести',
+    'security': 'безпека',
+    'communication': 'комун.',
+    'delegation': 'делег.',
+    'problem_solving': 'задачі',
+    'tools_usage': 'інстр.',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _labels[category] ?? category;
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
-        color: emphasisColor.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: emphasisColor.withValues(alpha: 0.3)),
+        color: _accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(3),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                trait.tag,
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: emphasisColor,
-                    ),
-              ),
-              Text(
-                '×${trait.frequency}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            trait.lesson,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Last: ${trait.lastSeen.toString().split('.')[0]}',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.grey,
-                ),
-          ),
-        ],
+      child: Text(
+        label,
+        style: const TextStyle(
+            color: _accent, fontSize: 9, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _FrequencyPip extends StatelessWidget {
+  final int frequency;
+  final Color emphColor;
+  final String emphLabel;
+
+  const _FrequencyPip({
+    required this.frequency,
+    required this.emphColor,
+    required this.emphLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(Icons.refresh, size: 9, color: emphColor),
+        const SizedBox(width: 2),
+        Text(
+          '×$frequency · $emphLabel',
+          style: TextStyle(
+              color: emphColor, fontSize: 9, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Empty state ───────────────────────────────────────────────────────────────
+
+class _EmptyState extends StatelessWidget {
+  final bool learningEnabled;
+  const _EmptyState({required this.learningEnabled});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.psychology_outlined, size: 36, color: _textLow),
+            const SizedBox(height: 12),
+            Text(
+              learningEnabled ? 'Уроків ще немає' : 'Авто-навчання вимкнено',
+              style: const TextStyle(
+                  color: _textMid, fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              learningEnabled
+                  ? 'Агент накопичить уроки після перших задач.'
+                  : 'Увімкни авто-навчання, щоб агент запам\'ятовував патерни.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _textLow, fontSize: 11),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Clear all button ─────────────────────────────────────────────────────────
+
+class _ClearAllButton extends StatelessWidget {
+  final VoidCallback onClear;
+  const _ClearAllButton({required this.onClear});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onClear,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: _red.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: _red.withValues(alpha: 0.2)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.delete_sweep_outlined, size: 13, color: _red),
+            SizedBox(width: 6),
+            Text(
+              'Очистити всю пам\'ять агента',
+              style: TextStyle(
+                  color: _red, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ),
     );
   }

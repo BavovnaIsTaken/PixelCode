@@ -5,41 +5,56 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/agent_trait.dart';
-import 'package:pixelcode/providers/agent_traits_provider.dart';
+import 'package:pixelcode/providers/agent_provider.dart';
+import 'package:pixelcode/providers/settings_provider.dart';
 import 'package:pixelcode/widgets/personalization/personalization_panel.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('PersonalizationPanel', () {
+    late SharedPreferences prefs;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({
+        'learningConsentEnabled': true,
+      });
+      prefs = await SharedPreferences.getInstance();
+    });
+
     Widget buildTestApp(List<AgentTrait> traits) {
       return ProviderScope(
         overrides: [
-          agentTraitsProvider('coder#1').overrideWith((ref) async => traits),
-          agentTraitsByTypeProvider.overrideWith((ref, args) async {
-            final (agentId, type) = args;
-            final all = await ref.watch(agentTraitsProvider(agentId).future);
-            return all.where((t) => t.type == type).toList();
-          }),
+          traitsProvider.overrideWith(() => _FakeTraitsNotifier(traits)),
+          sharedPrefsProvider.overrideWithValue(prefs),
         ],
         child: MaterialApp(
           home: Scaffold(
-            body: PersonalizationPanel(
-              agentId: 'coder#1',
-              agentName: 'Developer Agent',
+            body: SizedBox(
+              height: 600,
+              child: PersonalizationPanel(
+                agentId: 'coder#1',
+                agentName: 'Developer Agent',
+              ),
             ),
           ),
         ),
       );
     }
 
-    testWidgets('displays agent name', (WidgetTester tester) async {
+    testWidgets('shows agent name in header', (tester) async {
       await tester.pumpWidget(buildTestApp([]));
-
+      await tester.pumpAndSettle();
       expect(find.text('Developer Agent'), findsOneWidget);
-      expect(find.text('Learning & Traits'), findsOneWidget);
     });
 
-    testWidgets('displays strengths and weaknesses sections',
-        (WidgetTester tester) async {
+    testWidgets('shows empty state when no traits', (tester) async {
+      await tester.pumpWidget(buildTestApp([]));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.psychology_outlined), findsWidgets);
+      expect(find.textContaining('немає'), findsOneWidget);
+    });
+
+    testWidgets('displays strengths section', (tester) async {
       final now = DateTime.now();
       final traits = [
         AgentTrait(
@@ -47,97 +62,89 @@ void main() {
           agentId: 'coder#1',
           type: TraitType.strength,
           category: 'coding',
-          tag: 'Fast learner',
+          tag: 'fast-learner',
           lesson: 'Picks up new patterns quickly',
           frequency: 3,
           firstSeen: now.subtract(const Duration(days: 30)),
           lastSeen: now,
-        ),
-        AgentTrait(
-          id: '2',
-          agentId: 'coder#1',
-          type: TraitType.weakness,
-          category: 'testing',
-          tag: 'Test coverage gaps',
-          lesson: 'Needs reminder to write edge case tests',
-          frequency: 2,
-          firstSeen: now.subtract(const Duration(days: 20)),
-          lastSeen: now.subtract(const Duration(days: 5)),
         ),
       ];
 
       await tester.pumpWidget(buildTestApp(traits));
       await tester.pumpAndSettle();
 
-      expect(find.text('Strengths (1)'), findsOneWidget);
-      expect(find.text('Weaknesses (1)'), findsOneWidget);
+      expect(find.textContaining('(1)'), findsWidgets);
+      expect(find.text('Picks up new patterns quickly'), findsOneWidget);
     });
 
-    testWidgets('displays trait details (tag, lesson, frequency)',
-        (WidgetTester tester) async {
+    testWidgets('displays weaknesses section', (tester) async {
       final now = DateTime.now();
-      final trait = AgentTrait(
-        id: 'trait-1',
-        agentId: 'coder#1',
-        type: TraitType.strength,
-        category: 'architecture',
-        tag: 'System design expert',
-        lesson: 'Excels at designing scalable systems',
-        frequency: 5,
-        firstSeen: now.subtract(const Duration(days: 60)),
-        lastSeen: now,
-      );
+      final traits = [
+        AgentTrait(
+          id: '2',
+          agentId: 'coder#1',
+          type: TraitType.weakness,
+          category: 'testing',
+          tag: 'coverage-gaps',
+          lesson: 'Needs reminder to write edge case tests',
+          frequency: 2,
+          firstSeen: now.subtract(const Duration(days: 20)),
+          lastSeen: now,
+        ),
+      ];
 
-      await tester.pumpWidget(buildTestApp([trait]));
+      await tester.pumpWidget(buildTestApp(traits));
       await tester.pumpAndSettle();
 
-      expect(find.text('System design expert'), findsOneWidget);
-      expect(find.text('Excels at designing scalable systems'), findsOneWidget);
-      expect(find.text('×5'), findsOneWidget);
+      expect(find.text('Needs reminder to write edge case tests'),
+          findsOneWidget);
     });
 
-    testWidgets('shows "no traits" message when list is empty',
-        (WidgetTester tester) async {
-      await tester.pumpWidget(buildTestApp([]));
-      await tester.pumpAndSettle();
-
-      expect(find.text('No strengths yet'), findsOneWidget);
-      expect(find.text('No weaknesses yet'), findsOneWidget);
-    });
-
-    testWidgets('applies emphasis colors based on frequency',
-        (WidgetTester tester) async {
+    testWidgets('shows frequency in trait card', (tester) async {
       final now = DateTime.now();
       final traits = [
         AgentTrait(
           id: '1',
           agentId: 'coder#1',
           type: TraitType.strength,
-          category: 'test',
-          tag: 'Critical skill',
-          lesson: 'Observed 5+ times',
+          category: 'architecture',
+          tag: 'system-design',
+          lesson: 'Excels at designing scalable systems',
           frequency: 5,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+
+      await tester.pumpWidget(buildTestApp(traits));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Excels at designing scalable systems'), findsOneWidget);
+      expect(find.textContaining('×5'), findsOneWidget);
+    });
+
+    testWidgets('filters traits to only show matching agentId',
+        (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: '1',
+          agentId: 'coder#1',
+          type: TraitType.strength,
+          category: 'coding',
+          tag: 'belongs-here',
+          lesson: 'Visible',
+          frequency: 1,
           firstSeen: now,
           lastSeen: now,
         ),
         AgentTrait(
           id: '2',
-          agentId: 'coder#1',
+          agentId: 'reviewer#1',
           type: TraitType.strength,
-          category: 'test',
-          tag: 'Important skill',
-          lesson: 'Observed 3-4 times',
-          frequency: 3,
-          firstSeen: now,
-          lastSeen: now,
-        ),
-        AgentTrait(
-          id: '3',
-          agentId: 'coder#1',
-          type: TraitType.strength,
-          category: 'test',
-          tag: 'Note',
-          lesson: 'Observed once or twice',
+          category: 'review',
+          tag: 'not-mine',
+          lesson: 'Hidden',
           frequency: 1,
           firstSeen: now,
           lastSeen: now,
@@ -147,43 +154,77 @@ void main() {
       await tester.pumpWidget(buildTestApp(traits));
       await tester.pumpAndSettle();
 
-      expect(find.text('Critical skill'), findsOneWidget);
-      expect(find.text('Important skill'), findsOneWidget);
-      expect(find.text('Note'), findsOneWidget);
+      expect(find.text('Visible'), findsOneWidget);
+      expect(find.text('Hidden'), findsNothing);
     });
 
-    testWidgets('filters traits by type correctly', (WidgetTester tester) async {
-      final now = DateTime.now();
-      final strengthTrait = AgentTrait(
-        id: '1',
-        agentId: 'coder#1',
-        type: TraitType.strength,
-        category: 'coding',
-        tag: 'Strength',
-        lesson: 'A positive pattern',
-        frequency: 1,
-        firstSeen: now,
-        lastSeen: now,
-      );
-      final weaknessTrait = AgentTrait(
-        id: '2',
-        agentId: 'coder#1',
-        type: TraitType.weakness,
-        category: 'testing',
-        tag: 'Weakness',
-        lesson: 'An area for improvement',
-        frequency: 1,
-        firstSeen: now,
-        lastSeen: now,
-      );
+    testWidgets('has consent toggle', (tester) async {
+      await tester.pumpWidget(buildTestApp([]));
+      await tester.pumpAndSettle();
+      expect(find.byType(Switch), findsOneWidget);
+    });
 
-      await tester.pumpWidget(buildTestApp([strengthTrait, weaknessTrait]));
+    testWidgets('shows lesson count badge when traits exist', (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: '1',
+          agentId: 'coder#1',
+          type: TraitType.strength,
+          category: 'coding',
+          tag: 'x',
+          lesson: 'L1',
+          frequency: 1,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+        AgentTrait(
+          id: '2',
+          agentId: 'coder#1',
+          type: TraitType.weakness,
+          category: 'testing',
+          tag: 'y',
+          lesson: 'L2',
+          frequency: 1,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+
+      await tester.pumpWidget(buildTestApp(traits));
       await tester.pumpAndSettle();
 
-      expect(find.text('Strengths (1)'), findsOneWidget);
-      expect(find.text('Weaknesses (1)'), findsOneWidget);
-      expect(find.text('Strength'), findsOneWidget);
-      expect(find.text('Weakness'), findsOneWidget);
+      expect(find.textContaining('2 уроки'), findsOneWidget);
+    });
+
+    testWidgets('has delete icon on trait cards', (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: '1',
+          agentId: 'coder#1',
+          type: TraitType.strength,
+          category: 'coding',
+          tag: 'deletable',
+          lesson: 'Can be removed',
+          frequency: 2,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+
+      await tester.pumpWidget(buildTestApp(traits));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.delete_outline), findsOneWidget);
     });
   });
+}
+
+class _FakeTraitsNotifier extends TraitsNotifier {
+  final List<AgentTrait> _initial;
+  _FakeTraitsNotifier(this._initial);
+
+  @override
+  List<AgentTrait> build() => _initial;
 }

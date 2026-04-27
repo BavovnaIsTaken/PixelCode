@@ -21,6 +21,7 @@ const _keyLaunchCount = 'settings_launch_count';
 const _keyLogoPathScript = 'settings_logo_path_script';
 const _keyLogoAnimationDurationMs = 'settings_logo_animation_duration_ms';
 const _keyHideDirectMessagingHint = 'settings_hide_direct_messaging_hint';
+const _keyLearningConsent = 'settings_learning_consent';
 
 /// Default duration of the shutdown logo flight (icon moves from top-left
 /// to the opposite corner). The native window collapse that follows adds
@@ -70,6 +71,10 @@ class AppSettings {
   /// hint. The user opted out explicitly.
   final bool hideDirectMessagingHint;
 
+  /// When true, the server records lessons from agent sessions (auto-learning).
+  /// User can opt out to disable automatic lesson extraction.
+  final bool learningConsentEnabled;
+
   const AppSettings({
     this.showArkanoidButton = false,
     this.deskHeight = 74.0,
@@ -84,6 +89,7 @@ class AppSettings {
     this.logoPathScript,
     this.logoAnimationDurationMs,
     this.hideDirectMessagingHint = false,
+    this.learningConsentEnabled = true,
   });
 
   AppSettings copyWith({
@@ -100,6 +106,7 @@ class AppSettings {
     Object? logoPathScript = _sentinel,
     Object? logoAnimationDurationMs = _sentinel,
     bool? hideDirectMessagingHint,
+    bool? learningConsentEnabled,
   }) =>
       AppSettings(
         showArkanoidButton: showArkanoidButton ?? this.showArkanoidButton,
@@ -121,6 +128,8 @@ class AppSettings {
                 : logoAnimationDurationMs as int?,
         hideDirectMessagingHint:
             hideDirectMessagingHint ?? this.hideDirectMessagingHint,
+        learningConsentEnabled:
+            learningConsentEnabled ?? this.learningConsentEnabled,
       );
 }
 
@@ -177,6 +186,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
       ),
       hideDirectMessagingHint:
           prefs.getBool(_keyHideDirectMessagingHint) ?? false,
+      learningConsentEnabled:
+          prefs.getBool(_keyLearningConsent) ?? true,
     );
   }
 
@@ -184,6 +195,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setBool(_keyHideDirectMessagingHint, value);
     state = state.copyWith(hideDirectMessagingHint: value);
+  }
+
+  Future<void> setLearningConsentEnabled(bool value) async {
+    final prefs = ref.read(sharedPrefsProvider);
+    await prefs.setBool(_keyLearningConsent, value);
+    state = state.copyWith(learningConsentEnabled: value);
   }
 
   Future<void> incrementLaunchCount() async {

@@ -43,6 +43,7 @@ export interface AgentLesson {
 export interface TraitStore {
   version: number;
   agents: Record<string, AgentLesson[]>;
+  consent?: Record<string, boolean>;
 }
 
 // ─── Storage paths ─────────────────────────────────────────────────────────
@@ -217,4 +218,25 @@ export function getAllTraits(store: TraitStore): AgentLesson[] {
     all.push(...lessons);
   }
   return all;
+}
+
+// ─── Consent ──────────────────────────────────────────────────────────────
+
+export function isConsentEnabled(store: TraitStore, agentId: string): boolean {
+  return store.consent?.[agentId] ?? true;
+}
+
+export function setConsent(
+  projectPath: string,
+  store: TraitStore,
+  agentId: string,
+  enabled: boolean,
+): void {
+  if (!store.consent) store.consent = {};
+  store.consent[agentId] = enabled;
+  saveTraits(projectPath, store);
+}
+
+export function getAllConsent(store: TraitStore): Record<string, boolean> {
+  return store.consent ?? {};
 }

@@ -14,6 +14,7 @@ import '../models/agent_message.dart';
 import '../models/app_theme.dart';
 import '../models/game_economy.dart';
 import '../models/roster_catalog.dart';
+import '../widgets/personalization/custom_agent_spawn_form.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
 import 'deepseek_auth_provider.dart';
@@ -335,6 +336,48 @@ class GameEconomyNotifier extends Notifier<GameState> {
       provider: character.defaultProvider,
       skills: Map<SkillType, int>.from(character.statWeights),
       characterId: character.id,
+    );
+
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - cost,
+      totalSpent: state.totalSpent + cost,
+      agents: updated,
+    ));
+    return instanceId;
+  }
+
+  /// Whether a custom agent with [data.selectedRole] can be spawned right now
+  /// (capacity check + role exists + sufficient grymni).
+  bool canSpawnCustomAgent(CustomAgentSpawnData data) {
+    final role = roleCatalogFor(data.selectedRole);
+    if (role == null) return false;
+    if (!state.canHireMore) return false;
+    if (role.singleton && state.roleCount(data.selectedRole) >= 1) return false;
+    return state.grymni >= role.hireCost;
+  }
+
+  /// Spawn a fully custom agent from [data] (nickname, system prompt, role,
+  /// personality preset, skill weights). Uses the role's standard hire cost.
+  /// Returns the new instanceId on success, or null if spawning isn't allowed.
+  String? spawnCustomAgent(CustomAgentSpawnData data) {
+    if (!canSpawnCustomAgent(data)) return null;
+    final role = roleCatalogFor(data.selectedRole)!;
+    final cost = role.hireCost;
+
+    final instanceId = nextInstanceId(data.selectedRole, state.agents.keys);
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = AgentGameData(
+      instanceId: instanceId,
+      roleType: data.selectedRole,
+      nickname: data.nickname.isEmpty
+          ? defaultNicknameFor(role, state.roleCount(data.selectedRole) + 1)
+          : data.nickname,
+      hardware: HardwareTier.oldLaptop,
+      provider: AgentProviderType.values[role.defaultProvider],
+      skills: data.skillWeights,
+      customSystemPrompt:
+          data.systemPrompt.isEmpty ? null : data.systemPrompt,
+      personalityPreset: data.personalityPreset,
     );
 
     _updateStateAndSync(state.copyWith(

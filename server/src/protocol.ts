@@ -90,6 +90,8 @@ export type ClientMessage =
       lesson: string;
     }
   | { type: "remove_lesson"; lessonId: string }
+  | { type: "set_consent"; agentId: string; enabled: boolean }
+  | { type: "get_consent" }
   // Live input sync
   | { type: "input_text"; text: string }
   | { type: "input_images"; images: string[] }
@@ -394,6 +396,7 @@ export type ServerMessage =
         lastSeen: string;
       }>;
     }
+  | { type: "consent_state"; consent: Record<string, boolean> }
   // Server connection info (sent on connect + when tunnel becomes available)
   | {
       type: "server_info";

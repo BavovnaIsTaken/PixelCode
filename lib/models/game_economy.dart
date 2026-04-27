@@ -340,6 +340,8 @@ extension SkillTypeExt on SkillType {
 ///
 /// Multiple instances of the same [roleType] can coexist (e.g. two coders).
 /// Presence in [GameState.agents] implies "hired" — there is no separate flag.
+const _agentSentinel = Object();
+
 class AgentGameData {
   /// Stable unique identifier, e.g. "coder#1", "coder#2". Used as the map key
   /// in [GameState.agents] and the address for chat/dispatch.
@@ -370,6 +372,14 @@ class AgentGameData {
   /// Null for legacy hires and seeded agents. Persisted across sessions.
   final String? characterId;
 
+  /// Custom system prompt injected before the role template when this agent
+  /// was created via Custom Agent Spawn. Null for standard / roster hires.
+  final String? customSystemPrompt;
+
+  /// Personality preset key used at spawn time (e.g. "speedster", "creative").
+  /// Informational — the actual effect is encoded in [skills].
+  final String? personalityPreset;
+
   const AgentGameData({
     required this.instanceId,
     required this.roleType,
@@ -380,6 +390,8 @@ class AgentGameData {
     this.xp = 0,
     this.provider = AgentProviderType.cloud,
     this.characterId,
+    this.customSystemPrompt,
+    this.personalityPreset,
   });
 
   /// Average skill value — purely a cosmetic summary for UI.
@@ -400,6 +412,8 @@ class AgentGameData {
     int? xp,
     AgentProviderType? provider,
     String? characterId,
+    Object? customSystemPrompt = _agentSentinel,
+    Object? personalityPreset = _agentSentinel,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -411,6 +425,12 @@ class AgentGameData {
         xp: xp ?? this.xp,
         provider: provider ?? this.provider,
         characterId: characterId ?? this.characterId,
+        customSystemPrompt: identical(customSystemPrompt, _agentSentinel)
+            ? this.customSystemPrompt
+            : customSystemPrompt as String?,
+        personalityPreset: identical(personalityPreset, _agentSentinel)
+            ? this.personalityPreset
+            : personalityPreset as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -425,6 +445,8 @@ class AgentGameData {
         'xp': xp,
         'provider': provider.index,
         if (characterId != null) 'characterId': characterId,
+        if (customSystemPrompt != null) 'customSystemPrompt': customSystemPrompt,
+        if (personalityPreset != null) 'personalityPreset': personalityPreset,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -441,6 +463,8 @@ class AgentGameData {
         xp: json['xp'] as int? ?? 0,
         provider: AgentProviderType.values[json['provider'] as int? ?? 0],
         characterId: json['characterId'] as String?,
+        customSystemPrompt: json['customSystemPrompt'] as String?,
+        personalityPreset: json['personalityPreset'] as String?,
       );
 }
 

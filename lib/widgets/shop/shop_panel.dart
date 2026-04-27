@@ -18,6 +18,9 @@ import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';
 import '../../providers/kimi_auth_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import '../personalization/custom_agent_spawn_form.dart';
+import '../personalization/personalization_panel.dart';
+import '../roster/agent_detail_drawer.dart';
 import 'spinning_coin.dart';
 
 part 'roster_tab.dart';

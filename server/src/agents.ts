@@ -462,6 +462,10 @@ export interface AgentInstanceData {
   provider?: number;
   /** Skill levels keyed by skillType index-as-string ("0".."4"). */
   skills: Record<string, number>;
+  /** User-written system prompt injected before the role template for custom agents. */
+  customSystemPrompt?: string;
+  /** Personality preset key used at spawn (informational, effect encoded in skills). */
+  personalityPreset?: string;
 }
 
 /** Game state data the server needs to shape agents, prompts, and dispatch. */
@@ -524,12 +528,15 @@ export function buildDynamicAgents(
       inst.skills,
     )}`;
     const identityLine = `\n\nThis agent's in-game nickname is "${inst.nickname}" (instance ${instanceId}, role: ${inst.roleType}).`;
+    const customSection = inst.customSystemPrompt
+      ? `\n\n## Custom Instructions\n${inst.customSystemPrompt}`
+      : "";
 
     result[instanceId] = {
       ...template,
       description: `${inst.nickname} — ${template.description}`,
       model,
-      prompt: template.prompt + identityLine + skillSection,
+      prompt: template.prompt + identityLine + skillSection + customSection,
     };
   }
 

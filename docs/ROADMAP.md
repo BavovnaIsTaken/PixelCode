@@ -120,10 +120,10 @@
 | Project context manager (cross-project profile migration) | `[DONE]` | [server/src/project_context_manager.ts](../server/src/project_context_manager.ts) |
 | Trait memory | `[DONE]` | [server/src/trait_memory.ts](../server/src/trait_memory.ts), [lib/models/agent_trait.dart](../lib/models/agent_trait.dart) |
 | Personalization orchestrator | `[DONE]` | [server/src/personalization.ts](../server/src/personalization.ts) |
-| **Personalization UI** (показати lessons, дозволити edit, reset) | `[TODO]` | Q3 2026 — критично перед Custom Agent Spawn |
-| **Lessons history viewer** | `[TODO]` | Q3 2026 |
-| **Topic affinity inspector** | `[TODO]` | Q3 2026 |
-| **User consent flow** для запису lessons | `[TODO]` | Q3 2026 |
+| **Personalization UI** (показати lessons, дозволити edit, reset) | `[DONE]` | 2026-04-28 — `PersonalizationPanel` з per-trait delete + "Clear all" + consent toggle; entry point через "Пам'ять агента" іконку у _TeamRow (Roster tab). Провайдери wired до live WS stream. 11 нових тестів. |
+| **Lessons history viewer** | `[DONE]` | 2026-04-28 — інтегровано у PersonalizationPanel: всі уроки по секціях Strengths/Weaknesses, frequency badges, category labels, sorted by frequency desc |
+| **Topic affinity inspector** | `[TODO]` | Q3 2026 — server-side UserProfile.topicAffinities ще не surfaced через WS |
+| **User consent flow** для запису lessons | `[DONE]` | 2026-04-28 — `learningConsentEnabled` toggle у PersonalizationPanel header + SharedPreferences persistence через `settingsProvider` |
 | **Per-agent facilitator binding** (manager пам'ятає обраний style) | `[TODO]` | Q3 2026 |
 | **Facilitator lessons namespace** (style-scoped lesson channel) | `[TODO]` | Q3 2026 |
 | **Style switch flow** (UI для зміни facilitator з explanation) | `[TODO]` | Q4 2026 |
@@ -162,11 +162,11 @@
 
 | Компонент | Статус | ETA |
 |---|---|---|
-| **Custom Agent Spawn UI** — створення агента (system prompt, role bias, skill weights) | `[TODO]` | Q3 2026 |
+| **Custom Agent Spawn UI** — створення агента (system prompt, role bias, skill weights) | `[DONE]` | Q3 2026 |
 | **Self-play в dungeon** — агент пробує задачу N разів, кращі attempts → memory | `[TODO]` | Q3 2026 |
 | **Agent JSON export/import** — поділитися агентом як файлом | `[TODO]` | Q3 2026 |
 | **Agent signature/identity** (унікальний ID, історія тренування) | `[TODO]` | Q3 2026 |
-| **Personality presets** (templates для швидкого старту) | `[TODO]` | Q3 2026 |
+| **Personality presets** (templates для швидкого старту) | `[DONE]` | Q3 2026 |
 | **Custom facilitator spawn** (user-defined persona_prompt + lexicon) | `[TODO]` | Q3 2027 |
 | **Agent stats card** — для marketplace listing (XP, success rate, specializations); shareable з Roster v1 (D.1) | `[TODO]` | Q3 2026 |
 | **Discord/Reddit thread** — перший community trade ground (поза-аппка) | `[TODO]` | Q3 2026 |
