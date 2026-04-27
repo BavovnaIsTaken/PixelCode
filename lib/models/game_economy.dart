@@ -365,6 +365,11 @@ class AgentGameData {
   /// The backend model provider for this agent.
   final AgentProviderType provider;
 
+  /// Optional curated-roster character id (e.g. `"andriy_coder"`) when this
+  /// agent was hired through Roster v1 instead of the abstract role flow.
+  /// Null for legacy hires and seeded agents. Persisted across sessions.
+  final String? characterId;
+
   const AgentGameData({
     required this.instanceId,
     required this.roleType,
@@ -374,6 +379,7 @@ class AgentGameData {
     this.level = 1,
     this.xp = 0,
     this.provider = AgentProviderType.cloud,
+    this.characterId,
   });
 
   /// Average skill value — purely a cosmetic summary for UI.
@@ -393,6 +399,7 @@ class AgentGameData {
     int? level,
     int? xp,
     AgentProviderType? provider,
+    String? characterId,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -403,6 +410,7 @@ class AgentGameData {
         level: level ?? this.level,
         xp: xp ?? this.xp,
         provider: provider ?? this.provider,
+        characterId: characterId ?? this.characterId,
       );
 
   Map<String, dynamic> toJson() => {
@@ -416,6 +424,7 @@ class AgentGameData {
         'level': level,
         'xp': xp,
         'provider': provider.index,
+        if (characterId != null) 'characterId': characterId,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -431,6 +440,7 @@ class AgentGameData {
         level: json['level'] as int? ?? 1,
         xp: json['xp'] as int? ?? 0,
         provider: AgentProviderType.values[json['provider'] as int? ?? 0],
+        characterId: json['characterId'] as String?,
       );
 }
 

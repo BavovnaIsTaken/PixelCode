@@ -13,6 +13,7 @@ import '../models/agent_level.dart';
 import '../models/agent_message.dart';
 import '../models/app_theme.dart';
 import '../models/game_economy.dart';
+import '../models/roster_catalog.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
 import 'deepseek_auth_provider.dart';
@@ -278,6 +279,62 @@ class GameEconomyNotifier extends Notifier<GameState> {
       hardware: HardwareTier.oldLaptop,
       provider: AgentProviderType.values[role.defaultProvider],
       skills: initialSkillsForRole(roleType),
+    );
+
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - cost,
+      totalSpent: state.totalSpent + cost,
+      agents: updated,
+    ));
+    return instanceId;
+  }
+
+  /// Whether a curated roster character with [characterId] can be hired right
+  /// now (catalog match + capacity + singleton + funds for `character.price`).
+  bool canHireCharacter(String characterId) {
+    final character = rosterCharacterById(characterId);
+    if (character == null) return false;
+    if (!state.canHireMore) return false;
+    final role = roleCatalogFor(character.roleType);
+    if (role == null) return false;
+    if (role.singleton && state.roleCount(character.roleType) >= 1) {
+      return false;
+    }
+    return state.grymni >= character.price;
+  }
+
+  /// Hire a curated roster character. Stats come from the character spec
+  /// (not `initialSkillsForRole`), provider defaults to `character.defaultProvider`,
+  /// and `characterId` is persisted on the resulting [AgentGameData] so the
+  /// UI can render the named character on its roster card.
+  ///
+  /// Returns the new instanceId on success, or null if hiring isn't allowed.
+  String? hireCharacter(String characterId) {
+    if (!canHireCharacter(characterId)) return null;
+    final character = rosterCharacterById(characterId)!;
+    final cost = character.price;
+
+    final instanceId = nextInstanceId(character.roleType, state.agents.keys);
+
+    // Use the character's display name if it's the first instance of this
+    // roster character; otherwise append an ordinal so duplicates remain
+    // distinguishable in the UI ("Андрій 2").
+    final existingForCharacter = state.agents.values
+        .where((a) => a.characterId == character.id)
+        .length;
+    final nickname = existingForCharacter == 0
+        ? character.name
+        : '${character.name} ${existingForCharacter + 1}';
+
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = AgentGameData(
+      instanceId: instanceId,
+      roleType: character.roleType,
+      nickname: nickname,
+      hardware: HardwareTier.oldLaptop,
+      provider: character.defaultProvider,
+      skills: Map<SkillType, int>.from(character.statWeights),
+      characterId: character.id,
     );
 
     _updateStateAndSync(state.copyWith(

@@ -305,5 +305,66 @@ void main() {
         expect(agent.skills.length, 5);
       });
     });
+
+    group('characterId (Roster v1 link)', () {
+      test('defaults to null for legacy / role-flow hires', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        expect(agent.characterId, isNull);
+      });
+
+      test('persists through copyWith', () {
+        final original = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Андрій',
+          characterId: 'andriy_coder',
+        );
+        final modified = original.copyWith(nickname: 'Андрій 2');
+        expect(modified.characterId, 'andriy_coder');
+      });
+
+      test('copyWith allows attaching characterId later', () {
+        final original = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        final linked = original.copyWith(characterId: 'andriy_coder');
+        expect(linked.characterId, 'andriy_coder');
+      });
+
+      test('round-trips through JSON when set', () {
+        final original = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Андрій',
+          characterId: 'andriy_coder',
+        );
+        final restored = AgentGameData.fromJson(original.toJson());
+        expect(restored.characterId, 'andriy_coder');
+      });
+
+      test('toJson omits characterId when null (no orphan field)', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        expect(agent.toJson().containsKey('characterId'), isFalse);
+      });
+
+      test('fromJson defaults to null when key is missing', () {
+        final agent = AgentGameData.fromJson({
+          'instanceId': 'a1',
+          'roleType': 'coder',
+          'nickname': 'Alice',
+        });
+        expect(agent.characterId, isNull);
+      });
+    });
   });
 }
