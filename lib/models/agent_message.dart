@@ -13,6 +13,7 @@ enum AgentProviderType {
   local,    // Gemini CLI / Local Model
   ollama,   // Future: Ollama / MLX / llama.cpp
   deepseek, // DeepSeek API (cloud, API-key based)
+  kimi,     // Kimi K2.6 (Moonshot AI, API-key based)
 }
 
 // ─── Agent Info ──────────────────────────────────────────────────────────────
