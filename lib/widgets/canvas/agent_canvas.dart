@@ -869,11 +869,145 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final mode = ref.read(buildModeProvider);
     if (!mode.active) return;
     final world = _screenToWorld(screenPos, constraints);
-    final col = (world.dx / kTileSize).floor();
-    final row = (world.dy / kTileSize).floor();
+    var col = (world.dx / kTileSize).floor();
+    var row = (world.dy / kTileSize).floor();
+
+    // Apply snap-to-edge logic for room templates and regular rooms
+    if (mode.selectedRoomType != null) {
+      final ghostCols = mode.selectedRoomType!.widthTiles;
+      final ghostRows = mode.selectedRoomType!.heightTiles;
+      final econ = ref.read(gameEconomyProvider);
+
+      col = _snapGhostCol(col, row, ghostCols, ghostRows, econ.placedRooms);
+      row = _snapGhostRow(col, row, ghostCols, ghostRows, econ.placedRooms);
+    }
+
     if (col != mode.ghostCol || row != mode.ghostRow) {
       ref.read(buildModeProvider.notifier).setGhost(col: col, row: row);
     }
+  }
+
+  int _snapGhostCol(int ghostCol, int ghostRow, int ghostCols, int ghostRows,
+      List<PlacedRoom> placedRooms) {
+    const kSnapRadius = 2;
+    int bestSnapCol = ghostCol;
+    double bestDist = double.infinity;
+
+    final ghostRight = ghostCol + ghostCols;
+    final ghostTop = ghostRow;
+    final ghostBottom = ghostRow + ghostRows;
+
+    for (final room in placedRooms) {
+      final roomCols = room.type.widthTiles;
+      final roomRows = room.type.heightTiles;
+      final roomLeft = room.col;
+      final roomRight = room.col + roomCols;
+      final roomTop = room.row;
+      final roomBottom = room.row + roomRows;
+
+      // Check horizontal snap (left and right edges)
+      // Ghost right edge to room left edge
+      final gapRight = roomLeft - ghostRight;
+      if (gapRight.abs() <= kSnapRadius) {
+        final yOverlap = _overlap(ghostTop, ghostBottom, roomTop, roomBottom);
+        if (yOverlap > 0) {
+          final snapCol = roomLeft - ghostCols;
+          final dist = _ghostDist(snapCol, ghostRow, ghostCols, ghostRows, room);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestSnapCol = snapCol;
+          }
+        }
+      }
+
+      // Ghost left edge to room right edge
+      final gapLeft = roomRight - ghostCol;
+      if (gapLeft.abs() <= kSnapRadius) {
+        final yOverlap = _overlap(ghostTop, ghostBottom, roomTop, roomBottom);
+        if (yOverlap > 0) {
+          final snapCol = roomRight;
+          final dist = _ghostDist(snapCol, ghostRow, ghostCols, ghostRows, room);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestSnapCol = snapCol;
+          }
+        }
+      }
+    }
+
+    return bestSnapCol;
+  }
+
+  int _snapGhostRow(int ghostCol, int ghostRow, int ghostCols, int ghostRows,
+      List<PlacedRoom> placedRooms) {
+    const kSnapRadius = 2;
+    int bestSnapRow = ghostRow;
+    double bestDist = double.infinity;
+
+    final ghostLeft = ghostCol;
+    final ghostRight = ghostCol + ghostCols;
+    final ghostBottom = ghostRow + ghostRows;
+
+    for (final room in placedRooms) {
+      final roomCols = room.type.widthTiles;
+      final roomRows = room.type.heightTiles;
+      final roomLeft = room.col;
+      final roomRight = room.col + roomCols;
+      final roomTop = room.row;
+      final roomBottom = room.row + roomRows;
+
+      // Check vertical snap (top and bottom edges)
+      // Ghost bottom edge to room top edge
+      final gapBottom = roomTop - ghostBottom;
+      if (gapBottom.abs() <= kSnapRadius) {
+        final xOverlap = _overlap(ghostLeft, ghostRight, roomLeft, roomRight);
+        if (xOverlap > 0) {
+          final snapRow = roomTop - ghostRows;
+          final dist = _ghostDist(ghostCol, snapRow, ghostCols, ghostRows, room);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestSnapRow = snapRow;
+          }
+        }
+      }
+
+      // Ghost top edge to room bottom edge
+      final gapTop = roomBottom - ghostRow;
+      if (gapTop.abs() <= kSnapRadius) {
+        final xOverlap = _overlap(ghostLeft, ghostRight, roomLeft, roomRight);
+        if (xOverlap > 0) {
+          final snapRow = roomBottom;
+          final dist = _ghostDist(ghostCol, snapRow, ghostCols, ghostRows, room);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestSnapRow = snapRow;
+          }
+        }
+      }
+    }
+
+    return bestSnapRow;
+  }
+
+  // Helper: compute overlap length between two 1D ranges
+  int _overlap(int a1, int a2, int b1, int b2) {
+    final start = math.max(a1, b1);
+    final end = math.min(a2, b2);
+    return (end - start).clamp(0, double.infinity).toInt();
+  }
+
+  // Helper: Euclidean distance from ghost center to room center
+  double _ghostDist(int ghostCol, int ghostRow, int ghostCols, int ghostRows,
+      PlacedRoom room) {
+    final ghostCenterX = ghostCol + ghostCols / 2.0;
+    final ghostCenterY = ghostRow + ghostRows / 2.0;
+    final roomCols = room.type.widthTiles;
+    final roomRows = room.type.heightTiles;
+    final roomCenterX = room.col + roomCols / 2.0;
+    final roomCenterY = room.row + roomRows / 2.0;
+    final dx = ghostCenterX - roomCenterX;
+    final dy = ghostCenterY - roomCenterY;
+    return math.sqrt(dx * dx + dy * dy);
   }
 
 

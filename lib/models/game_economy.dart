@@ -2021,6 +2021,10 @@ class GameState {
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
+  GameState removeCorridor(String corridorId) => copyWith(
+    placedCorridors: placedCorridors.where((c) => c.id != corridorId).toList(),
+  );
+
   Map<String, dynamic> toJson() => {
         'schemaVersion': schemaVersion,
         'grymni': grymni,

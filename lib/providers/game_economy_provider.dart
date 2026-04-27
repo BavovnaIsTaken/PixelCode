@@ -917,6 +917,17 @@ class GameEconomyNotifier extends Notifier<GameState> {
     ));
   }
 
+  void removeCorridor(String corridorId) {
+    final corridor = state.placedCorridors.firstWhere(
+      (c) => c.id == corridorId,
+      orElse: () => throw StateError('Corridor not found: $corridorId'),
+    );
+    final refund = (corridorCost(corridor.tiles, wide: corridor.wide) * 0.5).floor();
+    _updateStateAndSync(state.removeCorridor(corridorId).copyWith(
+      grymni: state.grymni + refund,
+    ));
+  }
+
   // ─── Cheat / debug ────────────────────────────────────────────────────
 
   void addGrymni(int amount) {

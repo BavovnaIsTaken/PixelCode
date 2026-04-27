@@ -562,6 +562,19 @@ class OfficeGameState {
         return TileType.floor;
       });
     });
+
+    // Ensure corridor tiles are always walkable (floor type)
+    for (final corridor in _placedCorridors) {
+      for (final tile in corridor.tiles) {
+        if (tile.row >= 0 && tile.row < gridRows && tile.col >= 0 && tile.col < gridCols) {
+          tileMap[tile.row][tile.col] = TileType.floor;
+        }
+        // Wide corridors occupy two columns
+        if (corridor.wide && tile.col + 1 < gridCols && tile.row >= 0 && tile.row < gridRows) {
+          tileMap[tile.row][tile.col + 1] = TileType.floor;
+        }
+      }
+    }
   }
 
   void _buildBlockedTiles() {
@@ -603,6 +616,16 @@ class OfficeGameState {
     for (final room in _placedRooms) {
       for (final t in _roomInternalBlocks(room)) {
         blockedTiles.add('${t.col},${t.row}');
+      }
+    }
+
+    // Corridor tiles must never be blocked (room internals may have captured them)
+    for (final corridor in _placedCorridors) {
+      for (final tile in corridor.tiles) {
+        blockedTiles.remove('${tile.col},${tile.row}');
+        if (corridor.wide) {
+          blockedTiles.remove('${tile.col + 1},${tile.row}');
+        }
       }
     }
   }

@@ -484,6 +484,71 @@ class BuildMenu extends ConsumerWidget {
             colors: c,
           ),
         const SizedBox(height: 16),
+        // ── Placed corridors ─────────────────────────────────────────────
+        if (economy.placedCorridors.isNotEmpty) ...[
+          Text(
+            'Розміщені коридори:',
+            style: TextStyle(
+                color: c.textLow, fontSize: 10, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          for (final corridor in economy.placedCorridors)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: c.surfaceDim,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: c.border),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(
+                      corridor.wide
+                          ? Icons.remove_road
+                          : Icons.remove,
+                      size: 14,
+                      color: c.textMedium,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            corridor.wide ? 'Широкий' : 'Вузький',
+                            style: TextStyle(
+                              color: c.textHigh,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${corridor.tiles.length} тайлів',
+                            style: TextStyle(
+                              color: c.textLow,
+                              fontSize: 9,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        ref.read(gameEconomyProvider.notifier).removeCorridor(corridor.id);
+                      },
+                      icon: Icon(Icons.delete_outline, color: c.error, size: 16),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                      tooltip: 'Видалити (50% повернення)',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+        ],
         // ── Balance hint ─────────────────────────────────────────────────
         Row(
           children: [
