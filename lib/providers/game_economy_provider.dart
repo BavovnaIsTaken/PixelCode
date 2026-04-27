@@ -16,6 +16,7 @@ import '../models/game_economy.dart';
 import '../services/game_persistence_service.dart';
 import 'agent_provider.dart';
 import 'deepseek_auth_provider.dart';
+import 'kimi_auth_provider.dart';
 import 'energy_provider.dart';
 import 'settings_provider.dart';
 
@@ -110,11 +111,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
         };
       }
       final deepseekKey = ref.read(deepseekAuthProvider).valueOrNull?.apiKey;
+      final kimiKey = ref.read(kimiAuthProvider).valueOrNull?.apiKey;
       ref.read(wsServiceProvider).setGameState(
             instances: instances,
             fullState: gs.encode(),
             stateUpdatedAt: gs.updatedAt,
             deepseekApiKey: deepseekKey,
+            kimiApiKey: kimiKey,
           );
     });
   }
@@ -155,6 +158,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       creativity: agent.skills[SkillType.creativity] ?? 1,
       insight: agent.skills[SkillType.insight] ?? 1,
       reliability: agent.skills[SkillType.reliability] ?? 1,
+      roleType: agent.roleType,
     );
     final tokens = (msg.costUsd * 200000).round();
     ref.read(energyProvider.notifier).recordTaskTokens(model, tokens);

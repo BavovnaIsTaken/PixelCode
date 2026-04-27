@@ -10,8 +10,9 @@ const int maxAgentLevel = 20;
 /// Client-side mirror of the server's `skillsToModel` in `server/src/agents.ts`.
 /// Returns one of `'haiku' | 'sonnet' | 'opus'` based on a capability score.
 ///
-/// Capability score weighting (Speed intentionally excluded):
-/// `0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity`.
+/// Two role-based weight profiles (Speed intentionally excluded):
+///   - default (analytical roles): `0.4*insight + 0.3*precision + 0.2*reliability + 0.1*creativity`
+///   - creative (ui-ux-designer, game-designer): `0.25*insight + 0.2*precision + 0.2*reliability + 0.35*creativity`
 /// Thresholds: ≥14 opus, ≥8 sonnet, else haiku.
 ///
 /// Used by the Energy meter to tag completed tasks with the model tier
@@ -21,8 +22,12 @@ String capabilityModelForSkills({
   required int creativity,
   required int insight,
   required int reliability,
+  String? roleType,
 }) {
-  final capability = 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;
+  final isCreative = roleType == 'ui-ux-designer' || roleType == 'game-designer';
+  final capability = isCreative
+      ? 0.25 * insight + 0.2 * precision + 0.2 * reliability + 0.35 * creativity
+      : 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;
   if (capability >= 14) return 'opus';
   if (capability >= 8) return 'sonnet';
   return 'haiku';

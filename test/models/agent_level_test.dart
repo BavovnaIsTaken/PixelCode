@@ -76,4 +76,115 @@ void main() {
       expect(xpForTask(difficulty: 99, quality: 1.0, agentLevel: 1), 25); // as 5
     });
   });
+
+  group('capabilityModelForSkills', () {
+    test('default profile — starter analytical agent → haiku', () {
+      // capability = 0.4*3 + 0.3*3 + 0.2*2 + 0.1*2 = 2.7
+      expect(
+        capabilityModelForSkills(
+          precision: 3,
+          creativity: 2,
+          insight: 3,
+          reliability: 2,
+        ),
+        'haiku',
+      );
+    });
+
+    test('default profile — upgraded mid-tier → sonnet', () {
+      // capability = 0.4*14 + 0.3*10 + 0.2*8 + 0.1*4 = 10.6
+      expect(
+        capabilityModelForSkills(
+          precision: 10,
+          creativity: 4,
+          insight: 14,
+          reliability: 8,
+        ),
+        'sonnet',
+      );
+    });
+
+    test('default profile — elite insight-max → opus', () {
+      // capability = 0.4*20 + 0.3*15 + 0.2*15 + 0.1*10 = 16.5
+      expect(
+        capabilityModelForSkills(
+          precision: 15,
+          creativity: 10,
+          insight: 20,
+          reliability: 15,
+        ),
+        'opus',
+      );
+    });
+
+    test('creative profile — designer Lv1 starter → haiku', () {
+      // creative cap = 0.25*2 + 0.2*2 + 0.2*4 + 0.35*7 = 4.15
+      expect(
+        capabilityModelForSkills(
+          precision: 2,
+          creativity: 7,
+          insight: 2,
+          reliability: 4,
+          roleType: 'ui-ux-designer',
+        ),
+        'haiku',
+      );
+    });
+
+    test('creative profile — designer with creative-bias upgrades → sonnet', () {
+      // creative cap = 0.25*8 + 0.2*8 + 0.2*8 + 0.35*12 = 9.4
+      expect(
+        capabilityModelForSkills(
+          precision: 8,
+          creativity: 12,
+          insight: 8,
+          reliability: 8,
+          roleType: 'ui-ux-designer',
+        ),
+        'sonnet',
+      );
+    });
+
+    test('creative profile — designer endgame maxed → opus', () {
+      // creative cap = 0.25*18 + 0.2*18 + 0.2*20 + 0.35*20 = 19.1
+      expect(
+        capabilityModelForSkills(
+          precision: 18,
+          creativity: 20,
+          insight: 18,
+          reliability: 20,
+          roleType: 'ui-ux-designer',
+        ),
+        'opus',
+      );
+    });
+
+    test('creative profile — game-designer also uses creative weights', () {
+      // creative cap = 0.25*8 + 0.2*8 + 0.2*8 + 0.35*12 = 9.4 → sonnet
+      expect(
+        capabilityModelForSkills(
+          precision: 8,
+          creativity: 12,
+          insight: 8,
+          reliability: 8,
+          roleType: 'game-designer',
+        ),
+        'sonnet',
+      );
+    });
+
+    test('default profile applied for unknown roleType', () {
+      // capability = 0.4*8 + 0.3*8 + 0.2*8 + 0.1*12 = 8.4 → sonnet
+      expect(
+        capabilityModelForSkills(
+          precision: 8,
+          creativity: 12,
+          insight: 8,
+          reliability: 8,
+          roleType: 'coder',
+        ),
+        'sonnet',
+      );
+    });
+  });
 }

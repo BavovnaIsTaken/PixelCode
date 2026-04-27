@@ -364,19 +364,55 @@ export function hardwareToModel(tier: number): "haiku" | "sonnet" | "opus" {
  * Speed is deliberately excluded from the capability score: a "fast" agent
  * should pick a cheaper/faster model, not a more capable one.
  *
+ * Two role-based weight profiles:
+ *   - "default" (analytical roles: coder, reviewer, tester, security, tech-lead,
+ *     llm-specialist, manager, strategy-keeper) — insight-led tier progression.
+ *   - "creative" (ui-ux-designer, game-designer) — creativity-led, otherwise
+ *     these roles are stuck on haiku permanently because their starting profile
+ *     emphasises a stat the default formula barely weights.
+ *
  * Thresholds chosen so that Lv1 agents with role-biased starting stats
  * (~2-3 per skill, capability ~5-7) land on haiku; Lv3-5 agents with
  * upgrades (capability ~8-13) reach sonnet; and late-game high-Lv agents
  * (capability ≥14) unlock opus.
  */
-export function skillsToModel(skills: Record<string, number>): "haiku" | "sonnet" | "opus" {
+export type CapabilityProfile = "default" | "creative";
+
+const capabilityWeights: Record<CapabilityProfile, {
+  insight: number;
+  precision: number;
+  reliability: number;
+  creativity: number;
+}> = {
+  default:  { insight: 0.4,  precision: 0.3,  reliability: 0.2, creativity: 0.1  },
+  creative: { insight: 0.25, precision: 0.2,  reliability: 0.2, creativity: 0.35 },
+};
+
+const roleCapabilityProfile: Record<string, CapabilityProfile> = {
+  "ui-ux-designer": "creative",
+  "game-designer":  "creative",
+};
+
+export function capabilityProfileForRole(roleType?: string): CapabilityProfile {
+  return roleCapabilityProfile[roleType ?? ""] ?? "default";
+}
+
+export function skillsToModel(
+  skills: Record<string, number>,
+  roleType?: string,
+): "haiku" | "sonnet" | "opus" {
   const get = (k: string) => skills[k] ?? 1;
   const precision   = get("1");
   const creativity  = get("2");
   const insight     = get("3");
   const reliability = get("4");
 
-  const capability = 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;
+  const w = capabilityWeights[capabilityProfileForRole(roleType)];
+  const capability =
+    w.insight * insight +
+    w.precision * precision +
+    w.reliability * reliability +
+    w.creativity * creativity;
   if (capability >= 14) return "opus";
   if (capability >= 8) return "sonnet";
   return "haiku";
@@ -481,7 +517,7 @@ export function buildDynamicAgents(
     if (!template) continue;
 
     const hwModel = hardwareToModel(inst.hardware);
-    const skModel = skillsToModel(inst.skills);
+    const skModel = skillsToModel(inst.skills, inst.roleType);
     const model = minModel(hwModel, skModel);
 
     const skillSection = `\n\nThis agent's skill profile:\n${formatSkillsForPrompt(
@@ -669,7 +705,7 @@ export function buildHiredAgentInfoList(
     const role = roleCatalog[inst.roleType];
     if (!role) continue;
     const hwModel = hardwareToModel(inst.hardware);
-    const skModel = skillsToModel(inst.skills);
+    const skModel = skillsToModel(inst.skills, inst.roleType);
     const model = minModel(hwModel, skModel);
     out.push({
       id,
