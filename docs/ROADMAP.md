@@ -131,6 +131,29 @@
 
 Дизайн — у [AGENT_PERSONALIZATION_SYSTEM.md](AGENT_PERSONALIZATION_SYSTEM.md), план — у [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
 
+### C.1 Specialization & Accumulated Value (Q3 2026, паралельно з C)
+
+**Стратегічна задача:** зробити "вирощений Lv10 агент > голий opus" відчутно для гравця. Personalization-шар (lessons / traits / project memory) уже накопичує знання server-side, але differentiation невидимий — це підважує value proposition vs raw API access (Cursor / Continue / Cody). Без цього шару Marketplace v1 (E) ризикує стати skin-store замість asset-trading. Запис після обговорення 2026-04-27.
+
+| Компонент | Статус | ETA |
+|---|---|---|
+| **Specialization unlock mechanic** (після N task'ів одного topic → "Spec: Frontend" badge → +X% crit на тій категорії) | `[TODO]` | Q3 2026 |
+| **Lesson-driven roll bonus** (accumulated lessons → −X% incomplete rate на relevant task type) | `[TODO]` | Q3 2026 |
+| **Trait-based response style surfacing** (trait badge у chat panel + agent card; видимі personality biases) | `[TODO]` | Q3 2026 |
+| **Project memory depth bonus** (time-on-project → bonus to architectural reasoning rolls; свіжо найнятий tech-lead = generalist, 3-міс Богдан = знає проєкт) | `[TODO]` | Q3 2026 |
+| **Specialization badges на agent card** (поверх sprite — мікро-glyph; на roster card — окремий ряд badges) | `[TODO]` | Q3 2026 |
+| **Lessons counter / topic affinity inspector** (UI yet to design — частина Personalization UI з C) | `[TODO]` | Q3 2026 |
+| **Telemetry: "grown vs raw" delta** (порівняння completion rate / crit rate Lv10 з accumulated context vs Lv10 без context — підтвердити що value реальний) | `[TODO]` | Q3 2026 |
+
+**Залежності:**
+- C.1 побудовано поверх існуючого personalization stack ([memory_lifecycle.ts](../server/src/memory_lifecycle.ts), [lesson_extractor.ts](../server/src/lesson_extractor.ts), [trait_memory.ts](../server/src/trait_memory.ts), [project_context_manager.ts](../server/src/project_context_manager.ts)) — нічого нового на server-side, тільки surface через game mechanics.
+- Без C.1 → Marketplace v1 (E) торгує характерами без visible "trained value"; з C.1 → характер з 200 lessons + 2 specializations відрізняється від свіжо створеного, що = справжній asset.
+- **Specialization mechanic може замінити необхідність обов'язкового tier upgrade** для creative ролей: Соня може лишитись на sonnet з +30% crit на дизайн = effectively opus у domain.
+
+**Risk-watch:**
+- Game mechanics що залежать від accumulated state може фруструвати new players ("моя команда слабка проти ветеранської"). Mitigation: cap specialization bonuses на reasonable максимумі (наприклад +30%), не x2.
+- Telemetry мусить підтвердити що grown > raw API — інакше value proposition lie. Якщо delta < 10% — переглянути dispatch / context preparer.
+
 ---
 
 ## D. Custom Agent Spawn і агенти як активи
@@ -405,6 +428,7 @@ C (Personalization UI) → D (Custom Agent Spawn) → D.1 (Curated Roster) → E
 | Напрямок | Estimate |
 |---|---|
 | C — Personalization UI | 3–4 weeks |
+| C.1 — Specialization & Accumulated Value (mechanics + UI) | 3–4 weeks |
 | D — Custom Agent Spawn | 4–6 weeks |
 | D.1 — Curated Roster v1 | 3–4 weeks (з ×1.5 буфером для portrait variations + balance) |
 | E — Marketplace v1 | 6–8 weeks |
