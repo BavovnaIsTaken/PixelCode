@@ -1287,28 +1287,89 @@ class _AccountSectionState extends ConsumerState<_AccountSection> {
     AsyncValue<DeepSeekAuthStatus> deepseekAuthAsync,
   ) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildAuthProviderButton(
-          ref,
-          provider: 'Claude',
-          icon: Icons.login_rounded,
-          claudeAuth: claudeAuthAsync,
+        _buildProviderRow(
+          button: _buildAuthProviderButton(
+            ref,
+            provider: 'Claude',
+            icon: Icons.login_rounded,
+            claudeAuth: claudeAuthAsync,
+          ),
+          connected: claudeAuthAsync.valueOrNull?.loggedIn ?? false,
+          isLoading: claudeAuthAsync.isLoading,
         ),
-        const SizedBox(height: 8),
-        _buildAuthProviderButton(
-          ref,
-          provider: 'Google (Gemini)',
-          icon: Icons.login_rounded,
-          geminiAuth: geminiAuthAsync,
+        const SizedBox(height: 10),
+        _buildProviderRow(
+          button: _buildAuthProviderButton(
+            ref,
+            provider: 'Google (Gemini)',
+            icon: Icons.login_rounded,
+            geminiAuth: geminiAuthAsync,
+          ),
+          connected: geminiAuthAsync.valueOrNull?.loggedIn ?? false,
+          isLoading: geminiAuthAsync.isLoading,
         ),
-        const SizedBox(height: 8),
-        _buildAuthProviderButton(
-          ref,
-          provider: 'DeepSeek',
-          icon: Icons.key_outlined,
-          deepseekAuth: deepseekAuthAsync,
+        const SizedBox(height: 10),
+        _buildProviderRow(
+          button: _buildAuthProviderButton(
+            ref,
+            provider: 'DeepSeek',
+            icon: Icons.key_outlined,
+            deepseekAuth: deepseekAuthAsync,
+          ),
+          connected: deepseekAuthAsync.valueOrNull?.linked ?? false,
+          isLoading: deepseekAuthAsync.isLoading,
         ),
       ],
+    );
+  }
+
+  Widget _buildProviderRow({
+    required Widget button,
+    required bool connected,
+    bool isLoading = false,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        button,
+        const Spacer(),
+        _buildPixelStatusBadge(connected: connected, isLoading: isLoading),
+      ],
+    );
+  }
+
+  Widget _buildPixelStatusBadge({required bool connected, bool isLoading = false}) {
+    final Color color;
+    final String label;
+    if (isLoading) {
+      color = Colors.white.withValues(alpha: 0.2);
+      label = '· · ·';
+    } else if (connected) {
+      color = const Color(0xFF22C55E);
+      label = 'CONNECTED';
+    } else {
+      color = Colors.white.withValues(alpha: 0.18);
+      label = 'OFFLINE';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        border: Border.all(color: color.withValues(alpha: connected ? 0.65 : 0.3)),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 7,
+          fontFamily: 'monospace',
+          letterSpacing: 1.5,
+          fontWeight: FontWeight.w700,
+          height: 1.0,
+        ),
+      ),
     );
   }
 
