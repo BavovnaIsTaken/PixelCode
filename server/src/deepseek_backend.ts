@@ -5,16 +5,22 @@
 
 import { dbg } from "./server.js";
 import type { AgentBackend, BackendResult } from "./agent_backend.js";
+import {
+  DEEPSEEK_API_URL,
+  DEEPSEEK_MODEL_MAP,
+  deepseekCostUsd,
+  resolveDeepSeekModel,
+} from "./deepseek_pricing.js";
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions";
-
-// Maps logical model names to DeepSeek model IDs.
-// deepseek-chat = DeepSeek-V3 (MoE 236B, activated 21B) — best for code
-const MODEL_MAP: Record<string, string> = {
-  haiku: "deepseek-chat",
-  sonnet: "deepseek-chat",
-  opus: "deepseek-chat",
-};
+export {
+  DEEPSEEK_API_URL,
+  DEEPSEEK_DEFAULT_MODEL,
+  DEEPSEEK_MODEL_MAP,
+  DEEPSEEK_PRICE_INPUT_USD_PER_TOKEN,
+  DEEPSEEK_PRICE_OUTPUT_USD_PER_TOKEN,
+  deepseekCostUsd,
+  resolveDeepSeekModel,
+} from "./deepseek_pricing.js";
 
 export class DeepSeekBackend implements AgentBackend {
   private apiKey: string;
@@ -29,7 +35,7 @@ export class DeepSeekBackend implements AgentBackend {
     model: string
   ): Promise<BackendResult> {
     const start = Date.now();
-    const dsModel = MODEL_MAP[model] ?? "deepseek-chat";
+    const dsModel = resolveDeepSeekModel(model);
 
     dbg("info", "deepseek", `Executing with model=${dsModel}`);
 
@@ -62,10 +68,9 @@ export class DeepSeekBackend implements AgentBackend {
     const text = json.choices[0]?.message?.content ?? "";
     const durationMs = Date.now() - start;
 
-    // Pricing: $0.27/M input, $1.10/M output (DeepSeek-V3, 2025)
     const inputTokens = json.usage?.prompt_tokens ?? 0;
     const outputTokens = json.usage?.completion_tokens ?? 0;
-    const costUsd = inputTokens * 0.00000027 + outputTokens * 0.0000011;
+    const costUsd = deepseekCostUsd(inputTokens, outputTokens);
 
     dbg("info", "deepseek", `Done in ${durationMs}ms, cost=$${costUsd.toFixed(6)}`);
 

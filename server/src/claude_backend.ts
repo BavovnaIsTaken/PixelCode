@@ -7,6 +7,14 @@
 
 import { query, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentBackend, BackendResult } from "./agent_backend.js";
+import { claudeCostUsd, CLAUDE_DEFAULT_INPUT_TOKENS, CLAUDE_TOKENS_PER_CHAR } from "./claude_pricing.js";
+
+export {
+  CLAUDE_RATES,
+  CLAUDE_DEFAULT_INPUT_TOKENS,
+  CLAUDE_TOKENS_PER_CHAR,
+  claudeCostUsd,
+} from "./claude_pricing.js";
 
 export class ClaudeAgentSdkBackend implements AgentBackend {
   constructor(private projectCwd: string = process.cwd()) {}
@@ -53,29 +61,13 @@ export class ClaudeAgentSdkBackend implements AgentBackend {
 
     const durationMs = Date.now() - startTime;
 
+    const outputTokens = Math.ceil(output.length / CLAUDE_TOKENS_PER_CHAR);
+    const costUsd = claudeCostUsd(model, CLAUDE_DEFAULT_INPUT_TOKENS, outputTokens);
+
     return {
       text: output,
       durationMs,
-      costUsd: this.calculateCost(model, output),
+      costUsd,
     };
-  }
-
-  private calculateCost(model: string, output: string): number {
-    // Rough estimation: Claude API pricing
-    // haiku: ~$0.80 / 1M input, ~$4 / 1M output
-    // sonnet: ~$3 / 1M input, ~$15 / 1M output
-    // opus: ~$15 / 1M input, ~$75 / 1M output
-
-    const outputTokens = Math.ceil(output.length / 4); // Rough approximation
-    const inputTokens = 500; // Rough estimate for dungeon prompts
-
-    const rates: Record<string, { input: number; output: number }> = {
-      haiku: { input: 0.80 / 1e6, output: 4 / 1e6 },
-      sonnet: { input: 3 / 1e6, output: 15 / 1e6 },
-      opus: { input: 15 / 1e6, output: 75 / 1e6 },
-    };
-
-    const rate = rates[model] ?? rates.sonnet;
-    return inputTokens * rate.input + outputTokens * rate.output;
   }
 }
