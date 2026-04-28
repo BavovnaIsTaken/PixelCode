@@ -24,6 +24,7 @@ const _kExtraIds = <HealthItemId>[
   HealthItemId.iosSigning,
   HealthItemId.xcodeTools,
   HealthItemId.androidSdk,
+  HealthItemId.androidSigning,
   HealthItemId.mdnsActive,
 ];
 
@@ -36,6 +37,7 @@ String _label(HealthItemId id) => switch (id) {
       HealthItemId.iosSigning => 'iOS signing identity',
       HealthItemId.xcodeTools => 'Xcode Command Line Tools',
       HealthItemId.androidSdk => 'Android SDK / adb',
+      HealthItemId.androidSigning => 'Android signing keystore',
       HealthItemId.mdnsActive => 'Bonjour / mDNS',
     };
 
