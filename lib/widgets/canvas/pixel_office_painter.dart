@@ -1448,16 +1448,18 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Vignette ───────────────────────────────────────────────────────────
 
   void _drawVignette(Canvas canvas) {
-    final center = Offset(kCanvasWidth / 2, kCanvasHeight / 2);
+    final cw = gameState.canvasWidth;
+    final ch = gameState.canvasHeight;
+    final center = Offset(cw / 2, ch / 2);
     final rect = Rect.fromCenter(
       center: center,
-      width: kCanvasWidth,
-      height: kCanvasHeight,
+      width: cw,
+      height: ch,
     );
     final theme = _theme;
 
     canvas.drawRect(
-      Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+      Rect.fromLTWH(0, 0, cw, ch),
       Paint()
         ..shader = RadialGradient(
           center: Alignment.center,
@@ -1474,7 +1476,7 @@ class PixelOfficePainter extends CustomPainter {
     // Tech hub: subtle cyan ambient glow from below
     if (officeLevel == OfficeLevel.techHub) {
       canvas.drawRect(
-        Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+        Rect.fromLTWH(0, 0, cw, ch),
         Paint()
           ..shader = LinearGradient(
             begin: Alignment.bottomCenter,
@@ -1490,7 +1492,7 @@ class PixelOfficePainter extends CustomPainter {
     // Campus: warm ambient glow
     if (officeLevel == OfficeLevel.campus) {
       canvas.drawRect(
-        Rect.fromLTWH(0, 0, kCanvasWidth, kCanvasHeight),
+        Rect.fromLTWH(0, 0, cw, ch),
         Paint()
           ..shader = RadialGradient(
             center: Alignment.center,

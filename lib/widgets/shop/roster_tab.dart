@@ -107,6 +107,11 @@ class _RosterTabState extends ConsumerState<RosterTab> {
             if (data != null) notifier.spawnCustomAgent(data);
           },
         ),
+        const SizedBox(height: 8),
+        _ImportAgentCard(
+          canSpawn: game.canHireMore,
+          onImport: (spawnData) => notifier.spawnCustomAgent(spawnData),
+        ),
         const SizedBox(height: 12),
       ],
     );
@@ -351,6 +356,160 @@ class _SpawnCustomAgentCard extends StatelessWidget {
             if (canSpawn)
               Icon(Icons.chevron_right,
                   size: 16, color: color.withValues(alpha: 0.6)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Import agent card ────────────────────────────────────────────────────
+
+class _ImportAgentCard extends StatelessWidget {
+  final bool canSpawn;
+  final ValueChanged<CustomAgentSpawnData> onImport;
+
+  const _ImportAgentCard({required this.canSpawn, required this.onImport});
+
+  Future<void> _showImportDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    String? errorText;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A1F),
+          title: const Text(
+            'Import Agent',
+            style: TextStyle(color: Colors.white, fontSize: 15),
+          ),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Встав вміст .agent.json файлу:',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  key: const Key('import-agent-json-field'),
+                  controller: controller,
+                  maxLines: 8,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontFamily: 'monospace',
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '{\n  "pixelcodeAgent": "1",\n  ...\n}',
+                    hintStyle: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      fontSize: 11,
+                    ),
+                    errorText: errorText,
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.04),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.12)),
+                    ),
+                  ),
+                  onChanged: (_) {
+                    if (errorText != null) setState(() => errorText = null);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(
+                'Скасувати',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+              ),
+            ),
+            FilledButton(
+              key: const Key('import-agent-confirm-btn'),
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                foregroundColor: Colors.black,
+              ),
+              onPressed: () {
+                const service = AgentExportService();
+                try {
+                  final blueprint = service.importFromString(controller.text);
+                  final spawnData = service.toSpawnData(blueprint);
+                  Navigator.of(ctx).pop();
+                  onImport(spawnData);
+                } on FormatException catch (e) {
+                  setState(() => errorText = e.message);
+                } catch (e) {
+                  setState(() => errorText = 'Помилка: $e');
+                }
+              },
+              child: const Text('Імпортувати'),
+            ),
+          ],
+        ),
+      ),
+    );
+    controller.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        canSpawn ? Colors.white.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.15);
+    return GestureDetector(
+      onTap: canSpawn ? () => _showImportDialog(context) : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.02),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: canSpawn ? 0.1 : 0.05),
+            style: BorderStyle.solid,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.upload_file_outlined, size: 18, color: color),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Імпорт агента',
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    canSpawn
+                        ? 'Вставити .agent.json від іншого гравця'
+                        : 'Немає вільних місць у команді',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),

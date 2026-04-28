@@ -134,7 +134,10 @@ export type ClientMessage =
   // Push: client uploads its locally stored facilitator output so the server
   // can serve it to other devices. Sent when client finds output on disk but
   // the server may not have it yet (e.g. after a server restart or first sync).
-  | { type: "push_facilitator_output"; outputFormat: string; outputJson: string };
+  | { type: "push_facilitator_output"; outputFormat: string; outputJson: string }
+  // Session presence — multi-device coordination
+  | { type: "session_claim" }   // viewer requests to become primary
+  | { type: "session_release" }; // primary voluntarily yields (or after takeover prompt)
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -483,6 +486,24 @@ export type ServerMessage =
       finalScore: ScopeScore;
       outputFormat: OutputFormatKey;
       outputJson: string;
+    }
+  // Session presence — multi-device coordination
+  | {
+      type: "session_status";
+      /** Whether this client is now in primary or viewer mode. */
+      mode: "primary" | "viewer";
+      /** Device name of the current primary (present in viewer mode). */
+      primaryDevice?: string;
+    }
+  | {
+      type: "session_takeover_request";
+      /** Device name of the viewer requesting to take over. */
+      fromDevice: string;
+    }
+  | {
+      type: "session_taken";
+      /** Device name of the device that took the session. */
+      byDevice: string;
     };
 
 /** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */

@@ -20,6 +20,7 @@ import 'ws_provider.dart';
 import 'deepseek_auth_provider.dart';
 import 'kimi_auth_provider.dart';
 import 'energy_provider.dart';
+import 'game_session_provider.dart';
 import 'settings_provider.dart';
 
 class GameEconomyNotifier extends Notifier<GameState> {
@@ -97,6 +98,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
   void _syncToServer() {
     _syncTimer?.cancel();
     _syncTimer = Timer(const Duration(milliseconds: 500), () {
+      // Viewer devices must not push state to avoid clobbering the primary.
+      final sessionMode = ref.read(gameSessionProvider).mode;
+      if (sessionMode == GameSessionMode.viewer ||
+          sessionMode == GameSessionMode.takeoverPending) {
+        return;
+      }
+
       final gs = state;
       final instances = <String, Map<String, dynamic>>{};
 

@@ -739,6 +739,82 @@ interface TrackedClient {
 /** All currently connected clients with their identifying info. */
 const connectedClients = new Map<WebSocket, TrackedClient>();
 
+// ─── Session presence ─────────────────────────────────────────────────────────
+
+interface ActiveSession {
+  clientId: string;
+  deviceName: string;
+  ws: WebSocket;
+}
+
+interface PendingTakeover {
+  claimantWs: WebSocket;
+  timeoutHandle: ReturnType<typeof setTimeout>;
+}
+
+/** The device currently holding the primary session (write authority). */
+let activeSession: ActiveSession | null = null;
+let pendingTakeover: PendingTakeover | null = null;
+
+/** True if the given WebSocket is the current primary. */
+function isPrimary(ws: WebSocket): boolean {
+  return activeSession !== null && activeSession.ws === ws;
+}
+
+/** Claim the session for the given client (must already be in connectedClients). */
+function claimSession(ws: WebSocket): void {
+  const client = connectedClients.get(ws);
+  if (!client) return;
+  activeSession = { clientId: client.clientId, deviceName: client.deviceName, ws };
+  dbg("info", "session", `Primary → ${client.deviceName} [${client.clientId.slice(0, 8)}]`);
+}
+
+/** Notify all connected clients of their current session mode. */
+function broadcastSessionStatus(): void {
+  for (const [clientWs, client] of connectedClients.entries()) {
+    if (clientWs.readyState !== WebSocket.OPEN) continue;
+    const mode = activeSession?.ws === clientWs ? "primary" : "viewer";
+    send(clientWs, {
+      type: "session_status",
+      mode,
+      ...(mode === "viewer" && activeSession ? { primaryDevice: activeSession.deviceName } : {}),
+    } as any);
+  }
+}
+
+/** Transfer the session to a new client: cancel pending takeover, update active, notify all. */
+function transferSession(newPrimaryWs: WebSocket): void {
+  if (pendingTakeover) {
+    clearTimeout(pendingTakeover.timeoutHandle);
+    pendingTakeover = null;
+  }
+  const oldPrimaryWs = activeSession?.ws ?? null;
+  claimSession(newPrimaryWs);
+  // Notify old primary that the session was taken
+  if (oldPrimaryWs && oldPrimaryWs !== newPrimaryWs && oldPrimaryWs.readyState === WebSocket.OPEN) {
+    const taker = connectedClients.get(newPrimaryWs);
+    send(oldPrimaryWs, { type: "session_taken", byDevice: taker?.deviceName ?? "another device" } as any);
+  }
+  broadcastSessionStatus();
+}
+
+/** Called on disconnect: if primary left, auto-promote first available viewer. */
+function handlePrimaryDisconnect(): void {
+  activeSession = null;
+  if (pendingTakeover) {
+    clearTimeout(pendingTakeover.timeoutHandle);
+    pendingTakeover = null;
+  }
+  // Promote the first still-connected client
+  for (const [clientWs] of connectedClients.entries()) {
+    if (clientWs.readyState === WebSocket.OPEN) {
+      claimSession(clientWs);
+      broadcastSessionStatus();
+      return;
+    }
+  }
+}
+
 function isLoopback(addr: string): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
@@ -3815,6 +3891,65 @@ wss.on("connection", (ws, request) => {
           });
           const label = info.deviceName || "unknown";
           dbg("info", "clients", `Client identified: ${label} (${info.platform}) [${info.clientId.slice(0, 8)}]`);
+
+          // Assign session mode: first identified client or reconnect of current primary → primary.
+          // Everyone else → viewer.
+          if (!activeSession || activeSession.clientId === info.clientId) {
+            claimSession(ws);
+            send(ws, { type: "session_status", mode: "primary" } as any);
+          } else {
+            send(ws, {
+              type: "session_status",
+              mode: "viewer",
+              primaryDevice: activeSession.deviceName,
+            } as any);
+          }
+          break;
+        }
+
+        // ─── Session presence ───────────────────────────────────────────
+        case "session_claim": {
+          if (isPrimary(ws)) break; // already primary
+          const claimant = connectedClients.get(ws);
+          if (!claimant) break;
+
+          if (!activeSession || activeSession.ws.readyState !== WebSocket.OPEN) {
+            // No active primary — take it immediately
+            transferSession(ws);
+            break;
+          }
+
+          // Ask current primary to yield; auto-transfer after 5 s
+          if (pendingTakeover) {
+            clearTimeout(pendingTakeover.timeoutHandle);
+          }
+          const timeoutHandle = setTimeout(() => {
+            if (pendingTakeover?.claimantWs === ws) {
+              dbg("info", "session", `Takeover timeout — auto-transferring to ${claimant.deviceName}`);
+              transferSession(ws);
+            }
+          }, 5000);
+          pendingTakeover = { claimantWs: ws, timeoutHandle };
+
+          send(activeSession.ws, {
+            type: "session_takeover_request",
+            fromDevice: claimant.deviceName,
+          } as any);
+          dbg("info", "session", `Takeover request: ${claimant.deviceName} → ${activeSession.deviceName}`);
+          break;
+        }
+
+        case "session_release": {
+          if (!isPrimary(ws)) break;
+          const target = pendingTakeover?.claimantWs ?? null;
+          if (target && target.readyState === WebSocket.OPEN) {
+            transferSession(target);
+          } else {
+            // No pending claimant — just clear the active session; next client_info will claim
+            activeSession = null;
+            if (pendingTakeover) { clearTimeout(pendingTakeover.timeoutHandle); pendingTakeover = null; }
+            broadcastSessionStatus();
+          }
           break;
         }
 
@@ -3863,5 +3998,7 @@ wss.on("connection", (ws, request) => {
     agentRunner.cancelAll(ws);
     connectedClients.delete(ws);
     clientFacilitatorState.delete(ws);
+    // Session presence: if primary disconnected, promote a viewer
+    if (activeSession?.ws === ws) handlePrimaryDisconnect();
   });
 });

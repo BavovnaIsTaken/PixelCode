@@ -389,6 +389,13 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   bool get _isMobile => MediaQuery.sizeOf(context).width < 600;
 
+  double get _sidebarWidth {
+    final w = MediaQuery.sizeOf(context).width;
+    if (w < 900) return 320; // tablet (Fold unfolded, narrow iPad)
+    if (w < 1280) return 380; // laptop / large tablet
+    return 440; // desktop
+  }
+
   bool get _isServerConnected =>
       ref.read(connectionStatusProvider).valueOrNull ?? false;
 
@@ -567,7 +574,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                   // is in Build Mode (and the canvas view is open). Easter
                   // eggs always win when summoned.
                   SizedBox(
-                    width: 440,
+                    width: _sidebarWidth,
                     child: _showGames
                         ? EasterEggGames(
                             onClose: () => setState(() => _showGames = false),

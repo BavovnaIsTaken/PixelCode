@@ -379,6 +379,11 @@ class AgentWsService {
     });
   }
 
+  // ─── Session presence ────────────────────────────────────────────────────
+
+  void claimSession() => _send({'type': 'session_claim'});
+  void releaseSession() => _send({'type': 'session_release'});
+
   // ─── Agent traits ────────────────────────────────────────────────────────
 
   void getTraits() {

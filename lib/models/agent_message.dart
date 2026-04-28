@@ -144,6 +144,9 @@ sealed class ServerMessage {
       'facilitator_seeded' => FacilitatorSeededMessage.fromJson(json),
       'facilitator_error' => FacilitatorErrorMessage.fromJson(json),
       'facilitator_output_sync' => FacilitatorOutputSyncMessage.fromJson(json),
+      'session_status' => SessionStatusMessage.fromJson(json),
+      'session_takeover_request' => SessionTakeoverRequestMessage.fromJson(json),
+      'session_taken' => SessionTakenMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -952,6 +955,41 @@ class FacilitatorOutputSyncMessage implements ServerMessage {
       outputJson: json['outputJson'] as String? ?? '',
     );
   }
+}
+
+// ─── Session presence messages ──────────────────────────────────────────────
+
+enum SessionMode { primary, viewer }
+
+class SessionStatusMessage implements ServerMessage {
+  final SessionMode mode;
+  final String? primaryDevice;
+  SessionStatusMessage({required this.mode, this.primaryDevice});
+  factory SessionStatusMessage.fromJson(Map<String, dynamic> json) =>
+      SessionStatusMessage(
+        mode: (json['mode'] as String?) == 'primary'
+            ? SessionMode.primary
+            : SessionMode.viewer,
+        primaryDevice: json['primaryDevice'] as String?,
+      );
+}
+
+class SessionTakeoverRequestMessage implements ServerMessage {
+  final String fromDevice;
+  SessionTakeoverRequestMessage({required this.fromDevice});
+  factory SessionTakeoverRequestMessage.fromJson(Map<String, dynamic> json) =>
+      SessionTakeoverRequestMessage(
+        fromDevice: json['fromDevice'] as String? ?? 'another device',
+      );
+}
+
+class SessionTakenMessage implements ServerMessage {
+  final String byDevice;
+  SessionTakenMessage({required this.byDevice});
+  factory SessionTakenMessage.fromJson(Map<String, dynamic> json) =>
+      SessionTakenMessage(
+        byDevice: json['byDevice'] as String? ?? 'another device',
+      );
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

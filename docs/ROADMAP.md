@@ -165,7 +165,7 @@
 |---|---|---|
 | **Custom Agent Spawn UI** — створення агента (system prompt, role bias, skill weights) | `[DONE]` | Q3 2026 |
 | **Self-play в dungeon** — агент пробує задачу N разів, кращі attempts → memory | `[TODO]` | Q3 2026 |
-| **Agent JSON export/import** — поділитися агентом як файлом | `[TODO]` | Q3 2026 |
+| **Agent JSON export/import** — поділитися агентом як файлом | `[DONE]` | 2026-04-28 — `AgentBlueprint` + `AgentExportService` ([lib/services/agent_export_service.dart](../lib/services/agent_export_service.dart)); Export кнопка в agent_overview_tab; Import діалог (paste JSON) в roster_tab; 26 нових тестів |
 | **Agent signature/identity** (унікальний ID, історія тренування) | `[TODO]` | Q3 2026 |
 | **Personality presets** (templates для швидкого старту) | `[DONE]` | Q3 2026 |
 | **Custom facilitator spawn** (user-defined persona_prompt + lexicon) | `[TODO]` | Q3 2027 |

@@ -11,6 +11,7 @@ import 'package:pixelcode/models/roster_catalog.dart';
 import 'package:pixelcode/providers/deepseek_auth_provider.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/kimi_auth_provider.dart';
+import 'package:pixelcode/services/agent_export_service.dart';
 
 class AgentOverviewTab extends ConsumerWidget {
   final String instanceId;
@@ -181,6 +182,10 @@ class AgentOverviewTab extends ConsumerWidget {
 
         // Backend swap — D.1 Advanced Settings
         _BackendSwapCard(agent: agent),
+        const SizedBox(height: 12),
+
+        // Export — D Agent JSON export
+        _ExportCard(agent: agent),
       ],
     );
   }
@@ -347,6 +352,99 @@ class _ProviderButton extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─── Export card ─────────────────────────────────────────────────────────────
+
+class _ExportCard extends StatefulWidget {
+  final AgentGameData agent;
+  const _ExportCard({required this.agent});
+
+  @override
+  State<_ExportCard> createState() => _ExportCardState();
+}
+
+class _ExportCardState extends State<_ExportCard> {
+  bool _exporting = false;
+
+  Future<void> _export() async {
+    setState(() => _exporting = true);
+    try {
+      final blueprint = AgentBlueprint.fromAgent(widget.agent);
+      const service = AgentExportService();
+      final path = await service.exportToFile(blueprint);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Збережено: $path'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Помилка експорту: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _InfoCard(
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.ios_share,
+              size: 14,
+              color: Colors.white.withValues(alpha: 0.5),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Export',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Зберегти агента як .agent.json файл. Можна передати іншому гравцю або імпортувати пізніше.',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35),
+            fontSize: 10,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            key: const Key('agent-export-btn'),
+            onPressed: _exporting ? null : _export,
+            icon: _exporting
+                ? const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.5),
+                  )
+                : const Icon(Icons.download, size: 14),
+            label: Text(_exporting ? 'Зберігаємо…' : 'Export Agent'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white.withValues(alpha: 0.7),
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.15)),
+              textStyle: const TextStyle(fontSize: 12),
+              padding: const EdgeInsets.symmetric(vertical: 8),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

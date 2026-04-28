@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,39 +9,45 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/settings_provider.dart';
 
-// ─── Brick types ────────────────────────────────────────────────────────────
+// ─── Brick types ─────────────────────────────────────────────────────────────
 
 const _bEmpty = 0;
-const _bNormal = 1;
-const _bHard = 2;
-const _bCracked = 3; // hard brick after 1 hit
-const _bGold = 4;
-const _bExplosive = 5;
-const _bUnbreakable = 9;
+const _bNormal = 1; // 1 hit, coloured by row
+const _bGlass = 2; // 2 hits (cracks first)
+const _bCracked = 3; // glass after 1st hit
+const _bGold = 4; // 1 hit, extra points
+const _bBlast = 5; // 1 hit, chain-explodes neighbours
+const _bSteel = 9; // indestructible
 
-// ─── Constants ──────────────────────────────────────────────────────────────
+// ─── Constants ───────────────────────────────────────────────────────────────
 
-const _brickCols = 10;
-const _brickRows = 6;
-const _brickGap = 3.0;
-const _paddleH = 10.0;
-const _ballR = 5.0;
-const _baseBallSpeed = 4.5;
-const _bottomPad = 30.0;
-const _powerUpSize = 14.0;
-const _powerUpFallSpeed = 2.0;
-const _powerUpChance = 0.14;
+const _brickCols = 13;
+const _brickRows = 8;
+const _brickGap = 2.0;
+const _paddleH = 11.0;
+const _ballR = 5.5;
+const _baseBallSpeed = 4.2;
+const _bottomPad = 28.0;
+const _puW = 34.0;
+const _puH = 13.0;
+const _puFallSpeed = 1.8;
+const _puChance = 0.20;
+const _laserSpeed = 9.0;
+const _laserFireInterval = 28; // ticks between auto-shots
 
+// DX-Ball classic row palette (top → bottom)
 const _rowColors = [
-  Color(0xFFFF6B6B),
-  Color(0xFFFF9F43),
-  Color(0xFFFECA57),
-  Color(0xFF48DBFB),
-  Color(0xFF00C0D1),
-  Color(0xFFA29BFE),
+  Color(0xFFFF2222),
+  Color(0xFFFF8800),
+  Color(0xFFDDDD00),
+  Color(0xFF22DD22),
+  Color(0xFF00CCCC),
+  Color(0xFF2266FF),
+  Color(0xFFAA44FF),
+  Color(0xFFFF44AA),
 ];
 
-// ─── Persistence keys ───────────────────────────────────────────────────────
+// ─── Persistence keys ────────────────────────────────────────────────────────
 
 const _keyLevel = 'arkanoid_level';
 const _keyScore = 'arkanoid_score';
@@ -48,15 +55,17 @@ const _keyLives = 'arkanoid_lives';
 const _keyHighScore = 'arkanoid_high_score';
 const _keyBricks = 'arkanoid_bricks';
 
-// ─── Enums & helpers ────────────────────────────────────────────────────────
+// ─── Enums / data classes ────────────────────────────────────────────────────
 
 enum _Phase { waitingLaunch, running, paused, gameOver, won }
 
-enum _PUType { multiBall, widePaddle, extraLife, fireball, slowBall }
+enum _PUType { expand, multiball, sticky, laser, thru, life, slow, blast }
 
 class _Ball {
   double x, y, dx, dy;
-  _Ball(this.x, this.y, this.dx, this.dy);
+  bool stuck;
+  double stuckOffsetX = 0;
+  _Ball(this.x, this.y, this.dx, this.dy, {this.stuck = false});
 }
 
 class _FallingPU {
@@ -65,75 +74,161 @@ class _FallingPU {
   _FallingPU(this.x, this.y, this.type);
 }
 
-// ─── Level patterns (10×6 = 60 elements each) ──────────────────────────────
+class _Bullet {
+  double x, y;
+  _Bullet(this.x, this.y);
+}
+
+// ─── Level patterns (13 × 8 = 104 elements each) ─────────────────────────────
+// 0=empty  1=normal  2=glass  4=gold  5=blast  9=steel
 
 const _levelPatterns = <List<int>>[
-  // Level 1: Introduction
-  [1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   0,0,0,0,0,0,0,0,0,0,
-   0,0,0,0,0,0,0,0,0,0],
+  // Level 1 – Warm-up
+  [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 2: Hard top
-  [2,2,2,2,2,2,2,2,2,2,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   0,0,0,0,0,0,0,0,0,0],
+  // Level 2 – Checkerboard
+  [
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 3: Fortress
-  [9,2,2,2,2,2,2,2,2,9,
-   9,0,1,1,1,1,1,1,0,9,
-   9,0,1,4,1,1,4,1,0,9,
-   9,0,1,1,1,1,1,1,0,9,
-   9,0,1,1,1,1,1,1,0,9,
-   9,2,2,2,2,2,2,2,2,9],
+  // Level 3 – Pyramid
+  [
+    0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 1, 1, 2, 1, 1, 0, 0, 0, 0,
+    0, 0, 0, 1, 1, 2, 4, 2, 1, 1, 0, 0, 0,
+    0, 0, 1, 1, 1, 2, 4, 2, 1, 1, 1, 0, 0,
+    0, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 0,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 4: Gold rush
-  [4,1,4,1,4,1,4,1,4,1,
-   1,4,1,4,1,4,1,4,1,4,
-   2,2,2,2,2,2,2,2,2,2,
-   1,1,1,1,1,1,1,1,1,1,
-   1,1,1,1,1,1,1,1,1,1,
-   0,0,0,0,0,0,0,0,0,0],
+  // Level 4 – Fortress
+  [
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    9, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 9,
+    9, 0, 0, 1, 1, 2, 2, 2, 1, 1, 0, 0, 9,
+    9, 0, 1, 2, 2, 4, 4, 4, 2, 2, 1, 0, 9,
+    9, 0, 1, 2, 2, 4, 9, 4, 2, 2, 1, 0, 9,
+    9, 0, 0, 1, 1, 2, 2, 2, 1, 1, 0, 0, 9,
+    9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 5: Explosions
-  [2,1,5,1,2,2,1,5,1,2,
-   1,1,1,1,1,1,1,1,1,1,
-   1,5,1,1,5,5,1,1,5,1,
-   1,1,1,1,1,1,1,1,1,1,
-   2,1,5,1,2,2,1,5,1,2,
-   0,0,0,0,0,0,0,0,0,0],
+  // Level 5 – Blast zone
+  [
+    1, 1, 5, 1, 1, 1, 1, 1, 1, 1, 5, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    5, 1, 1, 1, 5, 1, 5, 1, 5, 1, 1, 1, 5,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 5, 1, 1, 5, 1, 5, 1, 1, 5, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    5, 1, 1, 5, 1, 1, 1, 1, 1, 5, 1, 1, 5,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 6: Maze
-  [9,0,9,0,9,0,9,0,9,0,
-   1,1,1,1,1,1,1,1,1,1,
-   0,9,0,9,0,9,0,9,0,9,
-   1,1,1,1,1,1,1,1,1,1,
-   9,0,9,0,9,0,9,0,9,0,
-   2,2,2,2,2,2,2,2,2,2],
+  // Level 6 – Cross
+  [
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 1,
+    1, 0, 9, 0, 0, 2, 0, 2, 0, 0, 9, 0, 1,
+    1, 1, 1, 1, 1, 2, 4, 2, 1, 1, 1, 1, 1,
+    1, 0, 9, 0, 0, 2, 4, 2, 0, 0, 9, 0, 1,
+    1, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 
-  // Level 7: Diamond
-  [0,0,0,0,4,4,0,0,0,0,
-   0,0,0,2,4,4,2,0,0,0,
-   0,0,2,1,5,5,1,2,0,0,
-   0,2,1,1,1,1,1,1,2,0,
-   2,1,1,1,1,1,1,1,1,2,
-   1,1,1,4,1,1,4,1,1,1],
+  // Level 7 – Zigzag
+  [
+    1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+    0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0,
+    0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0,
+    2, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 2,
+    2, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 2,
+    0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0, 0,
+    0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0,
+    1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
+  ],
 
-  // Level 8: Ultimate
-  [9,2,2,4,9,9,4,2,2,9,
-   2,5,2,2,4,4,2,2,5,2,
-   2,2,1,1,2,2,1,1,2,2,
-   4,2,1,5,1,1,5,1,2,4,
-   2,2,1,1,1,1,1,1,2,2,
-   9,2,2,2,4,4,2,2,2,9],
+  // Level 8 – Gold rush
+  [
+    4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4,
+    1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4,
+    1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
+
+  // Level 9 – Diamond
+  [
+    0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 4, 1, 4, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 4, 1, 2, 1, 4, 0, 0, 0, 0,
+    0, 0, 0, 4, 1, 2, 4, 2, 1, 4, 0, 0, 0,
+    0, 0, 4, 1, 2, 4, 9, 4, 2, 1, 4, 0, 0,
+    0, 0, 0, 4, 1, 2, 4, 2, 1, 4, 0, 0, 0,
+    0, 0, 0, 0, 4, 1, 2, 1, 4, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 4, 1, 4, 0, 0, 0, 0, 0,
+  ],
+
+  // Level 10 – Double fort
+  [
+    9, 1, 1, 1, 9, 0, 0, 0, 9, 1, 1, 1, 9,
+    1, 2, 2, 2, 1, 0, 0, 0, 1, 2, 2, 2, 1,
+    1, 2, 4, 2, 1, 0, 0, 0, 1, 2, 4, 2, 1,
+    1, 2, 2, 2, 1, 0, 0, 0, 1, 2, 2, 2, 1,
+    9, 1, 1, 1, 9, 0, 0, 0, 9, 1, 1, 1, 9,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
+
+  // Level 11 – Columns
+  [
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2,
+    2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2, 0, 2,
+    4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4,
+    4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4, 0, 4,
+    9, 0, 9, 0, 9, 0, 9, 0, 9, 0, 9, 0, 9,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
+
+  // Level 12 – Chaos
+  [
+    9, 2, 5, 1, 9, 4, 1, 4, 9, 1, 5, 2, 9,
+    2, 1, 2, 5, 2, 1, 2, 1, 2, 5, 2, 1, 2,
+    5, 2, 1, 2, 1, 5, 4, 5, 1, 2, 1, 2, 5,
+    4, 1, 5, 1, 4, 2, 9, 2, 4, 1, 5, 1, 4,
+    5, 2, 1, 2, 1, 5, 4, 5, 1, 2, 1, 2, 5,
+    2, 1, 2, 5, 2, 1, 2, 1, 2, 5, 2, 1, 2,
+    9, 2, 5, 1, 9, 4, 1, 4, 9, 1, 5, 2, 9,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  ],
 ];
 
-// ─── Widget ─────────────────────────────────────────────────────────────────
+// ─── Widget ──────────────────────────────────────────────────────────────────
 
 class ArkanoidGame extends ConsumerStatefulWidget {
   final VoidCallback onClose;
@@ -144,9 +239,9 @@ class ArkanoidGame extends ConsumerStatefulWidget {
 }
 
 class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
-  // Layout (recalculated each build)
+  // Layout
   double _gameW = 400, _gameH = 500;
-  double _brickW = 36, _brickH = 14, _brickTop = 50;
+  double _brickW = 28, _brickH = 13, _brickTop = 50;
   double _paddleW = 64;
   bool _layoutReady = false;
 
@@ -155,6 +250,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   var _bricks = <int>[];
   var _balls = <_Ball>[];
   final _fallingPUs = <_FallingPU>[];
+  final _bullets = <_Bullet>[];
   double _paddleX = 0;
   int _level = 1;
   int _score = 0;
@@ -162,27 +258,34 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   int _highScore = 0;
 
   // Power-up timers (ticks at ~60 fps)
-  int _widePaddleTicks = 0;
-  int _fireballTicks = 0;
-  int _slowBallTicks = 0;
+  int _expandTicks = 0;
+  int _stickyTicks = 0;
+  int _laserTicks = 0;
+  int _thruTicks = 0;
+  int _slowTicks = 0;
+  int _blastTicks = 0;
+  int _laserCooldown = 0;
 
   Timer? _ticker;
   final _focusNode = FocusNode();
   final _rng = Random();
 
-  // ── Computed ────────────────────────────────────────────────────────────
+  // ── Computed ─────────────────────────────────────────────────────────────
 
   double get _brickLeft =>
       (_gameW - (_brickCols * (_brickW + _brickGap) - _brickGap)) / 2;
   double get _effectivePaddleW =>
-      _widePaddleTicks > 0 ? _paddleW * 1.5 : _paddleW;
+      _expandTicks > 0 ? _paddleW * 1.6 : _paddleW;
   double get _effectiveSpeed =>
-      _slowBallTicks > 0 ? _baseBallSpeed * 0.6 : _baseBallSpeed;
-  bool get _isFireball => _fireballTicks > 0;
+      _slowTicks > 0 ? _baseBallSpeed * 0.58 : _baseBallSpeed;
+  bool get _isBlast => _blastTicks > 0;
+  bool get _isThru => _thruTicks > 0;
+  bool get _isSticky => _stickyTicks > 0;
+  bool get _isLaser => _laserTicks > 0;
   bool get _allCleared =>
-      !_bricks.any((b) => b != _bEmpty && b != _bUnbreakable);
+      !_bricks.any((b) => b != _bEmpty && b != _bSteel);
 
-  // ── Lifecycle ───────────────────────────────────────────────────────────
+  // ── Lifecycle ────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -197,7 +300,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     super.dispose();
   }
 
-  // ── Persistence ─────────────────────────────────────────────────────────
+  // ── Persistence ──────────────────────────────────────────────────────────
 
   void _loadGame() {
     final prefs = ref.read(sharedPrefsProvider);
@@ -253,35 +356,32 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     ]);
   }
 
-  // ── Level generation ────────────────────────────────────────────────────
+  // ── Level generation ─────────────────────────────────────────────────────
 
   List<int> _generateBricks() {
     final patIdx = (_level - 1) % _levelPatterns.length;
     final loop = (_level - 1) ~/ _levelPatterns.length;
     final pattern = List<int>.from(_levelPatterns[patIdx]);
 
-    // Difficulty scaling on subsequent loops
     if (loop >= 1) {
       for (var i = 0; i < pattern.length; i++) {
-        if (pattern[i] == _bNormal) {
-          if (loop >= 2 || _rng.nextBool()) {
-            pattern[i] = _bHard;
-          }
+        if (pattern[i] == _bNormal && (loop >= 2 || _rng.nextBool())) {
+          pattern[i] = _bGlass;
         }
       }
     }
     return pattern;
   }
 
-  // ── Layout ──────────────────────────────────────────────────────────────
+  // ── Layout ───────────────────────────────────────────────────────────────
 
   void _applyLayout(double w, double h) {
     _gameW = w;
     _gameH = h;
     _brickW = (w - _brickGap * (_brickCols + 1)) / _brickCols;
-    _brickH = (_brickW * 0.4).clamp(10.0, 16.0);
-    _brickTop = h * 0.08;
-    _paddleW = (w * 0.18).clamp(50.0, 80.0);
+    _brickH = (_brickW * 0.38).clamp(9.0, 15.0);
+    _brickTop = h * 0.07;
+    _paddleW = (w * 0.20).clamp(52.0, 88.0);
     if (!_layoutReady) {
       _paddleX = (w - _effectivePaddleW) / 2;
       _resetBallPosition();
@@ -289,31 +389,53 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     }
   }
 
-  // ── Game flow ───────────────────────────────────────────────────────────
+  // ── Game flow ────────────────────────────────────────────────────────────
 
   void _resetBallPosition() {
     _balls = [
       _Ball(
         _paddleX + _effectivePaddleW / 2,
-        _gameH - 60,
-        _baseBallSpeed * 0.7,
-        -_baseBallSpeed,
+        _gameH - _bottomPad - _paddleH - _ballR - 1,
+        0,
+        0,
+        stuck: false,
       ),
     ];
     _fallingPUs.clear();
-    _widePaddleTicks = 0;
-    _fireballTicks = 0;
-    _slowBallTicks = 0;
+    _bullets.clear();
+    _expandTicks = 0;
+    _stickyTicks = 0;
+    _laserTicks = 0;
+    _thruTicks = 0;
+    _slowTicks = 0;
+    _blastTicks = 0;
+    _laserCooldown = 0;
   }
 
-  void _launchBall() {
+  void _launchBalls() {
     if (_phase != _Phase.waitingLaunch) return;
     _phase = _Phase.running;
-    final angle = -pi / 2 + (_rng.nextDouble() - 0.5) * 0.8;
+    final angle = -pi / 2 + (_rng.nextDouble() - 0.5) * 0.7;
+    final spd = _baseBallSpeed;
     _balls.first
-      ..dx = _baseBallSpeed * cos(angle)
-      ..dy = _baseBallSpeed * sin(angle);
+      ..dx = spd * cos(angle)
+      ..dy = spd * sin(angle)
+      ..stuck = false;
     _startTicker();
+  }
+
+  void _releaseStuckBalls() {
+    final pw = _effectivePaddleW;
+    for (final ball in _balls) {
+      if (!ball.stuck) continue;
+      ball.stuck = false;
+      final hitPos = ((ball.x - _paddleX) / pw).clamp(0.0, 1.0);
+      final angle = -pi / 2 + (hitPos - 0.5) * 1.2;
+      final spd = _effectiveSpeed;
+      ball.dx = spd * cos(angle);
+      ball.dy = spd * sin(angle);
+      if (ball.dy > -1.0) ball.dy = -1.0;
+    }
   }
 
   void _startTicker() {
@@ -386,15 +508,20 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     widget.onClose();
   }
 
-  // ── Tap / keyboard ─────────────────────────────────────────────────────
+  // ── Input ────────────────────────────────────────────────────────────────
 
   void _onTap() {
     setState(() {
       switch (_phase) {
         case _Phase.waitingLaunch:
-          _launchBall();
+          _launchBalls();
         case _Phase.running:
-          _pause();
+          final hasStuck = _balls.any((b) => b.stuck);
+          if (hasStuck) {
+            _releaseStuckBalls();
+          } else {
+            _pause();
+          }
         case _Phase.paused:
           _resume();
         case _Phase.gameOver:
@@ -405,24 +532,77 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     });
   }
 
-  // ── Game loop ───────────────────────────────────────────────────────────
+  void _movePaddle(double localX) {
+    setState(() {
+      _paddleX =
+          (localX - _effectivePaddleW / 2).clamp(0, _gameW - _effectivePaddleW);
+      if (_phase == _Phase.waitingLaunch && _balls.isNotEmpty) {
+        _balls.first.x = _paddleX + _effectivePaddleW / 2;
+      }
+      for (final ball in _balls) {
+        if (ball.stuck) {
+          ball.x = (_paddleX + _effectivePaddleW / 2 + ball.stuckOffsetX)
+              .clamp(_ballR, _gameW - _ballR);
+        }
+      }
+    });
+  }
+
+  // ── Game loop ────────────────────────────────────────────────────────────
 
   void _tick() {
     if (!mounted || _phase != _Phase.running) return;
     setState(() {
-      if (_widePaddleTicks > 0) _widePaddleTicks--;
-      if (_fireballTicks > 0) _fireballTicks--;
-      if (_slowBallTicks > 0) _slowBallTicks--;
+      if (_expandTicks > 0) _expandTicks--;
+      if (_stickyTicks > 0) _stickyTicks--;
+      if (_laserTicks > 0) {
+        _laserTicks--;
+        if (_laserCooldown > 0) {
+          _laserCooldown--;
+        } else {
+          _fireLaser();
+          _laserCooldown = _laserFireInterval;
+        }
+      }
+      if (_thruTicks > 0) _thruTicks--;
+      if (_slowTicks > 0) _slowTicks--;
+      if (_blastTicks > 0) _blastTicks--;
 
       final speed = _effectiveSpeed;
       final pw = _effectivePaddleW;
       final paddleTop = _gameH - _bottomPad - _paddleH;
 
+      // ── Laser bullets ──
+      _bullets.removeWhere((bullet) {
+        bullet.y -= _laserSpeed;
+        if (bullet.y < 0) return true;
+        for (var row = 0; row < _brickRows; row++) {
+          for (var col = 0; col < _brickCols; col++) {
+            final idx = row * _brickCols + col;
+            if (_bricks[idx] == _bEmpty || _bricks[idx] == _bSteel) continue;
+            final bx = _brickLeft + col * (_brickW + _brickGap);
+            final by = _brickTop + row * (_brickH + _brickGap);
+            if (bullet.x >= bx &&
+                bullet.x <= bx + _brickW &&
+                bullet.y >= by &&
+                bullet.y <= by + _brickH) {
+              _hitBrick(idx);
+              if (_allCleared) {
+                _winLevel();
+                return true;
+              }
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+
       // ── Falling power-ups ──
       _fallingPUs.removeWhere((pu) {
-        pu.y += _powerUpFallSpeed;
-        if (pu.y + _powerUpSize / 2 >= paddleTop &&
-            pu.y - _powerUpSize / 2 <= paddleTop + _paddleH + 4 &&
+        pu.y += _puFallSpeed;
+        if (pu.y + _puH / 2 >= paddleTop &&
+            pu.y - _puH / 2 <= paddleTop + _paddleH + 4 &&
             pu.x >= _paddleX &&
             pu.x <= _paddleX + pw) {
           _collectPowerUp(pu.type);
@@ -436,7 +616,15 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       for (var bi = 0; bi < _balls.length; bi++) {
         final ball = _balls[bi];
 
-        // Normalize to effective speed
+        // Stuck balls follow paddle
+        if (ball.stuck) {
+          ball.x = (_paddleX + pw / 2 + ball.stuckOffsetX)
+              .clamp(_ballR, _gameW - _ballR);
+          ball.y = paddleTop - _ballR;
+          continue;
+        }
+
+        // Normalise speed
         final mag = sqrt(ball.dx * ball.dx + ball.dy * ball.dy);
         if (mag > 0) {
           ball.dx = ball.dx / mag * speed;
@@ -472,6 +660,13 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ball.y + _ballR <= paddleTop + _paddleH + 4 &&
             ball.x >= _paddleX &&
             ball.x <= _paddleX + pw) {
+          if (_isSticky) {
+            ball.stuck = true;
+            ball.stuckOffsetX = (ball.x - (_paddleX + pw / 2))
+                .clamp(-pw / 2, pw / 2);
+            ball.y = paddleTop - _ballR;
+            continue;
+          }
           ball.y = paddleTop - _ballR;
           final hit = (ball.x - _paddleX) / pw;
           final angle = -pi / 2 + (hit - 0.5) * 1.2;
@@ -493,9 +688,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                 ball.y + _ballR >= by &&
                 ball.y - _ballR <= by + _brickH) {
               _hitBrick(idx);
-
-              if (!_isFireball) {
-                // Bounce direction
+              if (!_isThru && !_isBlast) {
                 final cx = ball.x - (bx + _brickW / 2);
                 final cy = ball.y - (by + _brickH / 2);
                 if (cx.abs() / _brickW > cy.abs() / _brickH) {
@@ -506,7 +699,6 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                 hitBrick = true;
                 break;
               }
-              // Fireball: pass through, keep checking
             }
           }
         }
@@ -517,7 +709,6 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
         }
       }
 
-      // Remove fallen balls (reverse order to keep indices valid)
       for (final bi in ballsToRemove.reversed) {
         _balls.removeAt(bi);
       }
@@ -528,14 +719,20 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     });
   }
 
-  // ── Brick logic ─────────────────────────────────────────────────────────
+  void _fireLaser() {
+    final paddleTop = _gameH - _bottomPad - _paddleH;
+    final pw = _effectivePaddleW;
+    _bullets.add(_Bullet(_paddleX + pw * 0.2, paddleTop));
+    _bullets.add(_Bullet(_paddleX + pw * 0.8, paddleTop));
+  }
 
-  void _hitBrick(int idx, {bool isExplosion = false}) {
+  // ── Brick logic ──────────────────────────────────────────────────────────
+
+  void _hitBrick(int idx, {bool isChain = false}) {
     final type = _bricks[idx];
-    if (type == _bEmpty || type == _bUnbreakable) return;
+    if (type == _bEmpty || type == _bSteel) return;
 
-    // Hard brick cracks first (unless explosion)
-    if (type == _bHard && !isExplosion) {
+    if (type == _bGlass && !isChain && !_isBlast) {
       _bricks[idx] = _bCracked;
       return;
     }
@@ -544,22 +741,23 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     _score += _brickPoints(type);
     _maybeDropPowerUp(idx);
 
-    if (type == _bExplosive) {
-      _explodeNeighbors(idx);
+    if (type == _bBlast) {
+      _explodeNeighbours(idx);
     }
   }
 
-  void _explodeNeighbors(int center) {
+  void _explodeNeighbours(int center) {
     final row = center ~/ _brickCols;
     final col = center % _brickCols;
     for (var dr = -1; dr <= 1; dr++) {
       for (var dc = -1; dc <= 1; dc++) {
         if (dr == 0 && dc == 0) continue;
-        final nr = row + dr, nc = col + dc;
+        final nr = row + dr;
+        final nc = col + dc;
         if (nr >= 0 && nr < _brickRows && nc >= 0 && nc < _brickCols) {
           final ni = nr * _brickCols + nc;
-          if (_bricks[ni] != _bEmpty && _bricks[ni] != _bUnbreakable) {
-            _hitBrick(ni, isExplosion: true);
+          if (_bricks[ni] != _bEmpty && _bricks[ni] != _bSteel) {
+            _hitBrick(ni, isChain: true);
           }
         }
       }
@@ -568,70 +766,71 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
 
   int _brickPoints(int type) => switch (type) {
         _bNormal => 10,
-        _bHard || _bCracked => 20,
+        _bGlass || _bCracked => 20,
         _bGold => 50,
-        _bExplosive => 10,
+        _bBlast => 10,
         _ => 0,
       };
 
-  // ── Power-ups ───────────────────────────────────────────────────────────
+  // ── Power-ups ────────────────────────────────────────────────────────────
 
   void _maybeDropPowerUp(int brickIdx) {
-    if (_rng.nextDouble() > _powerUpChance) return;
+    if (_rng.nextDouble() > _puChance) return;
     final col = brickIdx % _brickCols;
     final row = brickIdx ~/ _brickCols;
     final x = _brickLeft + col * (_brickW + _brickGap) + _brickW / 2;
     final y = _brickTop + row * (_brickH + _brickGap) + _brickH / 2;
 
     final roll = _rng.nextDouble();
-    final type = roll < 0.20
-        ? _PUType.multiBall
-        : roll < 0.45
-            ? _PUType.widePaddle
-            : roll < 0.55
-                ? _PUType.extraLife
-                : roll < 0.75
-                    ? _PUType.fireball
-                    : _PUType.slowBall;
+    final type = roll < 0.18
+        ? _PUType.expand
+        : roll < 0.33
+            ? _PUType.multiball
+            : roll < 0.45
+                ? _PUType.sticky
+                : roll < 0.55
+                    ? _PUType.laser
+                    : roll < 0.63
+                        ? _PUType.thru
+                        : roll < 0.72
+                            ? _PUType.life
+                            : roll < 0.86
+                                ? _PUType.slow
+                                : _PUType.blast;
 
     _fallingPUs.add(_FallingPU(x, y, type));
   }
 
   void _collectPowerUp(_PUType type) {
     switch (type) {
-      case _PUType.multiBall:
-        if (_balls.isNotEmpty && _balls.length < 10) {
-          final src = _balls.first;
+      case _PUType.expand:
+        _expandTicks = 700;
+      case _PUType.multiball:
+        if (_balls.isNotEmpty && _balls.length < 12) {
+          final src = _balls.firstWhere((b) => !b.stuck, orElse: () => _balls.first);
           final s = _effectiveSpeed;
-          _balls.add(_Ball(src.x, src.y, s * cos(-pi / 2 + 0.4),
-              s * sin(-pi / 2 + 0.4)));
-          _balls.add(_Ball(src.x, src.y, s * cos(-pi / 2 - 0.4),
-              s * sin(-pi / 2 - 0.4)));
+          _balls.add(_Ball(src.x, src.y, s * cos(-pi / 2 + 0.45),
+              s * sin(-pi / 2 + 0.45)));
+          _balls.add(_Ball(src.x, src.y, s * cos(-pi / 2 - 0.45),
+              s * sin(-pi / 2 - 0.45)));
         }
-      case _PUType.widePaddle:
-        _widePaddleTicks = 625; // ~10s
-      case _PUType.extraLife:
+      case _PUType.sticky:
+        _stickyTicks = 600;
+      case _PUType.laser:
+        _laserTicks = 550;
+        _laserCooldown = 0;
+      case _PUType.thru:
+        _thruTicks = 480;
+      case _PUType.life:
         _lives++;
-      case _PUType.fireball:
-        _fireballTicks = 500; // ~8s
-      case _PUType.slowBall:
-        _slowBallTicks = 500; // ~8s
+      case _PUType.slow:
+        _slowTicks = 540;
+      case _PUType.blast:
+        _blastTicks = 420;
     }
   }
 
-  // ── Input ───────────────────────────────────────────────────────────────
-
-  void _movePaddle(double localX) {
-    setState(() {
-      _paddleX =
-          (localX - _effectivePaddleW / 2).clamp(0, _gameW - _effectivePaddleW);
-      if (_phase == _Phase.waitingLaunch && _balls.isNotEmpty) {
-        _balls.first.x = _paddleX + _effectivePaddleW / 2;
-      }
-    });
-  }
-
-  // ── Build ───────────────────────────────────────────────────────────────
+  // ── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -643,6 +842,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       onKeyEvent: (e) {
         if (e is KeyDownEvent) {
           if (e.logicalKey == LogicalKeyboardKey.escape) _onClose();
+          if (e.logicalKey == LogicalKeyboardKey.space) {
+            setState(() => _onTap());
+          }
           if (e.logicalKey == LogicalKeyboardKey.keyR &&
               _phase == _Phase.paused) {
             setState(() => _restart());
@@ -650,7 +852,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
         }
       },
       child: Container(
-        color: const Color(0xFF0E0E11),
+        color: const Color(0xFF000812),
         child: Column(
           children: [
             _buildHeader(showButton),
@@ -664,7 +866,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                     onTap: _onTap,
                     child: CustomPaint(
                       size: Size(constraints.maxWidth, constraints.maxHeight),
-                      painter: _ArkanoidPainter(
+                      painter: _DxBallPainter(
                         bricks: _bricks,
                         brickW: _brickW,
                         brickH: _brickH,
@@ -675,9 +877,12 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                         bottomPad: _bottomPad,
                         balls: _balls,
                         fallingPUs: _fallingPUs,
+                        bullets: _bullets,
                         phase: _phase,
-                        isFireball: _isFireball,
-                        isWidePaddle: _widePaddleTicks > 0,
+                        isBlast: _isBlast,
+                        isThru: _isThru,
+                        isLaser: _isLaser,
+                        isExpand: _expandTicks > 0,
                         score: _score,
                         highScore: _highScore,
                       ),
@@ -697,16 +902,17 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       height: 36,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
+        color: const Color(0xFF00050F),
         border: Border(
-          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07)),
         ),
       ),
       child: Row(
         children: [
           const Text(
-            'ARKANOID',
+            'PIXEL·BALL',
             style: TextStyle(
-              color: Color(0xFF00C0D1),
+              color: Color(0xFF00AAFF),
               fontSize: 11,
               fontWeight: FontWeight.w700,
               letterSpacing: 2,
@@ -714,7 +920,6 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ),
           ),
           const SizedBox(width: 8),
-          // Pin toggle — show game button on menu bar
           Tooltip(
             message: showButton ? 'Сховати з панелі' : 'Показати на панелі',
             child: InkWell(
@@ -728,7 +933,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                   showButton ? Icons.push_pin : Icons.push_pin_outlined,
                   size: 12,
                   color: showButton
-                      ? const Color(0xFF00C0D1)
+                      ? const Color(0xFF00AAFF)
                       : Colors.white.withValues(alpha: 0.3),
                 ),
               ),
@@ -744,31 +949,39 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           Text(
             'Lvl $_level',
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.5),
+              color: Colors.white.withValues(alpha: 0.45),
               fontSize: 11,
               fontFamily: 'monospace',
             ),
           ),
           const Spacer(),
-          // Active power-up indicators
-          if (_widePaddleTicks > 0)
-            _puIndicator('W', const Color(0xFF66BB6A)),
-          if (_fireballTicks > 0)
-            _puIndicator('F', const Color(0xFFFF9800)),
-          if (_slowBallTicks > 0)
-            _puIndicator('S', const Color(0xFF4FC3F7)),
+          if (_expandTicks > 0) _puChip('EXPAND', const Color(0xFF44CC44)),
+          if (_stickyTicks > 0) _puChip('CATCH', const Color(0xFFFFCC00)),
+          if (_laserTicks > 0) _puChip('LASER', const Color(0xFFFF4444)),
+          if (_thruTicks > 0) _puChip('THRU', const Color(0xFF00CCFF)),
+          if (_slowTicks > 0) _puChip('SLOW', const Color(0xFF4488FF)),
+          if (_blastTicks > 0) _puChip('BLAST', const Color(0xFFFF8800)),
           if (_balls.length > 1)
-            _puIndicator('\u00d7${_balls.length}', const Color(0xFFA29BFE)),
+            _puChip('×${_balls.length}', const Color(0xFFAA44FF)),
           const SizedBox(width: 4),
-          for (var i = 0; i < _lives; i++)
+          for (var i = 0; i < _lives.clamp(0, 7); i++)
             Padding(
               padding: const EdgeInsets.only(right: 3),
               child: Container(
-                width: 6,
-                height: 6,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFFF6B6B),
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  gradient: const RadialGradient(
+                    colors: [Colors.white, Color(0xFF88AAFF)],
+                    stops: [0.3, 1.0],
+                  ),
                   shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF4488FF).withValues(alpha: 0.5),
+                      blurRadius: 4,
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -785,9 +998,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           if (_highScore > 0) ...[
             const SizedBox(width: 6),
             Text(
-              '\u2605$_highScore',
+              '★$_highScore',
               style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.3),
+                color: Colors.white.withValues(alpha: 0.28),
                 fontSize: 10,
                 fontFamily: 'monospace',
               ),
@@ -802,7 +1015,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
               child: Icon(
                 Icons.close,
                 size: 14,
-                color: Colors.white.withValues(alpha: 0.4),
+                color: Colors.white.withValues(alpha: 0.35),
               ),
             ),
           ),
@@ -811,13 +1024,13 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     );
   }
 
-  Widget _puIndicator(String label, Color color) {
+  Widget _puChip(String label, Color color) {
     return Padding(
       padding: const EdgeInsets.only(right: 4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.2),
+          color: color.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(3),
           border: Border.all(color: color.withValues(alpha: 0.4)),
         ),
@@ -825,7 +1038,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           label,
           style: TextStyle(
             color: color,
-            fontSize: 9,
+            fontSize: 8,
             fontWeight: FontWeight.w700,
             fontFamily: 'monospace',
           ),
@@ -835,19 +1048,20 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   }
 }
 
-// ─── Painter ────────────────────────────────────────────────────────────────
+// ─── Painter ─────────────────────────────────────────────────────────────────
 
-class _ArkanoidPainter extends CustomPainter {
+class _DxBallPainter extends CustomPainter {
   final List<int> bricks;
   final double brickW, brickH, brickTop, brickLeft;
   final double paddleX, paddleW, bottomPad;
   final List<_Ball> balls;
   final List<_FallingPU> fallingPUs;
+  final List<_Bullet> bullets;
   final _Phase phase;
-  final bool isFireball, isWidePaddle;
+  final bool isBlast, isThru, isLaser, isExpand;
   final int score, highScore;
 
-  _ArkanoidPainter({
+  _DxBallPainter({
     required this.bricks,
     required this.brickW,
     required this.brickH,
@@ -858,9 +1072,12 @@ class _ArkanoidPainter extends CustomPainter {
     required this.bottomPad,
     required this.balls,
     required this.fallingPUs,
+    required this.bullets,
     required this.phase,
-    required this.isFireball,
-    required this.isWidePaddle,
+    required this.isBlast,
+    required this.isThru,
+    required this.isLaser,
+    required this.isExpand,
     required this.score,
     required this.highScore,
   });
@@ -870,257 +1087,453 @@ class _ArkanoidPainter extends CustomPainter {
     _drawBackground(canvas, size);
     _drawBricks(canvas);
     _drawFallingPowerUps(canvas);
+    _drawBullets(canvas);
     _drawPaddle(canvas, size);
     _drawBalls(canvas);
     _drawOverlay(canvas, size);
   }
 
+  // ── Background ───────────────────────────────────────────────────────────
+
   void _drawBackground(Canvas canvas, Size size) {
-    final dotPaint = Paint()..color = Colors.white.withValues(alpha: 0.03);
-    for (var x = 0.0; x < size.width; x += 20) {
-      for (var y = 0.0; y < size.height; y += 20) {
-        canvas.drawCircle(Offset(x, y), 1, dotPaint);
-      }
+    // Deep dark gradient
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset.zero,
+          Offset(0, size.height),
+          [const Color(0xFF000C1A), const Color(0xFF000408)],
+        ),
+    );
+
+    // Subtle scanlines
+    final scan = Paint()..color = Colors.black.withValues(alpha: 0.10);
+    for (var y = 0.0; y < size.height; y += 4) {
+      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), scan);
+    }
+
+    // Very faint vertical column guides (DX-Ball feel)
+    final guide = Paint()..color = Colors.white.withValues(alpha: 0.015);
+    for (var x = 0.0; x < size.width; x += size.width / _brickCols) {
+      canvas.drawRect(Rect.fromLTWH(x, 0, 1, size.height), guide);
     }
   }
+
+  // ── Bricks ───────────────────────────────────────────────────────────────
 
   void _drawBricks(Canvas canvas) {
     for (var row = 0; row < _brickRows; row++) {
       for (var col = 0; col < _brickCols; col++) {
         final type = bricks[row * _brickCols + col];
         if (type == _bEmpty) continue;
-
         final x = brickLeft + col * (brickW + _brickGap);
         final y = brickTop + row * (brickH + _brickGap);
-        final rect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, y, brickW, brickH),
-          const Radius.circular(2),
-        );
-
-        final Color color;
-        switch (type) {
-          case _bNormal:
-            color = _rowColors[row % _rowColors.length];
-          case _bHard:
-            color = const Color(0xFF5C6370);
-          case _bCracked:
-            color = const Color(0xFF5C6370);
-          case _bGold:
-            color = const Color(0xFFFFD700);
-          case _bExplosive:
-            color = const Color(0xFFFF4500);
-          case _bUnbreakable:
-            color = const Color(0xFF9EA0A5);
-          default:
-            color = Colors.white;
-        }
-
-        canvas.drawRRect(rect, Paint()..color = color);
-
-        // Highlight strip
-        canvas.drawRect(
-          Rect.fromLTWH(x + 2, y + 1, brickW - 4, 2),
-          Paint()
-            ..color = Colors.white
-                .withValues(alpha: type == _bUnbreakable ? 0.5 : 0.3),
-        );
-
-        // Crack lines
-        if (type == _bCracked) {
-          final cp = Paint()
-            ..color = Colors.black.withValues(alpha: 0.6)
-            ..strokeWidth = 1
-            ..style = PaintingStyle.stroke;
-          canvas.drawLine(
-            Offset(x + brickW * 0.3, y),
-            Offset(x + brickW * 0.6, y + brickH),
-            cp,
-          );
-          canvas.drawLine(
-            Offset(x + brickW * 0.7, y + brickH * 0.2),
-            Offset(x + brickW * 0.4, y + brickH * 0.8),
-            cp,
-          );
-        }
-
-        // Gold sparkle
-        if (type == _bGold) {
-          canvas.drawRect(
-            Rect.fromLTWH(x + brickW * 0.4, y + 1, brickW * 0.2, 2),
-            Paint()..color = Colors.white.withValues(alpha: 0.6),
-          );
-        }
-
-        // Explosive mark
-        if (type == _bExplosive) {
-          final tp = TextPainter(
-            text: const TextSpan(
-              text: '!',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 9,
-                fontWeight: FontWeight.w900,
-                fontFamily: 'monospace',
-              ),
-            ),
-            textDirection: TextDirection.ltr,
-          )..layout();
-          tp.paint(
-            canvas,
-            Offset(
-              x + (brickW - tp.width) / 2,
-              y + (brickH - tp.height) / 2,
-            ),
-          );
-        }
-
-        // Unbreakable border
-        if (type == _bUnbreakable) {
-          canvas.drawRRect(
-            rect,
-            Paint()
-              ..color = Colors.white.withValues(alpha: 0.3)
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 1,
-          );
-        }
+        _drawSingleBrick(canvas, x, y, type, row);
       }
     }
   }
 
-  void _drawPaddle(Canvas canvas, Size size) {
-    final color =
-        isWidePaddle ? const Color(0xFF66BB6A) : const Color(0xFF00C0D1);
-    final paddleRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(
-        paddleX,
-        size.height - bottomPad - _paddleH,
-        paddleW,
-        _paddleH,
-      ),
-      const Radius.circular(3),
-    );
-    canvas.drawRRect(paddleRect, Paint()..color = color);
+  void _drawSingleBrick(
+      Canvas canvas, double x, double y, int type, int row) {
+    final rect = Rect.fromLTWH(x, y, brickW, brickH);
+    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(2));
+
+    final Color base;
+    switch (type) {
+      case _bNormal:
+        base = _rowColors[row % _rowColors.length];
+      case _bGlass:
+        base = const Color(0xFF88CCFF);
+      case _bCracked:
+        base = const Color(0xFF5599BB);
+      case _bGold:
+        base = const Color(0xFFFFCC00);
+      case _bBlast:
+        base = const Color(0xFFFF4400);
+      case _bSteel:
+        base = const Color(0xFF8899AA);
+      default:
+        base = Colors.white;
+    }
+
+    // 3-stop gradient: lighter top → base mid → darker bottom (DX-Ball bevel)
+    final light = Color.lerp(base, Colors.white, 0.35)!;
+    final dark = Color.lerp(base, Colors.black, 0.30)!;
     canvas.drawRRect(
-      paddleRect,
+      rrect,
       Paint()
-        ..color = color.withValues(alpha: 0.2)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+        ..shader = ui.Gradient.linear(
+          Offset(x, y),
+          Offset(x, y + brickH),
+          [light, base, dark],
+          [0.0, 0.45, 1.0],
+        ),
     );
+
+    // Top highlight strip
+    canvas.drawRect(
+      Rect.fromLTWH(x + 1, y + 1, brickW - 2, 2),
+      Paint()..color = Colors.white.withValues(alpha: 0.45),
+    );
+
+    // Bottom shadow strip
+    canvas.drawRect(
+      Rect.fromLTWH(x + 1, y + brickH - 2, brickW - 2, 1),
+      Paint()..color = Colors.black.withValues(alpha: 0.45),
+    );
+
+    // Left edge highlight
+    canvas.drawRect(
+      Rect.fromLTWH(x, y + 2, 1, brickH - 4),
+      Paint()..color = Colors.white.withValues(alpha: 0.25),
+    );
+
+    // Type-specific details
+    switch (type) {
+      case _bGlass:
+        // Glassy sheen on right side
+        canvas.drawRect(
+          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
+          Paint()..color = Colors.white.withValues(alpha: 0.22),
+        );
+      case _bCracked:
+        // Cracks + dimmer sheen
+        canvas.drawRect(
+          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
+          Paint()..color = Colors.white.withValues(alpha: 0.10),
+        );
+        final cp = Paint()
+          ..color = Colors.black.withValues(alpha: 0.65)
+          ..strokeWidth = 0.8
+          ..style = PaintingStyle.stroke;
+        canvas.drawLine(Offset(x + brickW * 0.35, y),
+            Offset(x + brickW * 0.55, y + brickH), cp);
+        canvas.drawLine(Offset(x + brickW * 0.55, y + brickH * 0.15),
+            Offset(x + brickW * 0.28, y + brickH * 0.72), cp);
+      case _bGold:
+        // Sparkle dots
+        final sp = Paint()..color = Colors.white.withValues(alpha: 0.75);
+        canvas.drawCircle(Offset(x + brickW * 0.2, y + brickH * 0.4), 1, sp);
+        canvas.drawCircle(Offset(x + brickW * 0.5, y + brickH * 0.6), 1, sp);
+        canvas.drawCircle(Offset(x + brickW * 0.78, y + brickH * 0.35), 1, sp);
+      case _bBlast:
+        // Explosion asterisk
+        final starP = Paint()
+          ..color = Colors.white.withValues(alpha: 0.9)
+          ..strokeWidth = 1.2
+          ..style = PaintingStyle.stroke;
+        final cx = x + brickW / 2;
+        final cy = y + brickH / 2;
+        final r = brickH * 0.28;
+        for (var i = 0; i < 4; i++) {
+          final a = i * pi / 4;
+          canvas.drawLine(
+            Offset(cx - cos(a) * r, cy - sin(a) * r),
+            Offset(cx + cos(a) * r, cy + sin(a) * r),
+            starP,
+          );
+        }
+      case _bSteel:
+        // Rivet corners + border
+        canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color = Colors.white.withValues(alpha: 0.30)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.5,
+        );
+        final rp = Paint()..color = Colors.white.withValues(alpha: 0.45);
+        canvas.drawCircle(Offset(x + 3, y + 3), 1.2, rp);
+        canvas.drawCircle(Offset(x + brickW - 3, y + 3), 1.2, rp);
+        canvas.drawCircle(Offset(x + 3, y + brickH - 3), 1.2, rp);
+        canvas.drawCircle(Offset(x + brickW - 3, y + brickH - 3), 1.2, rp);
+    }
   }
+
+  // ── Paddle ───────────────────────────────────────────────────────────────
+
+  void _drawPaddle(Canvas canvas, Size size) {
+    final py = size.height - bottomPad - _paddleH;
+    final baseColor =
+        isExpand ? const Color(0xFF33BB33) : const Color(0xFF2255CC);
+    final rect = Rect.fromLTWH(paddleX, py, paddleW, _paddleH);
+    final rrect =
+        RRect.fromRectAndRadius(rect, Radius.circular(_paddleH / 2));
+
+    // Metallic gradient
+    final light = Color.lerp(baseColor, Colors.white, 0.50)!;
+    final dark = Color.lerp(baseColor, Colors.black, 0.28)!;
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(paddleX, py),
+          Offset(paddleX, py + _paddleH),
+          [light, baseColor, dark],
+          [0.0, 0.50, 1.0],
+        ),
+    );
+
+    // Outer glow
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..color = baseColor.withValues(alpha: 0.30)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+    );
+
+    // Bright top edge
+    canvas.drawLine(
+      Offset(paddleX + _paddleH / 2 + 1, py + 1.5),
+      Offset(paddleX + paddleW - _paddleH / 2 - 1, py + 1.5),
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.55)
+        ..strokeWidth = 1.5,
+    );
+
+    // Laser gun nozzles
+    if (isLaser) {
+      final nozzleP = Paint()..color = const Color(0xFFFF4444);
+      final nozzleGlow = Paint()
+        ..color = const Color(0xFFFF4444).withValues(alpha: 0.35)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+      for (final nx in [paddleX + paddleW * 0.18, paddleX + paddleW * 0.82]) {
+        canvas.drawRect(Rect.fromLTWH(nx - 1.5, py - 4, 3, 5), nozzleP);
+        canvas.drawRect(Rect.fromLTWH(nx - 2.5, py - 5, 5, 6), nozzleGlow);
+      }
+    }
+  }
+
+  // ── Balls ────────────────────────────────────────────────────────────────
 
   void _drawBalls(Canvas canvas) {
     for (final ball in balls) {
-      final color = isFireball ? const Color(0xFFFF9800) : Colors.white;
-      canvas.drawCircle(Offset(ball.x, ball.y), _ballR, Paint()..color = color);
+      _drawSingleBall(canvas, ball.x, ball.y);
+    }
+  }
+
+  void _drawSingleBall(Canvas canvas, double x, double y) {
+    if (isBlast) {
+      // Fireball glow
       canvas.drawCircle(
-        Offset(ball.x, ball.y),
-        _ballR + 2,
+        Offset(x, y),
+        _ballR + 5,
         Paint()
-          ..color = color.withValues(alpha: 0.3)
+          ..color = const Color(0xFFFF6600).withValues(alpha: 0.18)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+      );
+      canvas.drawCircle(
+        Offset(x, y),
+        _ballR,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            Offset(x - _ballR * 0.3, y - _ballR * 0.35),
+            _ballR * 1.5,
+            [
+              const Color(0xFFFFEEAA),
+              const Color(0xFFFF8800),
+              const Color(0xFF882200),
+            ],
+            [0.0, 0.45, 1.0],
+          ),
+      );
+    } else if (isThru) {
+      // Cyan thru-ball
+      canvas.drawCircle(
+        Offset(x, y),
+        _ballR + 4,
+        Paint()
+          ..color = const Color(0xFF00CCFF).withValues(alpha: 0.18)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+      canvas.drawCircle(
+        Offset(x, y),
+        _ballR,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            Offset(x - _ballR * 0.3, y - _ballR * 0.35),
+            _ballR * 1.5,
+            [
+              Colors.white,
+              const Color(0xFF00CCFF),
+              const Color(0xFF003366),
+            ],
+            [0.0, 0.50, 1.0],
+          ),
+      );
+    } else {
+      // Normal metallic sphere
+      canvas.drawCircle(
+        Offset(x, y),
+        _ballR + 4,
+        Paint()
+          ..color = const Color(0xFF6699FF).withValues(alpha: 0.14)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+      canvas.drawCircle(
+        Offset(x, y),
+        _ballR,
+        Paint()
+          ..shader = ui.Gradient.radial(
+            Offset(x - _ballR * 0.30, y - _ballR * 0.36),
+            _ballR * 1.6,
+            [
+              Colors.white,
+              const Color(0xFFCCDDFF),
+              const Color(0xFF4466AA),
+            ],
+            [0.0, 0.40, 1.0],
+          ),
+      );
+    }
+
+    // Specular highlight (top-left)
+    canvas.drawCircle(
+      Offset(x - _ballR * 0.33, y - _ballR * 0.38),
+      _ballR * 0.30,
+      Paint()..color = Colors.white.withValues(alpha: 0.82),
+    );
+  }
+
+  // ── Laser bullets ────────────────────────────────────────────────────────
+
+  void _drawBullets(Canvas canvas) {
+    for (final b in bullets) {
+      canvas.drawRect(
+        Rect.fromCenter(center: Offset(b.x, b.y), width: 2.5, height: 9),
+        Paint()..color = const Color(0xFFFF5555),
+      );
+      canvas.drawRect(
+        Rect.fromCenter(center: Offset(b.x, b.y), width: 5, height: 11),
+        Paint()
+          ..color = const Color(0xFFFF4444).withValues(alpha: 0.25)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
       );
     }
   }
+
+  // ── Falling power-ups ────────────────────────────────────────────────────
 
   void _drawFallingPowerUps(Canvas canvas) {
     for (final pu in fallingPUs) {
       final Color color;
-      final String letter;
+      final String label;
       switch (pu.type) {
-        case _PUType.multiBall:
-          color = const Color(0xFFA29BFE);
-          letter = 'M';
-        case _PUType.widePaddle:
-          color = const Color(0xFF66BB6A);
-          letter = 'W';
-        case _PUType.extraLife:
-          color = const Color(0xFFFF6B6B);
-          letter = '+';
-        case _PUType.fireball:
-          color = const Color(0xFFFF9800);
-          letter = 'F';
-        case _PUType.slowBall:
-          color = const Color(0xFF4FC3F7);
-          letter = 'S';
+        case _PUType.expand:
+          color = const Color(0xFF44CC44);
+          label = 'EXPAND';
+        case _PUType.multiball:
+          color = const Color(0xFFAA44FF);
+          label = 'MULTI';
+        case _PUType.sticky:
+          color = const Color(0xFFFFCC00);
+          label = 'CATCH';
+        case _PUType.laser:
+          color = const Color(0xFFFF4444);
+          label = 'LASER';
+        case _PUType.thru:
+          color = const Color(0xFF00CCFF);
+          label = 'THRU';
+        case _PUType.life:
+          color = const Color(0xFFFF88AA);
+          label = '+LIFE';
+        case _PUType.slow:
+          color = const Color(0xFF4488FF);
+          label = 'SLOW';
+        case _PUType.blast:
+          color = const Color(0xFFFF8800);
+          label = 'BLAST';
       }
 
-      final rect = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(pu.x, pu.y),
-          width: _powerUpSize,
-          height: _powerUpSize,
-        ),
-        const Radius.circular(3),
-      );
-      canvas.drawRRect(rect, Paint()..color = color.withValues(alpha: 0.8));
+      // Pill / capsule shape
+      final rect = Rect.fromCenter(
+          center: Offset(pu.x, pu.y), width: _puW, height: _puH);
+      final rrect =
+          RRect.fromRectAndRadius(rect, Radius.circular(_puH / 2));
+
+      // Dark pill body
+      canvas.drawRRect(rrect, Paint()..color = const Color(0xFF0A0A1A));
+
+      // Coloured border
       canvas.drawRRect(
-        rect,
+        rrect,
         Paint()
-          ..color = color.withValues(alpha: 0.3)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
       );
 
+      // Inner glow fill
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = color.withValues(alpha: 0.12)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+
+      // Label text
       final tp = TextPainter(
         text: TextSpan(
-          text: letter,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 9,
-            fontWeight: FontWeight.w900,
+          text: label,
+          style: TextStyle(
+            color: color,
+            fontSize: 7,
+            fontWeight: FontWeight.w800,
             fontFamily: 'monospace',
+            letterSpacing: 0.5,
           ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(
-        canvas,
-        Offset(pu.x - tp.width / 2, pu.y - tp.height / 2),
-      );
+      tp.paint(canvas, Offset(pu.x - tp.width / 2, pu.y - tp.height / 2));
     }
   }
+
+  // ── Overlay ──────────────────────────────────────────────────────────────
 
   void _drawOverlay(Canvas canvas, Size size) {
     if (phase == _Phase.running) return;
 
     canvas.drawRect(
       Offset.zero & size,
-      Paint()..color = Colors.black.withValues(alpha: 0.5),
+      Paint()..color = Colors.black.withValues(alpha: 0.55),
     );
 
     final cy = size.height / 2;
 
     switch (phase) {
       case _Phase.waitingLaunch:
-        _drawText(canvas, size.width, cy - 12, 'КЛІК ДЛЯ ЗАПУСКУ', 24,
+        _drawText(canvas, size.width, cy - 14, 'КЛІК ДЛЯ ЗАПУСКУ', 22,
             Colors.white);
-        _drawText(canvas, size.width, cy + 20, 'Мишкою цільтесь', 11,
-            Colors.white.withValues(alpha: 0.5));
+        _drawText(canvas, size.width, cy + 18, 'Рухайте мишею для прицілювання',
+            10, Colors.white.withValues(alpha: 0.45));
       case _Phase.paused:
         _drawText(
-            canvas, size.width, cy - 12, 'ПАУЗА', 24, Colors.white);
+            canvas, size.width, cy - 14, 'ПАУЗА', 22, Colors.white);
         _drawText(
             canvas,
             size.width,
-            cy + 20,
-            'Клік для продовження \u00b7 R для перезапуску',
-            11,
-            Colors.white.withValues(alpha: 0.5));
+            cy + 18,
+            'Клік для продовження  ·  R для рестарту',
+            10,
+            Colors.white.withValues(alpha: 0.45));
       case _Phase.gameOver:
-        _drawText(
-            canvas, size.width, cy - 24, 'КІНЕЦЬ ГРИ', 24, Colors.white);
-        final sub = 'Рахунок: $score${highScore > 0 ? '  Рекорд: $highScore' : ''}';
-        _drawText(canvas, size.width, cy + 12, sub, 12,
+        _drawText(canvas, size.width, cy - 26, 'КІНЕЦЬ ГРИ', 24,
+            const Color(0xFFFF4444));
+        final sub =
+            'Рахунок: $score${highScore > 0 ? '   Рекорд: $highScore' : ''}';
+        _drawText(canvas, size.width, cy + 10, sub, 12,
             Colors.white.withValues(alpha: 0.7));
-        _drawText(canvas, size.width, cy + 34, 'Клік для перезапуску', 11,
-            Colors.white.withValues(alpha: 0.5));
+        _drawText(canvas, size.width, cy + 34, 'Клік для рестарту', 10,
+            Colors.white.withValues(alpha: 0.4));
       case _Phase.won:
-        _drawText(canvas, size.width, cy - 24, 'РІВЕНЬ ПРОЙДЕНО!', 24,
-            Colors.white);
-        _drawText(canvas, size.width, cy + 12, 'Рахунок: $score', 12,
+        _drawText(canvas, size.width, cy - 26, 'РІВЕНЬ ПРОЙДЕНО!', 24,
+            const Color(0xFFFFCC00));
+        _drawText(canvas, size.width, cy + 10, 'Рахунок: $score', 12,
             Colors.white.withValues(alpha: 0.7));
-        _drawText(canvas, size.width, cy + 34, 'Клік для наступного рівня', 11,
-            Colors.white.withValues(alpha: 0.5));
+        _drawText(canvas, size.width, cy + 34, 'Клік для наступного рівня', 10,
+            Colors.white.withValues(alpha: 0.4));
       case _Phase.running:
         break;
     }
@@ -1136,7 +1549,7 @@ class _ArkanoidPainter extends CustomPainter {
           fontSize: fontSize,
           fontWeight: FontWeight.w700,
           fontFamily: 'monospace',
-          letterSpacing: fontSize > 15 ? 3 : 1,
+          letterSpacing: fontSize > 14 ? 2.5 : 0.8,
         ),
       ),
       textDirection: TextDirection.ltr,
@@ -1145,5 +1558,5 @@ class _ArkanoidPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ArkanoidPainter old) => true;
+  bool shouldRepaint(covariant _DxBallPainter old) => true;
 }

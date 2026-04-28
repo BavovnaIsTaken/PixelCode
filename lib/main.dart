@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -108,6 +109,19 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   @override
   Widget build(BuildContext context) {
     final theme = ref.watch(appThemeDataProvider);
+    final colors = ref.watch(activeThemeColorsProvider);
+
+    if (Platform.isAndroid) {
+      final isDark =
+          ThemeData.estimateBrightnessForColor(colors.background) ==
+              Brightness.dark;
+      SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+        systemNavigationBarColor: colors.background,
+        systemNavigationBarContrastEnforced: false,
+        systemNavigationBarIconBrightness:
+            isDark ? Brightness.light : Brightness.dark,
+      ));
+    }
 
     return MaterialApp(
       title: 'ПіксельКод',

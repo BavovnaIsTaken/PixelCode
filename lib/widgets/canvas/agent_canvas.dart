@@ -28,6 +28,7 @@ import 'office_game_state.dart';
 import 'office_upgrade_dialog.dart';
 import 'pixel_office_painter.dart';
 import 'pixel_sprites.dart';
+import 'session_banner.dart';
 
 // ─── Main canvas widget ─────────────────────────────────────────────────────
 
@@ -466,6 +467,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             },
           ),
         ),
+
+        // Session presence banner — viewer/takeover overlay.
+        const SessionBanner(),
 
         // BuildMenu — narrow viewport only. On wide viewports the menu lives
         // in the chat-panel slot rendered by hub_screen, leaving the canvas
