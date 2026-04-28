@@ -143,6 +143,7 @@ sealed class ServerMessage {
       'dungeon_error' => DungeonErrorMessage.fromJson(json),
       'facilitator_seeded' => FacilitatorSeededMessage.fromJson(json),
       'facilitator_error' => FacilitatorErrorMessage.fromJson(json),
+      'facilitator_output_sync' => FacilitatorOutputSyncMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -618,6 +619,7 @@ enum HealthItemId {
   iosSigning,
   xcodeTools,
   androidSdk,
+  androidSigning,
   mdnsActive;
 
   static HealthItemId? fromWire(String raw) => switch (raw) {
@@ -629,6 +631,7 @@ enum HealthItemId {
         'iosSigning' => HealthItemId.iosSigning,
         'xcodeTools' => HealthItemId.xcodeTools,
         'androidSdk' => HealthItemId.androidSdk,
+        'androidSigning' => HealthItemId.androidSigning,
         'mdnsActive' => HealthItemId.mdnsActive,
         _ => null,
       };
@@ -642,6 +645,7 @@ enum HealthItemId {
         HealthItemId.iosSigning => 'iosSigning',
         HealthItemId.xcodeTools => 'xcodeTools',
         HealthItemId.androidSdk => 'androidSdk',
+        HealthItemId.androidSigning => 'androidSigning',
         HealthItemId.mdnsActive => 'mdnsActive',
       };
 }
@@ -919,6 +923,35 @@ class FacilitatorErrorMessage implements ServerMessage {
   FacilitatorErrorMessage({required this.error});
   factory FacilitatorErrorMessage.fromJson(Map<String, dynamic> json) =>
       FacilitatorErrorMessage(error: json['error'] as String? ?? '');
+}
+
+/// Cross-device sync — same payload shape as [FacilitatorSeededMessage],
+/// sent by the server to new clients on connect and broadcast to existing
+/// clients when a fresh seed completes.
+class FacilitatorOutputSyncMessage implements ServerMessage {
+  final String styleId;
+  final ScopeScore finalScore;
+  final OutputFormat outputFormat;
+  final String outputJson;
+
+  FacilitatorOutputSyncMessage({
+    required this.styleId,
+    required this.finalScore,
+    required this.outputFormat,
+    required this.outputJson,
+  });
+
+  factory FacilitatorOutputSyncMessage.fromJson(Map<String, dynamic> json) {
+    final rawScore = json['finalScore'];
+    return FacilitatorOutputSyncMessage(
+      styleId: json['styleId'] as String? ?? '',
+      finalScore: rawScore is Map<String, dynamic>
+          ? ScopeScore.fromJson(rawScore)
+          : const ScopeScore.empty(),
+      outputFormat: OutputFormat.fromKey(json['outputFormat'] as String? ?? ''),
+      outputJson: json['outputJson'] as String? ?? '',
+    );
+  }
 }
 
 // ─── Chat message model ─────────────────────────────────────────────────────

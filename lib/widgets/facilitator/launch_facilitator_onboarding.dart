@@ -16,6 +16,11 @@
 /// filesystem, or the WS.
 library;
 
+import 'dart:async';
+import 'dart:convert';
+
+import '../../models/agent_message.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -77,9 +82,46 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
     loadExisting: loadExisting ??
         (path) async {
           log('checking existing output at $path');
+          // Fast path: local disk already has a facilitator output.
           final existing = await FacilitatorOutputPersistenceService.load(path);
-          log('existing output: ${existing == null ? "none" : "FOUND — skipping onboarding"}');
-          return existing;
+          if (existing != null) {
+            log('found on disk — skipping onboarding, pushing to server');
+            // Push to server so other devices (e.g. iPhone) can sync it.
+            // Server ignores it if it already has one (safe to call always).
+            ws.sendPushFacilitatorOutput(
+              outputFormat: existing.format.key,
+              outputJson: existing.serialize(),
+            );
+            return existing;
+          }
+          // Pull from server: request and wait up to 3 s. Avoids the race
+          // where the WS connection fires _maybeRun before the greeting
+          // messages (including any facilitator_output_sync) have arrived.
+          log('nothing on disk — requesting from server…');
+          final completer = Completer<FacilitatorOutputSyncMessage>();
+          final sub = ws.messages.listen((msg) {
+            if (!completer.isCompleted && msg is FacilitatorOutputSyncMessage) {
+              completer.complete(msg);
+            }
+          });
+          ws.sendGetFacilitatorOutput();
+          FacilitatorOutputSyncMessage? syncMsg;
+          try {
+            syncMsg = await completer.future
+                .timeout(const Duration(seconds: 3));
+          } on TimeoutException {
+            log('server has no facilitator output (timeout)');
+          } finally {
+            await sub.cancel();
+          }
+          if (syncMsg == null) return null;
+          log('received sync from server — saving to disk');
+          final json = jsonDecode(syncMsg.outputJson) as Map<String, dynamic>;
+          final output = FacilitatorOutputPersistenceService.decode(json);
+          if (output != null) {
+            await FacilitatorOutputPersistenceService.save(path, output);
+          }
+          return output;
         },
     pickStyle: pickStyle ??
         (styles) {

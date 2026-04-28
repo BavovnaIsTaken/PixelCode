@@ -57,6 +57,11 @@ class AgentWsService {
   /// (common on localhost where server response is near-instant).
   ChatHistoryMessage? lastChatHistory;
 
+  /// Last received facilitator_output_sync — buffered so the onboarding check
+  /// can find it before the disk write completes (eliminates the race window
+  /// between server connect and FacilitatorAutoOnboarder._maybeRun).
+  FacilitatorOutputSyncMessage? lastFacilitatorOutputSync;
+
   Stream<ServerMessage> get messages => _messageController.stream;
 
   /// In-app connection log — visible on device for debugging.
@@ -136,6 +141,8 @@ class AgentWsService {
             if (msg is ServerInfoMessage) lastServerInfo = msg;
             // Buffer chat_history so late subscribers can read it
             if (msg is ChatHistoryMessage) lastChatHistory = msg;
+            // Buffer facilitator sync so onboarding skips before disk check
+            if (msg is FacilitatorOutputSyncMessage) lastFacilitatorOutputSync = msg;
             if (!_messageController.isClosed) _messageController.add(msg);
           } catch (e) {
             if (!_messageController.isClosed) {
@@ -433,6 +440,25 @@ class AgentWsService {
       'style': style.toJson(),
       'projectDescription': projectDescription,
       'answers': answers,
+    });
+  }
+
+  /// Ask the server for its persisted facilitator output.
+  /// Server replies with `facilitator_output_sync` if one exists.
+  void sendGetFacilitatorOutput() {
+    _send({'type': 'get_facilitator_output'});
+  }
+
+  /// Upload local facilitator output to the server so other devices can sync.
+  /// Server only stores it if it has nothing yet (safe to call unconditionally).
+  void sendPushFacilitatorOutput({
+    required String outputFormat,
+    required String outputJson,
+  }) {
+    _send({
+      'type': 'push_facilitator_output',
+      'outputFormat': outputFormat,
+      'outputJson': outputJson,
     });
   }
 

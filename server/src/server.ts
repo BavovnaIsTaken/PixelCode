@@ -48,6 +48,12 @@ import {
 const localGemini = new LocalGeminiRunner();
 import { runDungeon, getChallenge } from "./dungeon.js";
 import { FacilitatorRunner, type RunnerState } from "./facilitator/runner.js";
+import { GeneratorRegistry } from "./facilitator/output_generator.js";
+import {
+  ClaudeQuestLineGenerator,
+  ClaudeMissionBriefingGenerator,
+  ClaudeMilestoneTreeGenerator,
+} from "./facilitator/llm_generators.js";
 import {
   parseStartRequest as parseFacilitatorStart,
   handleStartRequest as handleFacilitatorStart,
@@ -614,16 +620,21 @@ const nonStreamingProviders = new Map<number, NonStreamingProviderConfig>([
 const clientFacilitatorState = new WeakMap<WebSocket, RunnerState>();
 
 /**
- * Singleton runner — purely behavioral, holds no per-client state. Default
- * `GeneratorRegistry` ships stub generators for the MVP output mappers
- * (quest_line / mission_briefing / milestone_tree); LLM-backed generators
- * register themselves via `setGenerator` once available.
+ * Singleton runner with LLM-backed generators wired in at boot.
+ * Tests continue to use GeneratorRegistry with stubs via RunnerDeps injection.
  */
-const facilitatorRunner = new FacilitatorRunner();
+const _facilitatorGenerators = new GeneratorRegistry();
+_facilitatorGenerators.setGenerator("quest_line", new ClaudeQuestLineGenerator(PROJECT_CWD));
+_facilitatorGenerators.setGenerator("mission_briefing", new ClaudeMissionBriefingGenerator(PROJECT_CWD));
+_facilitatorGenerators.setGenerator("milestone_tree", new ClaudeMilestoneTreeGenerator(PROJECT_CWD));
+const facilitatorRunner = new FacilitatorRunner({ generators: _facilitatorGenerators });
 
 /** Latest full game state for cross-device sync (last-write-wins by timestamp). */
 let latestFullGameState: string | null = null;
 let latestStateUpdatedAt: number = 0;
+
+/** Latest facilitator output for cross-device sync. */
+let latestFacilitatorOutput: { styleId: string; finalScore: unknown; outputFormat: string; outputJson: string } | null = null;
 
 /** Path where the authoritative game state is persisted across server restarts. */
 function gameStateFile(projectPath: string): string {
@@ -662,6 +673,39 @@ function persistGameState(): void {
 }
 
 loadPersistedGameState();
+
+function facilitatorOutputFile(projectPath: string): string {
+  const key = projectPath.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".pixelcode", "projects", key, "facilitator_output.json");
+}
+
+function loadPersistedFacilitatorOutput(): void {
+  const file = facilitatorOutputFile(PROJECT_CWD);
+  if (!existsSync(file)) return;
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf-8"));
+    if (raw && typeof raw.outputJson === "string") {
+      latestFacilitatorOutput = raw;
+      dbg("info", "facilitator", "Loaded persisted facilitator output");
+    }
+  } catch (e) {
+    dbg("warn", "facilitator", `Failed to load persisted facilitator output: ${e}`);
+  }
+}
+
+function persistFacilitatorOutput(): void {
+  if (!latestFacilitatorOutput) return;
+  const file = facilitatorOutputFile(PROJECT_CWD);
+  const dir = file.substring(0, file.lastIndexOf("/"));
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify(latestFacilitatorOutput));
+  } catch (e) {
+    dbg("warn", "facilitator", `Failed to persist facilitator output: ${e}`);
+  }
+}
+
+loadPersistedFacilitatorOutput();
 
 /**
  * Per-client flag: tracks whether an assistant_message_done was sent for the
@@ -2507,6 +2551,7 @@ async function iosDeployStart(ws: WebSocket): Promise<void> {
   sendDeployLog(ws, "");
 
   send(ws, { type: "ios_deploy_status", subtype: "install_ready", installUrl } as any);
+  send(ws, { type: "ios_deploy_status", subtype: "complete", success: true } as any);
   activeDeployProcess.delete(ws);
 }
 
@@ -2835,6 +2880,7 @@ async function androidDeployStart(ws: WebSocket, requestedSerial?: string): Prom
   sendAndroidDeployLog(ws, "===============================================");
 
   send(ws, { type: "android_deploy_status", subtype: "install_ready", installUrl } as any);
+  send(ws, { type: "android_deploy_status", subtype: "complete", success: true } as any);
   activeAndroidDeployProcess.delete(ws);
 }
 
@@ -3054,6 +3100,7 @@ function buildHealthContext(): HealthContext {
     serverListening: httpServer.listening,
     mdnsActive,
     restartMdns,
+    projectCwd: PROJECT_CWD,
   };
 }
 
@@ -3504,13 +3551,41 @@ wss.on("connection", (ws, request) => {
             "facilitator",
             `Seeded "${parsed.value.style.id}" → ${result.seed.outputFormat} (${result.seed.outputJson.length}B)`,
           );
-          send(ws, {
-            type: "facilitator_seeded",
+          const facilitatorPayload = {
             styleId: parsed.value.style.id,
             finalScore: result.seed.finalScore,
             outputFormat: result.seed.outputFormat,
             outputJson: result.seed.outputJson,
-          } as any);
+          };
+          send(ws, { type: "facilitator_seeded", ...facilitatorPayload } as any);
+          // Persist and broadcast so other connected clients get it.
+          latestFacilitatorOutput = facilitatorPayload;
+          persistFacilitatorOutput();
+          broadcastExcept(ws, { type: "facilitator_output_sync", ...facilitatorPayload } as any);
+          break;
+        }
+
+        case "get_facilitator_output": {
+          if (latestFacilitatorOutput) {
+            send(ws, { type: "facilitator_output_sync", ...latestFacilitatorOutput } as any);
+          }
+          break;
+        }
+
+        case "push_facilitator_output": {
+          // Client pushes its local output so the server can serve other devices.
+          // Only accept if server has nothing — prevents stale client data from
+          // overwriting a fresher seed.
+          if (!latestFacilitatorOutput) {
+            latestFacilitatorOutput = {
+              styleId: "",
+              finalScore: {},
+              outputFormat: msg.outputFormat,
+              outputJson: msg.outputJson,
+            };
+            persistFacilitatorOutput();
+            dbg("info", "facilitator", `Accepted push_facilitator_output from client (${msg.outputJson.length}B)`);
+          }
           break;
         }
 

@@ -127,7 +127,14 @@ export type ClientMessage =
       style: FacilitatorStyle;
       projectDescription: string;
       answers: IntakeAnswers;
-    };
+    }
+  // Pull request: client asks server for the persisted facilitator output.
+  // Server replies with `facilitator_output_sync` if one exists, or nothing.
+  | { type: "get_facilitator_output" }
+  // Push: client uploads its locally stored facilitator output so the server
+  // can serve it to other devices. Sent when client finds output on disk but
+  // the server may not have it yet (e.g. after a server restart or first sync).
+  | { type: "push_facilitator_output"; outputFormat: string; outputJson: string };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -466,7 +473,17 @@ export type ServerMessage =
       outputFormat: OutputFormatKey;
       outputJson: string;
     }
-  | { type: "facilitator_error"; error: string };
+  | { type: "facilitator_error"; error: string }
+  // Cross-device sync — sent to new clients on connect and broadcast to all
+  // other clients when a new facilitator output is seeded. Same payload as
+  // `facilitator_seeded` so clients can reuse the same decode path.
+  | {
+      type: "facilitator_output_sync";
+      styleId: string;
+      finalScore: ScopeScore;
+      outputFormat: OutputFormatKey;
+      outputJson: string;
+    };
 
 /** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */
 export type HealthItemId =
@@ -477,6 +494,7 @@ export type HealthItemId =
   | "iosSigning"
   | "xcodeTools"
   | "androidSdk"
+  | "androidSigning"
   | "mdnsActive";
 
 /** Status of a single health check item. */
