@@ -280,6 +280,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       hardware: HardwareTier.oldLaptop,
       provider: AgentProviderType.values[role.defaultProvider],
       skills: initialSkillsForRole(roleType),
+      workplaceStatus: WorkplaceStatus.unassigned,
     );
 
     _updateStateAndSync(state.copyWith(
@@ -336,6 +337,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       provider: character.defaultProvider,
       skills: Map<SkillType, int>.from(character.statWeights),
       characterId: character.id,
+      workplaceStatus: WorkplaceStatus.unassigned,
     );
 
     _updateStateAndSync(state.copyWith(
@@ -378,6 +380,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       customSystemPrompt:
           data.systemPrompt.isEmpty ? null : data.systemPrompt,
       personalityPreset: data.personalityPreset,
+      workplaceStatus: WorkplaceStatus.unassigned,
     );
 
     _updateStateAndSync(state.copyWith(
@@ -408,6 +411,17 @@ class GameEconomyNotifier extends Notifier<GameState> {
       grymni: state.grymni + refund,
       agents: updated,
     ));
+  }
+
+  /// Mark an agent's workstation as assigned once the canvas detects that
+  /// a Workstation Room was built and the agent got a seat. Idempotent.
+  void assignWorkplace(String instanceId) {
+    final agent = state.agents[instanceId];
+    if (agent == null) return;
+    if (agent.workplaceStatus == WorkplaceStatus.assigned) return;
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = agent.copyWith(workplaceStatus: WorkplaceStatus.assigned);
+    _updateStateAndSync(state.copyWith(agents: updated));
   }
 
   /// Rename an instance's nickname. Free within the game (no currency cost).
@@ -732,10 +746,9 @@ class GameEconomyNotifier extends Notifier<GameState> {
   // ─── Furniture ────────────────────────────────────────────────────────
 
   bool ownsFurniture(String itemId) =>
-      state.ownedFurniture.contains(itemId);
+      (state.furnitureInventory[itemId] ?? 0) > 0;
 
   bool canPurchaseFurniture(String itemId) {
-    if (ownsFurniture(itemId)) return false;
     final item = furnitureById(itemId);
     if (item == null) return false;
     return state.grymni >= item.cost;
@@ -745,16 +758,17 @@ class GameEconomyNotifier extends Notifier<GameState> {
     if (!canPurchaseFurniture(itemId)) return;
     final item = furnitureById(itemId)!;
 
-    final owned = Set<String>.from(state.ownedFurniture)..add(itemId);
+    final inv = Map<String, int>.from(state.furnitureInventory);
+    inv[itemId] = (inv[itemId] ?? 0) + 1;
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni - item.cost,
       totalSpent: state.totalSpent + item.cost,
-      ownedFurniture: owned,
+      furnitureInventory: inv,
     ));
   }
 
   void placeFurniture(String itemId, int col, int row) {
-    if (!ownsFurniture(itemId)) return;
+    if (state.furnitureAvailable(itemId) <= 0) return;
     final placed = List<FurniturePlacement>.from(state.placedFurniture)
       ..add(FurniturePlacement(itemId: itemId, col: col, row: row));
     _updateStateAndSync(state.copyWith(placedFurniture: placed));
@@ -830,7 +844,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
           rotation: rotation));
 
     final placed = List<FurniturePlacement>.from(state.placedFurniture);
-    final owned = Set<String>.from(state.ownedFurniture);
+    final inv = Map<String, int>.from(state.furnitureInventory);
     for (final slot in template.furniture) {
       // Slot offsets are stored relative to the unrotated room footprint.
       // For Stage 2 the placement is rotation-naive — when rotation lands
@@ -841,7 +855,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
         col: col + slot.colOffset,
         row: row + slot.rowOffset,
       ));
-      owned.add(slot.furnitureId);
+      inv[slot.furnitureId] = (inv[slot.furnitureId] ?? 0) + 1;
     }
 
     _updateStateAndSync(state.copyWith(
@@ -849,7 +863,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalSpent: state.totalSpent + cost,
       placedRooms: rooms,
       placedFurniture: placed,
-      ownedFurniture: owned,
+      furnitureInventory: inv,
     ));
   }
 

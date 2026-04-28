@@ -13,6 +13,7 @@ import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import 'furniture_sprites.dart';
 
 class BuildDecorSection extends ConsumerStatefulWidget {
   const BuildDecorSection({super.key});
@@ -29,9 +30,12 @@ class _BuildDecorSectionState extends ConsumerState<BuildDecorSection> {
     final game = ref.watch(gameEconomyProvider);
     final notifier = ref.read(gameEconomyProvider.notifier);
     final c = context.appColors;
+    final selectedId = ref.watch(selectedFurnitureIdProvider);
 
     final filtered =
         furnitureCatalog.where((f) => f.type == _selectedType).toList();
+    final totalOwned =
+        game.furnitureInventory.values.fold(0, (a, b) => a + b);
 
     return ListView(
       padding: const EdgeInsets.all(12),
@@ -39,10 +43,8 @@ class _BuildDecorSectionState extends ConsumerState<BuildDecorSection> {
         _SectionHeader(
           icon: Icons.chair_outlined,
           title: 'Меблі офісу',
-          trailing: '${game.ownedFurniture.length} придбано',
+          trailing: 'У інвентарі: $totalOwned',
         ),
-        const SizedBox(height: 8),
-        _editModeBlock(c, game),
         const SizedBox(height: 16),
         _SectionHeader(icon: Icons.category_outlined, title: 'Категорія'),
         const SizedBox(height: 8),
@@ -58,6 +60,37 @@ class _BuildDecorSectionState extends ConsumerState<BuildDecorSection> {
               ),
           ],
         ),
+        // Placement hint banner — appears whenever an item is active
+        if (selectedId != null) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: c.accent.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.touch_app_outlined,
+                  size: 12,
+                  color: c.accent.withValues(alpha: 0.6),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Тап на канвасі — розмістити  ·  Тап тут — скасувати',
+                    style: TextStyle(
+                      color: c.accent.withValues(alpha: 0.6),
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         _SectionHeader(
           icon: Icons.storefront_outlined,
@@ -67,181 +100,32 @@ class _BuildDecorSectionState extends ConsumerState<BuildDecorSection> {
         for (final item in filtered)
           _ItemCard(
             item: item,
-            isOwned: game.ownedFurniture.contains(item.id),
+            totalQty: game.furnitureInventory[item.id] ?? 0,
+            availableQty: game.furnitureAvailable(item.id),
+            isActive: selectedId == item.id,
             canBuy: notifier.canPurchaseFurniture(item.id),
             onBuy: () {
               notifier.purchaseFurniture(item.id);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('«${item.name}» придбано! −${item.cost}₲'),
+                  content: Text('«${item.name}» у інвентарі! −${item.cost}₲'),
                   backgroundColor: c.success,
                   behavior: SnackBarBehavior.floating,
                   duration: const Duration(seconds: 2),
                 ),
               );
             },
-          ),
-      ],
-    );
-  }
-
-  Widget _editModeBlock(ThemeColors c, GameState game) {
-    final isEditMode = ref.watch(furnitureEditModeProvider);
-    final selectedId = ref.watch(selectedFurnitureIdProvider);
-    final selectedItem =
-        selectedId != null ? furnitureById(selectedId) : null;
-
-    return Column(
-      children: [
-        GestureDetector(
-          onTap: () {
-            final current = ref.read(furnitureEditModeProvider);
-            ref.read(furnitureEditModeProvider.notifier).state = !current;
-            if (current) {
-              ref.read(selectedFurnitureIdProvider.notifier).state = null;
-            }
-          },
-          child: Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: isEditMode
-                  ? c.accent.withValues(alpha: 0.12)
-                  : c.surfaceDim,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isEditMode
-                    ? c.accent.withValues(alpha: 0.4)
-                    : c.border,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isEditMode
-                      ? Icons.grid_on_rounded
-                      : Icons.grid_view_rounded,
-                  size: 14,
-                  color: isEditMode ? c.accent : c.accent.withValues(alpha: 0.6),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  isEditMode
-                      ? 'Редактор увімкнено'
-                      : 'Розмістити меблі',
-                  style: TextStyle(
-                    color: isEditMode ? c.accent : c.textMedium,
-                    fontSize: 10,
-                    fontWeight:
-                        isEditMode ? FontWeight.w600 : FontWeight.w400,
-                  ),
-                ),
-                const Spacer(),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: isEditMode
-                        ? c.accent.withValues(alpha: 0.2)
-                        : c.surfaceDim,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    isEditMode ? 'ВИМКНУТИ' : 'УВІМКНУТИ',
-                    style: TextStyle(
-                      color: isEditMode ? c.accent : c.textLow,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (isEditMode) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: c.surfaceDim,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: c.border),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  selectedItem != null
-                      ? 'Обрано: ${selectedItem.name}'
-                      : 'Обери предмет для розміщення:',
-                  style: TextStyle(color: c.textMedium, fontSize: 9),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 4,
-                  runSpacing: 4,
-                  children: [
-                    for (final id in game.ownedFurniture)
-                      GestureDetector(
-                        onTap: () => ref
-                            .read(selectedFurnitureIdProvider.notifier)
-                            .state = selectedId == id ? null : id,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 8, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: selectedId == id
-                                ? c.accent.withValues(alpha: 0.2)
-                                : c.surface,
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(
-                              color: selectedId == id
-                                  ? c.accent.withValues(alpha: 0.5)
-                                  : c.border,
-                            ),
-                          ),
-                          child: Text(
-                            furnitureById(id)?.name ?? id,
-                            style: TextStyle(
-                              color: selectedId == id
-                                  ? c.accent
-                                  : c.textMedium,
-                              fontSize: 9,
-                              fontWeight: selectedId == id
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Тап на полотні = розмістити. Тап на меблях = прибрати.',
-                  style: TextStyle(color: c.textLow, fontSize: 8),
-                ),
-              ],
-            ),
-          ),
-        ],
-        if (!isEditMode)
-          Container(
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: c.surfaceDim,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'Розміщено: ${game.placedFurniture.length}',
-              style: TextStyle(color: c.textMedium, fontSize: 9),
-            ),
+            onActivate: () =>
+                ref.read(selectedFurnitureIdProvider.notifier).state = item.id,
+            onDeactivate: () =>
+                ref.read(selectedFurnitureIdProvider.notifier).state = null,
           ),
       ],
     );
   }
 }
+
+// ─── Section header ──────────────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
   final IconData icon;
@@ -286,6 +170,8 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+// ─── Category chip ───────────────────────────────────────────────────────────
+
 class _TypeChip extends StatelessWidget {
   final FurnitureType type;
   final bool isSelected;
@@ -305,14 +191,12 @@ class _TypeChip extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected
-              ? c.accent.withValues(alpha: 0.15)
-              : c.surfaceDim,
+          color:
+              isSelected ? c.accent.withValues(alpha: 0.15) : c.surfaceDim,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: isSelected
-                ? c.accent.withValues(alpha: 0.4)
-                : c.border,
+            color:
+                isSelected ? c.accent.withValues(alpha: 0.4) : c.border,
           ),
         ),
         child: Row(
@@ -335,124 +219,301 @@ class _TypeChip extends StatelessWidget {
   }
 }
 
+// ─── Item card ───────────────────────────────────────────────────────────────
+
 class _ItemCard extends StatelessWidget {
   final FurnitureItem item;
-  final bool isOwned;
+  final int totalQty;      // total copies purchased
+  final int availableQty;  // copies in inventory (not placed)
+  final bool isActive;     // currently selected for placement
   final bool canBuy;
   final VoidCallback onBuy;
+  final VoidCallback onActivate;
+  final VoidCallback onDeactivate;
 
   const _ItemCard({
     required this.item,
-    required this.isOwned,
+    required this.totalQty,
+    required this.availableQty,
+    required this.isActive,
     required this.canBuy,
     required this.onBuy,
+    required this.onActivate,
+    required this.onDeactivate,
   });
 
   @override
   Widget build(BuildContext context) {
     final c = context.appColors;
-    final borderColor = isOwned
-        ? c.success.withValues(alpha: 0.3)
-        : c.border;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: c.surfaceDim,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: c.surface,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Center(
-              child: Text(item.type.icon,
-                  style: const TextStyle(fontSize: 16)),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    final notOwned = totalQty == 0;
+    final outOfStock = totalQty > 0 && availableQty <= 0;
+    final hasStock = availableQty > 0;
+
+    final Color borderColor;
+    final Color bgColor;
+    final double opacity;
+
+    if (isActive) {
+      borderColor = c.accent;
+      bgColor = c.accent.withValues(alpha: 0.10);
+      opacity = 1.0;
+    } else if (hasStock) {
+      borderColor = c.success.withValues(alpha: 0.25);
+      bgColor = c.surfaceDim;
+      opacity = 1.0;
+    } else if (outOfStock) {
+      borderColor = c.border;
+      bgColor = c.surfaceDim;
+      opacity = 0.55;
+    } else {
+      borderColor = c.border;
+      bgColor = c.surfaceDim;
+      opacity = 1.0;
+    }
+
+    return GestureDetector(
+      onTap: isActive
+          ? onDeactivate
+          : (hasStock ? onActivate : null),
+      child: Opacity(
+        opacity: opacity,
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 8),
+          child: Stack(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: bgColor,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: borderColor,
+                    width: isActive ? 2 : 1,
+                  ),
+                ),
+                child: Row(
                   children: [
-                    Flexible(
-                      child: Text(
-                        item.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: isOwned ? c.textHigh : c.textMedium,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                    _ItemIcon(item: item),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  item.name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: isActive
+                                        ? c.accent
+                                        : (notOwned
+                                            ? c.textMedium
+                                            : c.textHigh),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              if (item.widthTiles > 1 ||
+                                  item.heightTiles > 1) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: c.accent.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                  child: Text(
+                                    '${item.widthTiles}x${item.heightTiles}',
+                                    style: TextStyle(
+                                      color:
+                                          c.accent.withValues(alpha: 0.8),
+                                      fontSize: 7,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            item.description,
+                            style:
+                                TextStyle(color: c.textLow, fontSize: 9),
+                          ),
+                        ],
                       ),
                     ),
-                    if (item.widthTiles > 1 || item.heightTiles > 1) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 4, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: c.accent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                        child: Text(
-                          '${item.widthTiles}x${item.heightTiles}',
-                          style: TextStyle(
-                            color: c.accent.withValues(alpha: 0.8),
-                            fontSize: 7,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (isOwned) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: c.success.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          'КУПЛЕНО',
-                          style: TextStyle(
-                            color: c.success,
-                            fontSize: 7,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ],
+                    const SizedBox(width: 8),
+                    _buildAction(c, hasStock, outOfStock),
                   ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  item.description,
-                  style: TextStyle(color: c.textLow, fontSize: 9),
+              ),
+              // Left accent strip — active state only
+              if (isActive)
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 3,
+                    decoration: BoxDecoration(
+                      color: c.accent,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        bottomLeft: Radius.circular(8),
+                      ),
+                    ),
+                  ),
                 ),
-              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAction(
+      ThemeColors c, bool hasStock, bool outOfStock) {
+    if (isActive) {
+      return _ActionChip(
+        label: 'Скасувати',
+        color: c.accent,
+        onTap: onDeactivate,
+      );
+    }
+    if (hasStock) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _QtyBadge(qty: availableQty, color: c.success),
+          const SizedBox(width: 6),
+          _ActionChip(
+            label: 'Місце',
+            color: c.accent,
+            onTap: onActivate,
+          ),
+        ],
+      );
+    }
+    if (outOfStock) {
+      return _ActionChip(
+        label: '+${item.cost}₲',
+        color: c.accent,
+        onTap: canBuy ? onBuy : null,
+      );
+    }
+    // Not owned
+    return _BuyButton(
+      label: '${item.cost}₲',
+      enabled: canBuy,
+      onTap: canBuy ? onBuy : null,
+    );
+  }
+}
+
+// ─── Small helpers ────────────────────────────────────────────────────────────
+
+class _QtyBadge extends StatelessWidget {
+  final int qty;
+  final Color color;
+
+  const _QtyBadge({required this.qty, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = qty > 99 ? '×99+' : '×$qty';
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 26),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.30)),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final VoidCallback? onTap;
+
+  const _ActionChip({
+    required this.label,
+    required this.color,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final effectiveColor = enabled ? color : color.withValues(alpha: 0.4);
+    return MouseRegion(
+      cursor:
+          enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: effectiveColor.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+                color: effectiveColor.withValues(alpha: enabled ? 0.4 : 0.15)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: effectiveColor,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          const SizedBox(width: 8),
-          if (isOwned)
-            Icon(Icons.check_circle, size: 18, color: c.success.withValues(alpha: 0.6))
-          else
-            _BuyButton(
-              label: '${item.cost}₲',
-              enabled: canBuy,
-              onTap: canBuy ? onBuy : null,
-            ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ItemIcon extends StatelessWidget {
+  final FurnitureItem item;
+
+  const _ItemIcon({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final sprite = furnitureSpriteMap[item.id];
+    return Container(
+      width: 40,
+      height: 44,
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F0F1E),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF252540)),
+      ),
+      child: Center(
+        child: sprite != null
+            ? FurnitureSpriteIcon(itemId: item.id, scale: 3.5)
+            : Text(item.type.icon, style: const TextStyle(fontSize: 16)),
       ),
     );
   }
@@ -482,7 +543,8 @@ class _BuyButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: color.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: color.withValues(alpha: enabled ? 0.4 : 0.15)),
+            border: Border.all(
+                color: color.withValues(alpha: enabled ? 0.4 : 0.15)),
           ),
           child: Text(
             label,

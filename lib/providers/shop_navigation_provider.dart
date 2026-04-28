@@ -17,8 +17,11 @@ const shopTabDonation = 4;
 /// and then reset this back to null.
 final shopDeepLinkProvider = StateProvider<int?>((ref) => null);
 
-/// Whether the furniture grid editor overlay is active.
-final furnitureEditModeProvider = StateProvider<bool>((ref) => false);
-
 /// The furniture item ID currently selected for placement (null = none).
 final selectedFurnitureIdProvider = StateProvider<String?>((ref) => null);
+
+/// True whenever an item is selected for placement — derived from
+/// [selectedFurnitureIdProvider] so canvas code needs no changes.
+final furnitureEditModeProvider = Provider<bool>(
+  (ref) => ref.watch(selectedFurnitureIdProvider) != null,
+);

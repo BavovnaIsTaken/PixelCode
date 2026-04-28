@@ -342,6 +342,14 @@ extension SkillTypeExt on SkillType {
 /// Presence in [GameState.agents] implies "hired" — there is no separate flag.
 const _agentSentinel = Object();
 
+/// Whether an agent has a physical workstation assigned in the office.
+///
+/// [unassigned] — newly hired; no desk yet. Coding/testing/debugging tasks
+/// suffer an increased incomplete chance until the player builds and assigns
+/// a Workstation Room (Build System B.1).
+/// [assigned] — has a canonical or extra desk; works at full efficiency.
+enum WorkplaceStatus { unassigned, assigned }
+
 class AgentGameData {
   /// Stable unique identifier, e.g. "coder#1", "coder#2". Used as the map key
   /// in [GameState.agents] and the address for chat/dispatch.
@@ -380,6 +388,11 @@ class AgentGameData {
   /// Informational — the actual effect is encoded in [skills].
   final String? personalityPreset;
 
+  /// Whether this agent has a workstation assigned in the office.
+  /// Defaults to [WorkplaceStatus.assigned] for backward-compatible seeded
+  /// agents; newly hired agents should be created with [WorkplaceStatus.unassigned].
+  final WorkplaceStatus workplaceStatus;
+
   const AgentGameData({
     required this.instanceId,
     required this.roleType,
@@ -392,6 +405,7 @@ class AgentGameData {
     this.characterId,
     this.customSystemPrompt,
     this.personalityPreset,
+    this.workplaceStatus = WorkplaceStatus.assigned,
   });
 
   /// Average skill value — purely a cosmetic summary for UI.
@@ -414,6 +428,7 @@ class AgentGameData {
     String? characterId,
     Object? customSystemPrompt = _agentSentinel,
     Object? personalityPreset = _agentSentinel,
+    WorkplaceStatus? workplaceStatus,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -431,6 +446,7 @@ class AgentGameData {
         personalityPreset: identical(personalityPreset, _agentSentinel)
             ? this.personalityPreset
             : personalityPreset as String?,
+        workplaceStatus: workplaceStatus ?? this.workplaceStatus,
       );
 
   Map<String, dynamic> toJson() => {
@@ -447,6 +463,8 @@ class AgentGameData {
         if (characterId != null) 'characterId': characterId,
         if (customSystemPrompt != null) 'customSystemPrompt': customSystemPrompt,
         if (personalityPreset != null) 'personalityPreset': personalityPreset,
+        if (workplaceStatus != WorkplaceStatus.assigned)
+          'workplaceStatus': workplaceStatus.index,
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -465,6 +483,8 @@ class AgentGameData {
         characterId: json['characterId'] as String?,
         customSystemPrompt: json['customSystemPrompt'] as String?,
         personalityPreset: json['personalityPreset'] as String?,
+        workplaceStatus: WorkplaceStatus.values[
+            json['workplaceStatus'] as int? ?? WorkplaceStatus.assigned.index],
       );
 }
 
@@ -1902,8 +1922,23 @@ class GameState {
   /// Theme ownership, active theme, and per-theme customisations.
   final ThemeState themeState;
 
-  /// IDs of purchased furniture items.
-  final Set<String> ownedFurniture;
+  /// Purchased furniture items: itemId → total copies bought (not placed).
+  /// Use [furnitureAvailable] to know how many are ready to place.
+  final Map<String, int> furnitureInventory;
+
+  /// IDs of furniture items the player owns at least one copy of.
+  Set<String> get ownedFurniture =>
+      furnitureInventory.entries
+          .where((e) => e.value > 0)
+          .map((e) => e.key)
+          .toSet();
+
+  /// How many copies of [itemId] are in inventory (bought but not yet placed).
+  int furnitureAvailable(String itemId) {
+    final total = furnitureInventory[itemId] ?? 0;
+    final placed = placedFurniture.where((p) => p.itemId == itemId).length;
+    return (total - placed).clamp(0, total);
+  }
 
   /// Placed furniture items with their grid positions.
   final List<FurniturePlacement> placedFurniture;
@@ -1938,7 +1973,7 @@ class GameState {
     this.ownedCosmetics = const {},
     this.equippedCosmetics = const {},
     this.themeState = const ThemeState(),
-    this.ownedFurniture = const {},
+    this.furnitureInventory = const {},
     this.placedFurniture = const [],
     this.placedRooms = const [],
     this.placedCorridors = const [],
@@ -2015,7 +2050,7 @@ class GameState {
     Set<String>? ownedCosmetics,
     Map<int, String>? equippedCosmetics,
     ThemeState? themeState,
-    Set<String>? ownedFurniture,
+    Map<String, int>? furnitureInventory,
     List<FurniturePlacement>? placedFurniture,
     List<PlacedRoom>? placedRooms,
     List<PlacedCorridor>? placedCorridors,
@@ -2036,7 +2071,7 @@ class GameState {
         ownedCosmetics: ownedCosmetics ?? this.ownedCosmetics,
         equippedCosmetics: equippedCosmetics ?? this.equippedCosmetics,
         themeState: themeState ?? this.themeState,
-        ownedFurniture: ownedFurniture ?? this.ownedFurniture,
+        furnitureInventory: furnitureInventory ?? this.furnitureInventory,
         placedFurniture: placedFurniture ?? this.placedFurniture,
         placedRooms: placedRooms ?? this.placedRooms,
         placedCorridors: placedCorridors ?? this.placedCorridors,
@@ -2067,7 +2102,7 @@ class GameState {
             e.key.toString(): e.value,
         },
         'themeState': themeState.toJson(),
-        'ownedFurniture': ownedFurniture.toList(),
+        'furnitureInventory': furnitureInventory,
         'placedFurniture': [
           for (final p in placedFurniture) p.toJson(),
         ],
@@ -2153,10 +2188,17 @@ class GameState {
         themeState: json['themeState'] != null
             ? ThemeState.fromJson(json['themeState'] as Map<String, dynamic>)
             : const ThemeState(),
-        ownedFurniture: {
-          for (final id in (json['ownedFurniture'] as List<dynamic>?) ?? [])
-            id as String,
-        },
+        furnitureInventory: () {
+          // v7+: map format. Fallback: migrate old list → qty 1 each.
+          final newFmt = json['furnitureInventory'] as Map<String, dynamic>?;
+          if (newFmt != null) {
+            return {for (final e in newFmt.entries) e.key: e.value as int};
+          }
+          return {
+            for (final id in (json['ownedFurniture'] as List<dynamic>?) ?? [])
+              id as String: 1,
+          };
+        }(),
         placedFurniture: furniture,
         placedRooms: rooms,
         placedCorridors: corridors,
@@ -2223,7 +2265,7 @@ class GameState {
       agents: agents,
       nickname: generateGameNickname(seed),
       ownedCosmetics: {'title_rookie'}, // Free starter title
-      ownedFurniture: {'old_desk', 'stool', 'cardboard_boxes'},
+      furnitureInventory: {'old_desk': 1, 'stool': 1, 'cardboard_boxes': 1},
       // Garage base grid is 7×5 (inner cols 1..5, rows 1..3). Pre-place the
       // starter props along the far row so the office reads "lived-in" but
       // the player can clear them out via the furniture editor.

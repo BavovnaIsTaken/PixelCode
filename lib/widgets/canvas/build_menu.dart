@@ -137,8 +137,11 @@ class BuildMenu extends ConsumerWidget {
             onPressed: () => ref.read(buildModeProvider.notifier).exit(),
           ),
           const SizedBox(height: 4),
-          for (final s in BuildSection.values)
-            _railTile(context, ref, s, mode.section),
+          _SlidingRail(
+            sections: BuildSection.values.toList(),
+            active: mode.section,
+            onSelect: (s) => ref.read(buildModeProvider.notifier).setSection(s),
+          ),
           const Spacer(),
           IconButton(
             tooltip: isEditMode ? 'Вийти з редагування' : 'Видалити кімнати',
@@ -148,8 +151,10 @@ class BuildMenu extends ConsumerWidget {
             ),
             onPressed: () {
               final next = !ref.read(furnitureEditModeProvider);
-              ref.read(furnitureEditModeProvider.notifier).state = next;
-              if (next) {
+              if (!next) {
+                // Exiting edit mode: clear furniture placement selection.
+                ref.read(selectedFurnitureIdProvider.notifier).state = null;
+              } else {
                 // Entering edit mode abandons any in-flight pick — can't
                 // place and delete at the same time.
                 ref.read(buildModeProvider.notifier).clearSelection();
@@ -158,49 +163,6 @@ class BuildMenu extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
         ],
-      ),
-    );
-  }
-
-  Widget _railTile(
-    BuildContext context,
-    WidgetRef ref,
-    BuildSection s,
-    BuildSection active,
-  ) {
-    final c = context.appColors;
-    final isActive = s == active;
-    return InkWell(
-      onTap: () => ref.read(buildModeProvider.notifier).setSection(s),
-      child: Container(
-        height: 64,
-        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-        decoration: BoxDecoration(
-          color: isActive
-              ? c.accent.withValues(alpha: 0.14)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-          border: isActive ? Border.all(color: c.accent, width: 2) : null,
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              s.icon,
-              color: isActive ? c.accent : c.textMedium,
-              size: 22,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              s.label,
-              style: TextStyle(
-                fontSize: 10,
-                color: isActive ? c.accent : c.textMedium,
-                fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1407,6 +1369,116 @@ class _CorridorStatus extends StatelessWidget {
           ),
           ?trailing,
         ],
+      ),
+    );
+  }
+}
+
+// ─── Rail slider ─────────────────────────────────────────────────────────────
+
+// Each tile occupies exactly this many logical pixels vertically (64 height +
+// 2 top margin + 2 bottom margin). The indicator uses this to compute its
+// AnimatedPositioned target without needing GlobalKeys or RenderBox lookups.
+const double _kTileSlotH = 68.0;
+const double _kTileH = 64.0;
+const double _kTileHMargin = 4.0;
+
+class _SlidingRail extends StatelessWidget {
+  final List<BuildSection> sections;
+  final BuildSection active;
+  final ValueChanged<BuildSection> onSelect;
+
+  const _SlidingRail({
+    required this.sections,
+    required this.active,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    final idx = sections.indexOf(active).clamp(0, sections.length - 1);
+
+    return SizedBox(
+      height: sections.length * _kTileSlotH,
+      child: Stack(
+        children: [
+          // Sliding indicator — animates to the active section's position.
+          // AnimatedPositioned simply updates its target on every rebuild;
+          // rapid taps only change the destination, never break the tween.
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeInOut,
+            top: idx * _kTileSlotH + 2,
+            left: _kTileHMargin,
+            right: _kTileHMargin,
+            height: _kTileH,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: c.accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: c.accent, width: 1),
+              ),
+            ),
+          ),
+          Column(
+            children: [
+              for (final s in sections)
+                _RailTile(
+                  section: s,
+                  isActive: s == active,
+                  onTap: () => onSelect(s),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RailTile extends StatelessWidget {
+  final BuildSection section;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _RailTile({
+    required this.section,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        height: _kTileH,
+        margin: const EdgeInsets.symmetric(
+          horizontal: _kTileHMargin,
+          vertical: 2,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              section.icon,
+              color: isActive ? c.accent : c.textMedium,
+              size: 22,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              section.label,
+              style: TextStyle(
+                fontSize: 10,
+                color: isActive ? c.accent : c.textMedium,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
