@@ -124,7 +124,7 @@ class _AgentDetailDrawerState extends ConsumerState<AgentDetailDrawer>
           child: TabBarView(
             controller: _tabController,
             children: [
-              AgentOverviewTab(agent: agent),
+              AgentOverviewTab(instanceId: agent.instanceId),
               PersonalizationPanel(
                 agentId: agent.instanceId,
                 agentName: agent.nickname,

@@ -5,6 +5,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -308,11 +309,13 @@ class _SkillsTabState extends ConsumerState<_SkillsTab> {
               _ => 'Claude',
             },
           ),
-          const SizedBox(height: 8),
-          _ProviderCard(
-            instanceId: _selectedAgentId!,
-            current: selectedAgent.provider,
-          ),
+          if (defaultTargetPlatform == TargetPlatform.macOS) ...[
+            const SizedBox(height: 8),
+            _ProviderCard(
+              instanceId: _selectedAgentId!,
+              current: selectedAgent.provider,
+            ),
+          ],
           const SizedBox(height: 16),
 
           // Skills

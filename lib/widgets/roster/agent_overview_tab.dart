@@ -1,25 +1,40 @@
-/// Overview tab for the Agent Detail Drawer — level, XP, skills, hardware.
+/// Overview tab for the Agent Detail Drawer — level, XP, skills, hardware,
+/// and backend swap (D.1 Advanced Settings).
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pixelcode/models/agent_level.dart';
+import 'package:pixelcode/models/agent_message.dart';
 import 'package:pixelcode/models/game_economy.dart';
+import 'package:pixelcode/models/roster_catalog.dart';
+import 'package:pixelcode/providers/deepseek_auth_provider.dart';
+import 'package:pixelcode/providers/game_economy_provider.dart';
+import 'package:pixelcode/providers/kimi_auth_provider.dart';
 
-class AgentOverviewTab extends StatelessWidget {
-  final AgentGameData agent;
+class AgentOverviewTab extends ConsumerWidget {
+  final String instanceId;
 
-  const AgentOverviewTab({required this.agent, super.key});
+  const AgentOverviewTab({required this.instanceId, super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final agent = ref.watch(
+      gameEconomyProvider.select((s) => s.agents[instanceId]),
+    );
+    if (agent == null) return const SizedBox.shrink();
+
     final xpNeeded = xpToNextLevel(agent.level);
-    final xpProgress = xpNeeded > 0
-        ? (agent.xp / xpNeeded).clamp(0.0, 1.0)
-        : 1.0;
+    final xpProgress =
+        xpNeeded > 0 ? (agent.xp / xpNeeded).clamp(0.0, 1.0) : 1.0;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (agent.workplaceStatus == WorkplaceStatus.unassigned)
+          const _NeedsDeskBanner(),
+        if (agent.workplaceStatus == WorkplaceStatus.unassigned)
+          const SizedBox(height: 12),
         // Level + XP
         _InfoCard(
           children: [
@@ -162,10 +177,181 @@ class AgentOverviewTab extends StatelessWidget {
             ),
           ],
         ),
+        const SizedBox(height: 12),
+
+        // Backend swap — D.1 Advanced Settings
+        _BackendSwapCard(agent: agent),
       ],
     );
   }
 }
+
+// ─── Backend swap card ────────────────────────────────────────────────────────
+
+class _BackendSwapCard extends ConsumerWidget {
+  final AgentGameData agent;
+  const _BackendSwapCard({required this.agent});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(gameEconomyProvider.notifier);
+    final deepseekLinked =
+        ref.watch(deepseekAuthProvider).valueOrNull?.linked ?? false;
+    final kimiLinked =
+        ref.watch(kimiAuthProvider).valueOrNull?.linked ?? false;
+
+    // The roster character's recommended provider (if any).
+    final rosChar = agent.characterId != null
+        ? rosterCharacterById(agent.characterId!)
+        : null;
+    final recommended = rosChar?.defaultProvider;
+
+    return _InfoCard(
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.swap_horiz,
+              size: 14,
+              color: Colors.white.withValues(alpha: 0.5),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Backend',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              'Зміна не впливає на identity',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final p in AgentProviderType.values)
+              _ProviderButton(
+                provider: p,
+                isSelected: agent.provider == p,
+                isRecommended: p == recommended,
+                hasAuth: _hasAuth(p, deepseekLinked, kimiLinked),
+                onTap: () =>
+                    notifier.setAgentProvider(agent.instanceId, p),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  bool _hasAuth(
+    AgentProviderType p,
+    bool deepseekLinked,
+    bool kimiLinked,
+  ) =>
+      switch (p) {
+        AgentProviderType.cloud => true,
+        AgentProviderType.local => true,
+        AgentProviderType.ollama => true,
+        AgentProviderType.deepseek => deepseekLinked,
+        AgentProviderType.kimi => kimiLinked,
+      };
+}
+
+class _ProviderButton extends StatelessWidget {
+  final AgentProviderType provider;
+  final bool isSelected;
+  final bool isRecommended;
+  final bool hasAuth;
+  final VoidCallback onTap;
+
+  const _ProviderButton({
+    required this.provider,
+    required this.isSelected,
+    required this.isRecommended,
+    required this.hasAuth,
+    required this.onTap,
+  });
+
+  static (String label, Color color) _meta(AgentProviderType p) => switch (p) {
+        AgentProviderType.cloud => ('Claude', const Color(0xFFD97706)),
+        AgentProviderType.local => ('Gemini', const Color(0xFF4285F4)),
+        AgentProviderType.deepseek => ('DeepSeek', const Color(0xFF4D6BFE)),
+        AgentProviderType.kimi => ('Kimi', const Color(0xFFFF6A3D)),
+        AgentProviderType.ollama => ('Ollama', const Color(0xFF22C55E)),
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = _meta(provider);
+    final effectiveColor = isSelected ? color : Colors.white.withValues(alpha: 0.3);
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? color.withValues(alpha: 0.15)
+              : Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected
+                ? color.withValues(alpha: 0.5)
+                : Colors.white.withValues(alpha: 0.1),
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: effectiveColor,
+                fontSize: 10,
+                fontWeight:
+                    isSelected ? FontWeight.w700 : FontWeight.w400,
+              ),
+            ),
+            if (isRecommended) ...[
+              const SizedBox(width: 3),
+              Text(
+                '★',
+                style: TextStyle(
+                  color: color.withValues(alpha: isSelected ? 0.9 : 0.5),
+                  fontSize: 8,
+                ),
+              ),
+            ],
+            if (!hasAuth) ...[
+              const SizedBox(width: 3),
+              Text(
+                '⚠',
+                style: TextStyle(
+                  color: Colors.orange.withValues(alpha: 0.7),
+                  fontSize: 8,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Shared sub-widgets ───────────────────────────────────────────────────────
 
 class _LevelBadge extends StatelessWidget {
   final int level;
@@ -273,6 +459,51 @@ class _SkillRow extends StatelessWidget {
                 fontSize: 9,
                 fontWeight: FontWeight.w500,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NeedsDeskBanner extends StatelessWidget {
+  const _NeedsDeskBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF00C0D1).withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF00C0D1).withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Text('🖥️', style: TextStyle(fontSize: 14)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Потрібен стіл',
+                  style: TextStyle(
+                    color: Color(0xFF00C0D1),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Агент без робочого місця. Coding/testing/debugging мають підвищений ризик не завершитись. Збудуй Workstation через Build Mode.',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.5),
+                    fontSize: 10,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

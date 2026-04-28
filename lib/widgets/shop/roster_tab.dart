@@ -5,7 +5,7 @@ part of 'shop_panel.dart';
 /// Part of D.1 (Curated Roster v1) from STRATEGY.md Phase 1.5.
 /// This is a reusable component shared with Marketplace v1 stats-card.
 class RosterTab extends ConsumerStatefulWidget {
-  const RosterTab();
+  const RosterTab({super.key});
 
   @override
   ConsumerState<RosterTab> createState() => _RosterTabState();
