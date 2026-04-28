@@ -65,7 +65,7 @@ class _CustomAgentSpawnFormState extends ConsumerState<CustomAgentSpawnForm> {
 
   String _selectedRole = 'coder';
   String _selectedPreset = 'balanced';
-  String _formId = 'spawn-form-1';
+  final String _formId = 'spawn-form-1';
 
   @override
   void initState() {

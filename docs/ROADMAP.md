@@ -71,6 +71,7 @@
 | **Break Room morale system** (+20% при відпочинку) | `[DONE]` | `seatRestMultiplier` — вбудовано у `_buildRoomEffects()`; breakRoom↔lounge synergy doubles multiplier |
 | **Server Room cable proximity penalty** | `[DONE]` | `−5%` speed when serverRoom placed >8 tiles від всіх workstations — `_buildRoomEffects()` |
 | **Manager Meeting Room dispatch boost** | `[TODO]` | Q2–Q3 2026 — adjacency pair обчислюється (`meetingRoom↔workstation → +5%`), hook до task-dispatch latency ще не зроблено |
+| **Agent workplace status** (`WorkplaceStatus.unassigned/assigned`; нові наймані агенти чекають у lobby-зоні без столу; `CharState.waiting`; `coding/testing/debugging` отримують `−0.25` success rate; Foreman показує desk-bubble; badge "Потрібен стіл" у Roster) | `[DONE]` | Q2 2026 — prerequisite для B.1 → D.1 integration; [lib/models/game_economy.dart](../lib/models/game_economy.dart), [lib/widgets/canvas/office_game_state.dart](../lib/widgets/canvas/office_game_state.dart), [lib/services/task_outcome.dart](../lib/services/task_outcome.dart) |
 | **Diagnostics panel polish** | `[DONE]` | [lib/widgets/debug/](../lib/widgets/debug/) |
 | **Game Designer hireable role** (мета-роль для дизайну механік/економіки/F2P-петель) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)); обґрунтування: meta-loop "гра дизайнить себе" + контент-хук. |
 | **Strategy Keeper hireable role** ("Неповертайло" — reality-check голос проти drift від плану) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2); обґрунтування: solo-dev needs скептика проти wishful thinking, інакше план дрейфує. |
@@ -179,17 +180,17 @@ UX-rehearsal для Marketplace v1 — запечений roster named character
 
 | Компонент | Статус | ETA |
 |---|---|---|
-| **Character data schema** (`name`, `portrait`, `statWeights`, `promptBias`, `defaultBackend`, `price`) | `[TODO]` | Q3 2026 |
-| **Starter roster (7 characters)** — Андрій / Оля / Богдан / Тетяна / Дмитро / Соня / Максим; бюджет 18pt, max=7, min=1, spread≥4 (специфікація 2026-04-27) | `[TODO]` | Q3 2026 |
-| **Capability formula review** — UI/UX-designer creativity-heavy (creativity weight=0.1) → haiku-locked. Або підняти creativity weight у formula, або role-specific override | `[TODO]` | Q3 2026 (перед D.1 launch) |
-| **Adjacency × stat interaction guard** — Server Room speed bonus + speed=7 character не повинні стакати без cap (diminishing returns) | `[TODO]` | Q3 2026 |
+| **Character data schema** (`name`, `portrait`, `statWeights`, `promptBias`, `defaultBackend`, `price`) | `[DONE]` | 2026-04-28 — [lib/models/roster_catalog.dart](../lib/models/roster_catalog.dart) |
+| **Starter roster (7 characters)** — Андрій / Оля / Богдан / Тетяна / Дмитро / Соня / Максим; бюджет 18pt, max=7, min=1, spread≥4 (специфікація 2026-04-27) | `[DONE]` | 2026-04-28 — `rosterCatalog` у [lib/models/roster_catalog.dart](../lib/models/roster_catalog.dart) |
+| **Capability formula review** — UI/UX-designer creativity-heavy (creativity weight=0.1) → haiku-locked. Або підняти creativity weight у formula, або role-specific override | `[DONE]` | 2026-04-28 — creative profile: `creativity: 0.35` у [server/src/agents.ts](../server/src/agents.ts):387–388 |
+| **Roster catalog UI** (filter/sort cards: stats, ціна, role) — shareable component з Marketplace v1 stats-card | `[DONE]` | 2026-04-28 — `RosterTab` + `_RosterCharacterCard` + `_StatBars` + `_RoleFilterBar` у [lib/widgets/shop/roster_tab.dart](../lib/widgets/shop/roster_tab.dart) |
+| **Hire-flow refactor** — role+provider абстракція → character picker; backward-compat з існуючим `AgentGameData.provider` | `[DONE]` | 2026-04-28 — `hireCharacter` / `canHireCharacter` у provider; `characterId` persisted на `AgentGameData` |
+| **Soft vendor-disclosure styling** (`powered by X` дрібним шрифтом під portrait) + Anthropic/OpenAI brand guideline compliance | `[DONE]` | 2026-04-28 — `_VendorPill` у roster_tab.dart; Claude/DeepSeek/Gemini/Kimi color-coded badges |
+| **Adjacency × stat interaction guard** — Server Room speed bonus + speed=7 character не повинні стакати без cap (diminishing returns) | `[DONE]` | 2026-04-28 — `kSpeedBonusCeiling = 1.35` + `clamp(0.9, kSpeedBonusCeiling)` у `_buildRoomEffects()` ([lib/widgets/canvas/office_game_state.dart](../lib/widgets/canvas/office_game_state.dart)); 3 нових тести |
+| **Backend-swap UI** (advanced settings — змінити provider для найнятого character без втрати identity) | `[DONE]` | 2026-04-28 — `_BackendSwapCard` у [lib/widgets/roster/agent_overview_tab.dart](../lib/widgets/roster/agent_overview_tab.dart): 5 provider buttons з brand colors, ★ для recommended, ⚠ для auth-not-set; `setAgentProvider` wired; 3 нових тести |
+| **Portrait pipeline: palette swaps + accessory overlays** на базі існуючого 8-skin × 9-class sprite system | `[TODO]` | Q3 2026 |
 | **Roster telemetry hooks** (hire-rate per character, time-to-second-hire, retention rate, task success rate per role, backend-swap rate) | `[TODO]` | Q3 2026 (з L — Telemetry opt-in) |
 | **Provider catalog single-source-of-truth** (versioning: DeepSeek V2/V3, model snapshots) | `[TODO]` | Q3 2026 |
-| **Roster catalog UI** (filter/sort cards: stats, ціна, role) — shareable component з Marketplace v1 stats-card | `[TODO]` | Q3 2026 |
-| **Hire-flow refactor** — role+provider абстракція → character picker; backward-compat з існуючим `AgentGameData.provider` | `[TODO]` | Q3 2026 |
-| **Backend-swap UI** (advanced settings — змінити provider для найнятого character без втрати identity) | `[TODO]` | Q3 2026 |
-| **Soft vendor-disclosure styling** (`powered by X` дрібним шрифтом під portrait) + Anthropic/OpenAI brand guideline compliance | `[TODO]` | Q3 2026 |
-| **Portrait pipeline: palette swaps + accessory overlays** на базі існуючого 8-skin × 9-class sprite system | `[TODO]` | Q3 2026 |
 | **Cosmetic shop slot для characters** (portrait variants, accessories, voice-stings — stats const) | `[TODO]` | Q4 2026 (з cosmetics shop в I) |
 
 **Залежності:**
@@ -317,9 +318,9 @@ UX-rehearsal для Marketplace v1 — запечений roster named character
 |---|---|---|
 | Silent iOS deploy через `xcrun devicectl` | `[DONE]` | [lib/services/ios_deploy_service.dart](../lib/services/ios_deploy_service.dart) |
 | OTA iOS deploy через Tailscale Funnel | `[DONE]` | [server/src/server.ts](../server/src/server.ts) |
-| **Android deploy (повний)** | `[PARTIAL]` | [lib/services/android_deploy_service.dart](../lib/services/android_deploy_service.dart) — скелет є, треба завершити |
+| Android deploy (повний) | `[DONE]` | [lib/services/android_deploy_service.dart](../lib/services/android_deploy_service.dart), [lib/providers/android_deploy_provider.dart](../lib/providers/android_deploy_provider.dart) |
 | iOS signing flow + onboarding | `[DONE]` | [docs/iOS_DEPLOYMENT.md](iOS_DEPLOYMENT.md) |
-| **Android signing flow + onboarding** | `[TODO]` | Q2–Q3 2026 |
+| Android signing flow + onboarding | `[DONE]` | [server/src/health.ts](../server/src/health.ts) (`checkAndroidSigning`), [lib/widgets/settings/diagnostics_section.dart](../lib/widgets/settings/diagnostics_section.dart) |
 | GitHub Releases для macOS артефактів | `[DONE]` | — |
 | **App Store / Play Store presence** | `[TODO]` | Q4 2026 (після Pro tier infra) |
 
@@ -373,12 +374,12 @@ Facilitator — модальність взаємодії manager-агента, 
 | **`FacilitatorOutput` interface** (toKanbanTasks/toCanonicalProgress) | `[DONE]` | [lib/models/facilitator_output.dart](../lib/models/facilitator_output.dart) |
 | **Refactor: QuestLine → FacilitatorOutput impl** (Game Master mode) | `[DONE]` | [lib/models/quest_line.dart](../lib/models/quest_line.dart) |
 | **Refactor: QuestPersistence → FacilitatorOutputPersistence** | `[DONE]` | [lib/services/facilitator_output_persistence_service.dart](../lib/services/facilitator_output_persistence_service.dart) |
-| **Default styles MVP**: Game Master, Marina (Amber), Drill Sergeant | `[DONE]` | [assets/facilitators/](../assets/facilitators/) |
+| **Default styles MVP**: Game Master, Mariya (Amber), Drill Sergeant | `[DONE]` | [assets/facilitators/](../assets/facilitators/) |
 | **`MissionBriefing` output format** (Drill Sergeant) | `[DONE]` | [lib/models/mission_briefing.dart](../lib/models/mission_briefing.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
-| **`MilestoneTree` output format** (Marina) | `[DONE]` | [lib/models/milestone_tree.dart](../lib/models/milestone_tree.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
+| **`MilestoneTree` output format** (Mariya) | `[DONE]` | [lib/models/milestone_tree.dart](../lib/models/milestone_tree.dart), [server/src/facilitator/output_generator.ts](../server/src/facilitator/output_generator.ts) |
 | **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[DONE]` | [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart) + [lib/services/facilitator_onboarding.dart](../lib/services/facilitator_onboarding.dart) + [lib/widgets/facilitator/launch_facilitator_onboarding.dart](../lib/widgets/facilitator/launch_facilitator_onboarding.dart) — v0.4.0 додав localization bindings |
 | **i18n integration** (English + Ukrainian across all facilitators) | `[DONE]` | v0.4.0 — see [lib/services/localization_service.dart](../lib/services/localization_service.dart) |
-| **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[TODO]` | Q3 2026 |
+| **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[DONE]` | 2026-04-28 — `ClaudeQuestLineGenerator` / `ClaudeMissionBriefingGenerator` / `ClaudeMilestoneTreeGenerator` у [server/src/facilitator/llm_generators.ts](../server/src/facilitator/llm_generators.ts); CallerFn injectable для тестів; haiku (micro/small) + sonnet (medium/large); зареєстровано у server.ts при старті; 21 новий тест |
 | **Hierarchical prompt safety** (style ≠ tech decisions; tech-lead veto) | `[TODO]` | Q3 2026 |
 | **Default styles v2**: Scrum Master, Stoic Mentor | `[TODO]` | Q4 2026 |
 | **`SprintBacklog` output format** (Scrum Master) | `[TODO]` | Q4 2026 |

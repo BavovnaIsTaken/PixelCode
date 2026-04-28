@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'admin_client.dart';
 import 'theme.dart';
@@ -1105,9 +1106,25 @@ class _LogsCard extends StatelessWidget {
   }
 }
 
-class _ErrorBlock extends StatelessWidget {
+class _ErrorBlock extends StatefulWidget {
   const _ErrorBlock({required this.error});
   final String error;
+  @override
+  State<_ErrorBlock> createState() => _ErrorBlockState();
+}
+
+class _ErrorBlockState extends State<_ErrorBlock> {
+  bool _copied = false;
+
+  Future<void> _copy() async {
+    await Clipboard.setData(const ClipboardData(text: 'pixelcode-server start'));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    await Future.delayed(const Duration(seconds: 2));
+    if (!mounted) return;
+    setState(() => _copied = false);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1120,16 +1137,53 @@ class _ErrorBlock extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('LAUNCHER UNREACHABLE',
+          Text('LAUNCHER UNAVAILABLE',
               style: pixelFont(size: 10, color: PixelPalette.error, letterSpacing: 1.4)),
           const SizedBox(height: 8),
-          SelectableText(error,
-              style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textHigh)),
-          const SizedBox(height: 10),
-          const Text(
-            'Hint: open a terminal and run `pixelcode-server start`. The launcher '
-            'stays alive in the background and you drive everything else from here.',
-            style: TextStyle(color: PixelPalette.textMed, fontSize: 12),
+          RichText(
+            text: TextSpan(
+              style: const TextStyle(color: PixelPalette.textMed, fontSize: 12),
+              children: [
+                const TextSpan(text: 'Please, run '),
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(
+                      onTap: _copy,
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _copied
+                              ? PixelPalette.success.withValues(alpha: 0.2)
+                              : PixelPalette.error.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'pixelcode-server start',
+                              style: const TextStyle(
+                                fontFamily: 'Menlo',
+                                fontSize: 12,
+                                color: PixelPalette.textHigh,
+                              ),
+                            ),
+                            if (_copied) ...[
+                              const SizedBox(width: 4),
+                              const Icon(Icons.check, size: 12, color: PixelPalette.success),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const TextSpan(text: ' in terminal.'),
+              ],
+            ),
           ),
         ],
       ),

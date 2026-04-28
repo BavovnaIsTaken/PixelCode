@@ -168,9 +168,6 @@ ParseResult parseLogoProgram(String src) {
     final lines = _tokenizeLines(src);
     final parser = _Parser(lines);
     final cmds = parser.parseBlock(endKeyword: null);
-    if (parser.hasMore) {
-      throw _ParseError(parser.line, 'Неочікуваний токен');
-    }
     return ParseResult(cmds, null);
   } on _ParseError catch (e) {
     return ParseResult(const [], 'Рядок ${e.line}: ${e.message}');
@@ -387,7 +384,8 @@ String _presetName(StampPreset p) => switch (p) {
       StampPreset.tile => 'tile',
       StampPreset.trail => 'trail',
       StampPreset.dense => 'dense',
-      StampPreset.custom => 'custom',
+      StampPreset.custom =>
+          throw StateError('_presetName: custom preset is handled before call site'),
     };
 
 String _dirName(MoveDir d) => switch (d) {

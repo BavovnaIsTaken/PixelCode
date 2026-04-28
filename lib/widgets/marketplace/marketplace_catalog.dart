@@ -46,14 +46,6 @@ class _MarketplaceCatalogState extends State<MarketplaceCatalog> {
     return result;
   }
 
-  void _clearFilters() {
-    setState(() {
-      _roleFilter = null;
-      _minRating = 1.0;
-      _searchQuery = '';
-    });
-  }
-
   void _clearRoleFilter() {
     setState(() {
       _roleFilter = null;
