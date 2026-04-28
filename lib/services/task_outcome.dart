@@ -48,10 +48,24 @@ const divergentTaskTypes = <String>{
   'ui-design',
 };
 
+/// Task types that require a physical workstation (computer). Agents without
+/// an assigned desk suffer an incomplete-chance penalty on these.
+const workstationTaskTypes = <String>{
+  'coding',
+  'testing',
+  'debugging',
+};
+
+/// Penalty applied to [completionSuccessChance] when an agent has no desk
+/// and is working on a [workstationTaskTypes] task. −0.25 success rate.
+const double kUnassignedIncompletePenalty = 0.25;
+
 /// Rolls the final outcome for a task at the `testing → done` transition.
 ///
 /// Order of checks:
 /// 1. Reliability gate (incomplete if we roll above the success threshold).
+///    Agents without a workstation on [workstationTaskTypes] suffer a −0.25
+///    penalty to their success chance.
 /// 2. Bug check (Precision).
 /// 3. Crit check (Creativity, divergent tasks only).
 /// 4. Otherwise `clean`.
@@ -63,9 +77,16 @@ TaskOutcome rollOutcome({
   required int creativitySkill,
   required int reliabilitySkill,
   bool isDivergentTask = false,
+  bool isUnassigned = false,
+  String taskType = '',
 }) {
-  if (rng.nextDouble() >
-      completionSuccessChance(reliabilitySkill: reliabilitySkill)) {
+  final baseSuccess = completionSuccessChance(reliabilitySkill: reliabilitySkill);
+  final needsDesk = isUnassigned && workstationTaskTypes.contains(taskType);
+  final adjustedSuccess = needsDesk
+      ? (baseSuccess - kUnassignedIncompletePenalty).clamp(0.0, 1.0)
+      : baseSuccess;
+
+  if (rng.nextDouble() > adjustedSuccess) {
     return TaskOutcome.incomplete;
   }
   if (rng.nextDouble() < bugChance(precisionSkill: precisionSkill)) {

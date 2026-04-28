@@ -104,6 +104,8 @@ const _walkCols = [0, 1, 2, 1];
       } else {
         col = 3 + (ch.frame % 2); // type1 / type2
       }
+    case CharState.waiting:
+      col = ch.frame % 2; // slow breath: alternate idle-1 / idle-2
   }
 
   final dir = isLeft ? CharDirection.right : ch.dir;

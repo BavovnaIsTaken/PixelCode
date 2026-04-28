@@ -202,7 +202,18 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       for (final e in gameEconomy.agents.entries)
         e.key: e.value.hardware,
     };
-    _gameState.syncHiredAgents(gameEconomy.hiredAgentIds, hardwareMap);
+    final workplaceStatusMap = {
+      for (final e in gameEconomy.agents.entries)
+        e.key: e.value.workplaceStatus,
+    };
+    final newlyAssigned = _gameState.syncHiredAgents(
+        gameEconomy.hiredAgentIds, hardwareMap, workplaceStatusMap);
+    if (newlyAssigned.isNotEmpty) {
+      final notifier = ref.read(gameEconomyProvider.notifier);
+      for (final id in newlyAssigned) {
+        notifier.assignWorkplace(id);
+      }
+    }
 
     final activeAgents =
         agents.entries.where((e) => e.value.isActive).toList();
@@ -409,11 +420,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                           officeLevel.nextLevel == null ||
                                               officeLevel
                                                   .nextLevel!.isWipComingSoon,
+                                      hasUnassignedAgent: gameEconomy.agents
+                                          .values
+                                          .any((a) => a.workplaceStatus ==
+                                              WorkplaceStatus.unassigned),
                                     ),
                                   ),
                                 ),
                               ),
-                            ..._buildNameOverlays(agents, constraints),
+                            ..._buildNameOverlays(
+                              agents,
+                              constraints,
+                              buildModeActive: buildMode.active,
+                            ),
                           ],
                         ),
                       ),
@@ -742,6 +761,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     }
 
     ref.read(gameEconomyProvider.notifier).placeFurniture(selectedId, col, row);
+    // Deselect once inventory for this item is exhausted.
+    if (ref.read(gameEconomyProvider).furnitureAvailable(selectedId) <= 0) {
+      ref.read(selectedFurnitureIdProvider.notifier).state = null;
+    }
   }
 
   // ─── Build Mode ────────────────────────────────────────────────────────────
@@ -929,8 +952,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   List<Widget> _buildNameOverlays(
     Map<String, AgentState> agents,
-    BoxConstraints constraints,
-  ) {
+    BoxConstraints constraints, {
+    bool buildModeActive = false,
+  }) {
     final cw = _gameState.canvasWidth;
     final ch = _gameState.canvasHeight;
     final scaleX = constraints.maxWidth / cw;
@@ -998,7 +1022,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                 }
               },
               child: Container(
-                width: 80,
+                width: 96,
                 padding:
                     const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
                 decoration: BoxDecoration(
@@ -1018,6 +1042,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                     // Nickname
                     Text(
                       nick,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: highlighted
@@ -1059,6 +1085,49 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                           fontWeight: FontWeight.w400,
                         ),
                       ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Foreman label (hidden during build mode)
+    if (!buildModeActive) {
+      final fCol = foremanColFor(_gameState.gridCols);
+      final fRow = foremanRowFor(_gameState.gridRows);
+      final fScreenX = offsetX + (fCol + 0.5) * kTileSize * scale;
+      // Sprite bottom = (fRow + 1) * kTileSize + kForemanVertOffset; label 2 px below.
+      final fScreenY = offsetY + ((fRow + 1) * kTileSize + kForemanVertOffset + 2) * scale;
+
+      widgets.add(
+        Positioned(
+          left: fScreenX - 40,
+          top: fScreenY,
+          child: IgnorePointer(
+            child: Container(
+              width: 80,
+              padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+              decoration: BoxDecoration(
+                color: const Color(0xCC1A1A2E),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.25),
+                  width: 1,
+                ),
+              ),
+              child: const Text(
+                'Фрімен',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                  shadows: [
+                    Shadow(color: Color(0xCC000000), blurRadius: 2),
                   ],
                 ),
               ),

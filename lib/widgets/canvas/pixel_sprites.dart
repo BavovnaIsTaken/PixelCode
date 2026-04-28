@@ -40,6 +40,8 @@ import 'office_game_state.dart';
     case CharState.skateDismount:
       final mount = _mountSprites[lookupDir] ?? _mountSprites[CharDirection.down]!;
       return (mount, isLeft);
+    case CharState.waiting:
+      return (_walkSprites[lookupDir]![1], isLeft); // standing pose, same as idle
   }
 }
 

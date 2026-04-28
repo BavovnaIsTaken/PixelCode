@@ -23,18 +23,21 @@ import 'room_themes.dart';
 /// Which hint, if any, should be drawn above the foreman this frame.
 /// Pure ordering — extracted from the painter so the priority is testable
 /// without spinning up a Flutter widget tree.
-enum ForemanHint { none, attention, onboarding, hover }
+enum ForemanHint { none, attention, onboarding, needsDesk, hover }
 
 /// Resolve the active hint given the live UI inputs. Hover wins over every
 /// other hint (live cursor feedback), then the one-time onboarding chevron,
-/// then the recurring affordability "!" bubble.
+/// then the "needs desk" nudge for unassigned agents, then the affordability
+/// "!" bubble.
 ForemanHint pickForemanHint({
   required bool hovering,
   required bool firstTimePrompt,
   required bool attention,
+  bool hasUnassignedAgent = false,
 }) {
   if (hovering) return ForemanHint.hover;
   if (firstTimePrompt) return ForemanHint.onboarding;
+  if (hasUnassignedAgent) return ForemanHint.needsDesk;
   if (attention) return ForemanHint.attention;
   return ForemanHint.none;
 }
@@ -60,7 +63,7 @@ Rect foremanHitRect(int gridCols, int gridRows) {
   final col = foremanColFor(gridCols);
   final row = foremanRowFor(gridRows);
   final left = col * kTileSize - 2;
-  final top = row * kTileSize - kTileSize + 2; // sprite extends 1 tile up
+  final top = row * kTileSize - kTileSize + kForemanVertOffset + 2;
   return Rect.fromLTWH(left, top, kTileSize + 4, kTileSize * 2 - 2);
 }
 
@@ -112,6 +115,10 @@ class ForemanOverlayPainter extends CustomPainter {
   /// door is replaced with a sealed plate.
   final bool doorDisabled;
 
+  /// True when at least one hired agent has [WorkplaceStatus.unassigned].
+  /// Triggers a house-icon nudge bubble above the foreman.
+  final bool hasUnassignedAgent;
+
   ForemanOverlayPainter({
     required this.gridCols,
     required this.gridRows,
@@ -124,6 +131,7 @@ class ForemanOverlayPainter extends CustomPainter {
     required this.nextTier,
     required this.doorAffordable,
     required this.doorDisabled,
+    this.hasUnassignedAgent = false,
   });
 
   @override
@@ -232,12 +240,8 @@ class ForemanOverlayPainter extends CustomPainter {
     final tileX = col * kTileSize;
     final tileY = row * kTileSize;
 
-    // Idle breathing: 1 px lift every ~0.8s — matches the pulse in
-    // PixelOfficePainter so he feels like part of the crowd.
-    final breathe = ((tick ~/ 24) % 2 == 0) ? 0.0 : 1.0;
-
     final spriteX = tileX;
-    final spriteY = tileY - kTileSize - breathe; // sprite extends 1 tile up
+    final spriteY = tileY - kTileSize + kForemanVertOffset; // sprite extends 1 tile up, shifted down 1/3 tile
 
     final sheet = sprites?.charSheet(_kForemanPaletteIndex);
     if (sheet != null) {
@@ -250,7 +254,7 @@ class ForemanOverlayPainter extends CustomPainter {
     final p = Paint()
       ..style = PaintingStyle.fill
       ..color = Colors.black.withValues(alpha: 0.22);
-    canvas.drawOval(Rect.fromLTWH(spriteX + 3, tileY - 1, 10, 2), p);
+    canvas.drawOval(Rect.fromLTWH(spriteX + 3, tileY - 1 + kForemanVertOffset, 10, 2), p);
 
     // Hard hat over the head — head occupies approximately rows 6–16 of the
     // 32-px sprite. Sitting the hat at rows 4–10 covers the hair and slightly
@@ -261,12 +265,15 @@ class ForemanOverlayPainter extends CustomPainter {
       hovering: hovering,
       firstTimePrompt: firstTimePrompt,
       attention: attention,
+      hasUnassignedAgent: hasUnassignedAgent,
     );
     switch (hint) {
       case ForemanHint.hover:
         _drawSpeechBubble(canvas, spriteX, spriteY);
       case ForemanHint.onboarding:
         _drawOnboardingChevron(canvas, spriteX, spriteY);
+      case ForemanHint.needsDesk:
+        _drawNeedsDeskBubble(canvas, spriteX, spriteY);
       case ForemanHint.attention:
         _drawAttentionBubble(canvas, spriteX, spriteY);
       case ForemanHint.none:
@@ -327,8 +334,7 @@ class ForemanOverlayPainter extends CustomPainter {
   }
 
   void _drawAttentionBubble(Canvas canvas, double x, double y) {
-    final pulse = (math.sin(tick * 0.1) + 1) / 2; // 0..1
-    final bubbleY = y - 2 - pulse * 1.5;
+    final bubbleY = y - 5;
     final bubbleX = x + 11;
     final p = Paint()..style = PaintingStyle.fill;
     p.color = const Color(0xFFFFD700);
@@ -342,6 +348,31 @@ class ForemanOverlayPainter extends CustomPainter {
     // Tail
     p.color = const Color(0xFFFFD700);
     canvas.drawRect(Rect.fromLTWH(bubbleX + 1, bubbleY + 6, 2, 1), p);
+  }
+
+  /// Pixel-art desk icon bubble shown when an agent has no workstation yet.
+  /// Cyan tint — distinct from the gold "!" affordability bubble.
+  /// Icon: simplified 5×5 desk silhouette (flat top + two legs).
+  void _drawNeedsDeskBubble(Canvas canvas, double x, double y) {
+    final bubbleY = y - 5;
+    final bubbleX = x + 11;
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // Bubble body
+    p.color = const Color(0xFF00C0D1);
+    canvas.drawRect(Rect.fromLTWH(bubbleX, bubbleY, 7, 8), p);
+    p.color = const Color(0xFF007A87);
+    canvas.drawRect(Rect.fromLTWH(bubbleX, bubbleY + 7, 7, 1), p);
+
+    // Desk icon: tabletop (row 1), two legs (rows 3–4)
+    p.color = const Color(0xFF1A1A1F);
+    canvas.drawRect(Rect.fromLTWH(bubbleX + 1, bubbleY + 1, 5, 1), p); // top
+    canvas.drawRect(Rect.fromLTWH(bubbleX + 1, bubbleY + 3, 1, 2), p); // left leg
+    canvas.drawRect(Rect.fromLTWH(bubbleX + 5, bubbleY + 3, 1, 2), p); // right leg
+
+    // Tail
+    p.color = const Color(0xFF00C0D1);
+    canvas.drawRect(Rect.fromLTWH(bubbleX + 2, bubbleY + 8, 2, 1), p);
   }
 
   /// One-time onboarding chevron — pixel-art down arrow that bobs above the
@@ -388,10 +419,13 @@ class ForemanOverlayPainter extends CustomPainter {
     // Bubble sits to the right of the foreman so it doesn't clip into the
     // grid above. 38 × 9 px keeps the proportions reading as a pixel-art
     // bubble even at 4× canvas scale.
-    final bubbleX = x + 14;
-    final bubbleY = y - 2;
     const bubbleW = 38.0;
     const bubbleH = 9.0;
+    // Clamp so the bubble never overflows the right canvas edge (world-space).
+    final maxBubbleX = gridCols * kTileSize - bubbleW - 1.0;
+    final bubbleX = math.min(x + 14, maxBubbleX);
+    // Same base Y as _drawAttentionBubble so the two hints sit at the same height.
+    final bubbleY = y - 5;
 
     final p = Paint()..style = PaintingStyle.fill;
 

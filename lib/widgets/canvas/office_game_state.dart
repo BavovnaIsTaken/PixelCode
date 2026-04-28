@@ -22,6 +22,14 @@ const double kTileSize = 16.0;
 const double kCanvasWidth = kGridCols * kTileSize; // 320
 const double kCanvasHeight = kGridRows * kTileSize; // 224
 
+/// Maximum combined walk-speed multiplier from room effects.
+///
+/// Guards the workstation↔serverRoom adjacency pairs + wide-corridor bonus
+/// from unbounded stacking. When the agent `speed` stat eventually affects
+/// task-dispatch timing, that formula must also reference this ceiling so the
+/// combined (stat × room) multiplier stays sane (D.1 interaction guard).
+const double kSpeedBonusCeiling = 1.35;
+
 // Character animation timing
 const double kWalkSpeedPxPerSec = 48.0;
 const double kWalkFrameDuration = 0.15;
@@ -61,7 +69,10 @@ const int kSnackTableRow = 1;
 // overhangs into the last floor row. Inline helpers so the painter, hit-
 // test, and blockedTiles all compute the same tile from current grid dims.
 int foremanColFor(int gridCols) => gridCols - 1;
-int foremanRowFor(int gridRows) => gridRows - 1;
+int foremanRowFor(int gridRows) => gridRows - 2;
+/// Extra downward shift applied to the foreman sprite and its hit-rect
+/// so he stands 1/3 tile lower within his anchor tile.
+const double kForemanVertOffset = kTileSize / 3;
 const double kCoffeeBrewDuration = 6.0;
 
 // Skateboard
@@ -100,7 +111,7 @@ enum TileType { wall, floor }
 
 enum CharDirection { down, left, right, up }
 
-enum CharState { idle, walk, typing, skateMount, skateDismount }
+enum CharState { idle, walk, typing, skateMount, skateDismount, waiting }
 
 enum CatAction { idle, walk, sleep }
 
@@ -514,6 +525,11 @@ class OfficeGameState {
     if (_placedCorridors.any((c) => c.wide)) {
       _speedBonus += 0.03;
     }
+
+    // Hard ceiling: room bonuses can't stack past kSpeedBonusCeiling.
+    // Floor already applied above (0.9); ceiling prevents runaway when many
+    // workstation↔serverRoom pairs are placed.
+    _speedBonus = _speedBonus.clamp(0.9, kSpeedBonusCeiling);
   }
 
   /// Rebuild layout after an office upgrade, expansion purchase, or Build
@@ -707,7 +723,16 @@ class OfficeGameState {
   /// as distinct sprites. The first instance of each role claims that role's
   /// canonical desk station; extras get `seat: null` and wander freely until
   /// additional seats are added (see office-expansion work).
-  void syncHiredAgents(List<String> hiredIds, [Map<String, HardwareTier>? hardwareMap]) {
+  /// Sync hired agents into the canvas character map.
+  ///
+  /// Returns the list of instanceIds that transitioned from [CharState.waiting]
+  /// to a real seat this call — i.e. agents that just received a workstation.
+  /// Callers should persist this by calling `assignWorkplace` on the provider.
+  List<String> syncHiredAgents(
+    List<String> hiredIds, [
+    Map<String, HardwareTier>? hardwareMap,
+    Map<String, WorkplaceStatus>? workplaceStatusMap,
+  ]) {
     final hiredSet = hiredIds.toSet();
 
     // 1. Drop characters whose instance is no longer hired.
@@ -726,25 +751,31 @@ class OfficeGameState {
       if (characters.containsKey(id)) continue;
       final roleType = roleTypeFromInstanceId(id);
       final isSeatOwner = seatOwner[roleType] == id;
-      // Pick the canonical seat ONLY if it actually fits the current grid.
-      // Small offices (garage) can't host all canonical desks, so those
-      // characters fall through to a random walkable tile.
-      final canonical = isSeatOwner
+      final isUnassigned =
+          (workplaceStatusMap?[id] ?? WorkplaceStatus.assigned) ==
+          WorkplaceStatus.unassigned;
+
+      // Unassigned agents skip canonical desks — they wait in the lobby zone
+      // until the player builds and assigns a Workstation Room.
+      final canonical = (!isUnassigned && isSeatOwner)
           ? kStations
               .where((s) => s.agentId == roleType)
               .cast<DeskStation?>()
               .firstWhere((_) => true, orElse: () => null)
           : null;
-      final station = (canonical != null &&
-              _stationFitsGrid(canonical))
+      final station = (canonical != null && _stationFitsGrid(canonical))
           ? canonical
           : null;
 
-      // Seatless hires spawn on a random walkable tile so they don't stack.
+      // Unassigned agents spawn in the lobby zone (bottom-left corner).
+      // Assigned seatless hires get a random walkable tile.
       int spawnCol, spawnRow;
       if (station != null) {
         spawnCol = station.seatCol;
         spawnRow = station.seatRow;
+      } else if (isUnassigned) {
+        spawnCol = 2;
+        spawnRow = (gridRows - 2).clamp(1, gridRows - 1);
       } else if (walkableTiles.isNotEmpty) {
         final t = walkableTiles[_rng.nextInt(walkableTiles.length)];
         spawnCol = t.col;
@@ -760,7 +791,9 @@ class OfficeGameState {
         seat: station,
         tileCol: spawnCol,
         tileRow: spawnRow,
-        state: station != null ? CharState.typing : CharState.idle,
+        state: isUnassigned
+            ? CharState.waiting
+            : (station != null ? CharState.typing : CharState.idle),
         seatTimer: _randomRange(8.0, 25.0),
       );
     }
@@ -787,6 +820,12 @@ class OfficeGameState {
     }
 
     // 4b. Assign seatless characters to free extra workstation stations.
+    // Track waiting agents before assignment so we can report who just got a desk.
+    final waitingBeforeAssign = {
+      for (final ch in characters.values)
+        if (ch.state == CharState.waiting && ch.seat == null) ch.instanceId,
+    };
+
     final occupiedExtra = <DeskStation>{
       for (final ch in characters.values)
         if (ch.seat != null && ch.seat!.isExtra) ch.seat!,
@@ -802,6 +841,12 @@ class OfficeGameState {
       }
     }
 
+    // Collect agents that just received a seat (were waiting, now seated).
+    final newlyAssigned = <String>[
+      for (final id in waitingBeforeAssign)
+        if (characters[id]?.seat != null) id,
+    ];
+
     // 5. Apply per-instance hardware tier.
     if (hardwareMap != null) {
       for (final entry in hardwareMap.entries) {
@@ -809,6 +854,8 @@ class OfficeGameState {
         if (ch != null) ch.hardware = entry.value;
       }
     }
+
+    return newlyAssigned;
   }
 
   /// Serialize current character positions for cross-device sync.
@@ -1036,8 +1083,9 @@ class OfficeGameState {
     if (ch.isChatting) return false;
     if (ch.isOnSkateboard) return false;
     if (ch.chatCooldown > 0) return false;
-    // Must be on foot in the office floor, not sitting at a desk.
+    // Must be on foot in the office floor, not sitting at a desk or waiting.
     if (ch.state == CharState.typing) return false;
+    if (ch.state == CharState.waiting) return false;
     if (ch.state == CharState.skateMount ||
         ch.state == CharState.skateDismount) {
       return false;
@@ -1295,6 +1343,22 @@ class OfficeGameState {
               ch.moveProgress = 0;
             }
           }
+        }
+        break;
+
+      case CharState.waiting:
+        // Agent is hired but has no workstation yet. Stands in the lobby zone
+        // with a slow 2-frame breath: alternate frame 0/1 every ~0.8 s.
+        if (ch.frameTimer >= 0.8) {
+          ch.frameTimer = 0;
+          ch.frame = 1 - ch.frame; // toggle 0 ↔ 1
+        }
+        // Once a seat is assigned externally, transition to normal idle/typing.
+        if (ch.seat != null) {
+          ch.state = CharState.idle;
+          ch.frame = 0;
+          ch.frameTimer = 0;
+          ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
         }
         break;
     }
