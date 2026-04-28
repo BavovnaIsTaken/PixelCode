@@ -193,6 +193,33 @@ void main() {
       expect(notifier.lastCall!['lesson'], 'Padded lesson text');
     });
 
+    testWidgets('changing category dropdown updates submitted category',
+        (tester) async {
+      await openDialog(tester);
+
+      // Open the dropdown
+      await tester.tap(find.byType(DropdownButtonFormField<String>));
+      await tester.pumpAndSettle();
+
+      // Pick 'architecture' (it appears in the overlay)
+      await tester.tap(find.text('architecture').last);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Tag'),
+        'solid-principles',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Lesson'),
+        'Applies SOLID correctly',
+      );
+
+      await tester.tap(find.text('Add'));
+      await tester.pumpAndSettle();
+
+      expect(notifier.lastCall!['category'], 'architecture');
+    });
+
     testWidgets('whitespace-only tag is rejected', (tester) async {
       await openDialog(tester);
 

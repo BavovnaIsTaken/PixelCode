@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pixelcode/models/game_economy.dart';
+import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
 import 'package:pixelcode/providers/shop_navigation_provider.dart';
 import 'package:pixelcode/widgets/canvas/build_decor_section.dart';
@@ -62,15 +63,64 @@ void main() {
     container.dispose();
   });
 
-  testWidgets('toggles edit mode via the action row', (tester) async {
+  testWidgets('furnitureEditModeProvider is derived from selectedFurnitureIdProvider',
+      (tester) async {
     final container = await _makeContainer();
     await _pumpDecor(tester, container);
     await tester.pump();
 
     expect(container.read(furnitureEditModeProvider), isFalse);
-    await tester.tap(find.text('Розмістити меблі'));
+    container.read(selectedFurnitureIdProvider.notifier).state =
+        'coffee_table_basic';
     await tester.pump();
     expect(container.read(furnitureEditModeProvider), isTrue);
+
+    container.read(selectedFurnitureIdProvider.notifier).state = null;
+    expect(container.read(furnitureEditModeProvider), isFalse);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    container.dispose();
+  });
+
+  testWidgets('tapping Місце activates item and shows banner', (tester) async {
+    final container = await _makeContainer();
+    // Purchase one copy so the item has stock in inventory.
+    container
+        .read(gameEconomyProvider.notifier)
+        .purchaseFurniture('coffee_table_basic');
+
+    await _pumpDecor(tester, container);
+    await tester.pump();
+
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    await tester.tap(find.text('Місце').first);
+    await tester.pump();
+
+    expect(container.read(selectedFurnitureIdProvider), 'coffee_table_basic');
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(find.textContaining('Тап на канвасі'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    container.dispose();
+  });
+
+  testWidgets('tapping active item deactivates placement', (tester) async {
+    final container = await _makeContainer();
+    container
+        .read(gameEconomyProvider.notifier)
+        .purchaseFurniture('coffee_table_basic');
+    container.read(selectedFurnitureIdProvider.notifier).state =
+        'coffee_table_basic';
+
+    await _pumpDecor(tester, container);
+    await tester.pump();
+
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    await tester.tap(find.text('Скасувати').first);
+    await tester.pump();
+
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    expect(container.read(furnitureEditModeProvider), isFalse);
 
     await tester.pumpWidget(const SizedBox.shrink());
     container.dispose();

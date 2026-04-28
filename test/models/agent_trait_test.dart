@@ -187,5 +187,58 @@ void main() {
       expect(high.emphasis, TraitEmphasis.critical);
       expect(low.emphasis != high.emphasis, isTrue);
     });
+
+    test('equal traits have equal hashCodes', () {
+      final t1 = AgentTrait(
+        id: 'x',
+        agentId: 'coder#1',
+        type: TraitType.strength,
+        category: 'code',
+        tag: 'clean',
+        lesson: 'Writes clean code',
+        frequency: 2,
+        firstSeen: pastDate,
+        lastSeen: now,
+      );
+      final t2 = AgentTrait(
+        id: 'x',
+        agentId: 'coder#1',
+        type: TraitType.strength,
+        category: 'code',
+        tag: 'clean',
+        lesson: 'Writes clean code',
+        frequency: 2,
+        firstSeen: pastDate,
+        lastSeen: now,
+      );
+      expect(t1 == t2, isTrue);
+      expect(t1.hashCode, t2.hashCode);
+    });
+
+    test('traits with different id have different hashCodes', () {
+      final t1 = AgentTrait(
+        id: 'a',
+        agentId: 'coder#1',
+        type: TraitType.strength,
+        category: 'code',
+        tag: 'clean',
+        lesson: 'Lesson',
+        frequency: 1,
+        firstSeen: pastDate,
+        lastSeen: now,
+      );
+      final t2 = AgentTrait(
+        id: 'b',
+        agentId: 'coder#1',
+        type: TraitType.strength,
+        category: 'code',
+        tag: 'clean',
+        lesson: 'Lesson',
+        frequency: 1,
+        firstSeen: pastDate,
+        lastSeen: now,
+      );
+      expect(t1 == t2, isFalse);
+    });
   });
 }

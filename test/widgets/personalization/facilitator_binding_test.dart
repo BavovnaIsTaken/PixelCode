@@ -72,6 +72,34 @@ void main() {
       expect(capturedStyle, FacilitatorStyle.default_);
     });
 
+    testWidgets('selecting a different style updates the provider',
+        (WidgetTester tester) async {
+      bool bindingChanged = false;
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: FacilitatorBindingWidget(
+                agentId: 'coder#1',
+                agentName: 'Developer',
+                onBindingChanged: () => bindingChanged = true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Open the dropdown
+      await tester.tap(find.byType(DropdownButton<FacilitatorStyle>));
+      await tester.pumpAndSettle();
+
+      // Pick a different style
+      await tester.tap(find.text('Technical').last);
+      await tester.pumpAndSettle();
+
+      expect(bindingChanged, isTrue);
+    });
+
     testWidgets('all facilitator styles have labels and descriptions',
         (WidgetTester tester) async {
       // Verify enum extension methods work correctly

@@ -537,22 +537,41 @@ void main() {
       );
     });
 
-    test('returns false when already owned', () async {
+    test('returns true after buying once — can buy more copies', () async {
       final c = await _makeContainer(grymni: 1000);
       final notifier = c.read(gameEconomyProvider.notifier);
       notifier.purchaseFurniture('coffee_table_basic');
-      expect(notifier.canPurchaseFurniture('coffee_table_basic'), isFalse);
+      // Inventory model: buying gives 1 copy, you can always buy more if affordable.
+      expect(notifier.canPurchaseFurniture('coffee_table_basic'), isTrue);
+    });
+
+    test('returns false when insufficient funds', () async {
+      // Default container starts with 500₲; coffee_table_designer costs 2000₲.
+      final c = await _makeContainer(grymni: 0);
+      expect(
+        c.read(gameEconomyProvider.notifier).canPurchaseFurniture('coffee_table_designer'),
+        isFalse,
+      );
     });
   });
 
   group('purchaseFurniture', () {
-    test('marks as owned and deducts cost', () async {
+    test('adds to inventory and deducts cost', () async {
       final c = await _makeContainer(grymni: 1000);
       final before = c.read(gameEconomyProvider).grymni;
       c.read(gameEconomyProvider.notifier).purchaseFurniture('coffee_table_basic'); // 300₲
       final s = c.read(gameEconomyProvider);
       expect(s.ownedFurniture, contains('coffee_table_basic'));
+      expect(s.furnitureInventory['coffee_table_basic'], 1);
       expect(s.grymni, before - 300);
+    });
+
+    test('buying twice increments inventory to 2', () async {
+      final c = await _makeContainer(grymni: 1000);
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.purchaseFurniture('coffee_table_basic');
+      notifier.purchaseFurniture('coffee_table_basic');
+      expect(c.read(gameEconomyProvider).furnitureInventory['coffee_table_basic'], 2);
     });
   });
 
@@ -575,6 +594,30 @@ void main() {
       final before = c.read(gameEconomyProvider).placedFurniture.length;
       c.read(gameEconomyProvider.notifier).placeFurniture('coffee_table_basic', 3, 4);
       expect(c.read(gameEconomyProvider).placedFurniture.length, before);
+    });
+
+    test('cannot place same item twice when only 1 copy owned', () async {
+      final c = await _makeContainer(grymni: 1000);
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.purchaseFurniture('coffee_table_basic');
+      notifier.placeFurniture('coffee_table_basic', 3, 4);
+      final after1 = c.read(gameEconomyProvider).placedFurniture.length;
+      notifier.placeFurniture('coffee_table_basic', 4, 4); // no inventory left
+      expect(c.read(gameEconomyProvider).placedFurniture.length, after1);
+    });
+
+    test('furnitureAvailable decrements on place, resets on remove', () async {
+      final c = await _makeContainer(grymni: 1000);
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.purchaseFurniture('coffee_table_basic');
+      expect(c.read(gameEconomyProvider).furnitureAvailable('coffee_table_basic'), 1);
+      notifier.placeFurniture('coffee_table_basic', 3, 4);
+      expect(c.read(gameEconomyProvider).furnitureAvailable('coffee_table_basic'), 0);
+      notifier.removePlacedFurniture(
+        c.read(gameEconomyProvider).placedFurniture
+            .indexWhere((p) => p.itemId == 'coffee_table_basic'),
+      );
+      expect(c.read(gameEconomyProvider).furnitureAvailable('coffee_table_basic'), 1);
     });
 
     test('removePlacedFurniture removes by index', () async {
@@ -620,6 +663,54 @@ void main() {
       final before = c.read(gameEconomyProvider).placedRooms.length;
       notifier.removeRoom('nonexistent_id');
       expect(c.read(gameEconomyProvider).placedRooms.length, before);
+    });
+  });
+
+  // ─── setAgentProvider (D.1 Backend-swap) ────────────────────────────────
+
+  group('setAgentProvider', () {
+    test('changes provider for a hired agent', () async {
+      final c = await _makeContainer();
+      // coder#1 is seeded with cloud provider by default.
+      final before = c.read(gameEconomyProvider).agents['coder#1']!;
+      expect(before.provider, isNot(AgentProviderType.deepseek));
+
+      c
+          .read(gameEconomyProvider.notifier)
+          .setAgentProvider('coder#1', AgentProviderType.deepseek);
+
+      final after = c.read(gameEconomyProvider).agents['coder#1']!;
+      expect(after.provider, AgentProviderType.deepseek);
+    });
+
+    test('preserves characterId (identity unchanged)', () async {
+      final c = await _makeContainer();
+      // Hire a roster character so characterId is set.
+      c.read(gameEconomyProvider.notifier).hireCharacter('andriy_coder');
+      final instanceId = c
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .firstWhere((a) => a.characterId == 'andriy_coder')
+          .instanceId;
+
+      c
+          .read(gameEconomyProvider.notifier)
+          .setAgentProvider(instanceId, AgentProviderType.ollama);
+
+      final after = c.read(gameEconomyProvider).agents[instanceId]!;
+      expect(after.provider, AgentProviderType.ollama);
+      expect(after.characterId, 'andriy_coder',
+          reason: 'characterId must survive provider swap');
+    });
+
+    test('no-op for unknown instanceId', () async {
+      final c = await _makeContainer();
+      final before = c.read(gameEconomyProvider).agents.length;
+      c
+          .read(gameEconomyProvider.notifier)
+          .setAgentProvider('nonexistent#99', AgentProviderType.kimi);
+      expect(c.read(gameEconomyProvider).agents.length, before);
     });
   });
 }

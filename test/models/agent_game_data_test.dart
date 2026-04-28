@@ -306,6 +306,89 @@ void main() {
       });
     });
 
+    group('WorkplaceStatus', () {
+      test('defaults to assigned for backward-compat seeded agents', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        expect(agent.workplaceStatus, WorkplaceStatus.assigned);
+      });
+
+      test('can be set to unassigned for new hires', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#2',
+          roleType: 'coder',
+          nickname: 'Bob',
+          workplaceStatus: WorkplaceStatus.unassigned,
+        );
+        expect(agent.workplaceStatus, WorkplaceStatus.unassigned);
+      });
+
+      test('copyWith transitions unassigned → assigned', () {
+        final unassigned = AgentGameData(
+          instanceId: 'coder#2',
+          roleType: 'coder',
+          nickname: 'Bob',
+          workplaceStatus: WorkplaceStatus.unassigned,
+        );
+        final assigned = unassigned.copyWith(workplaceStatus: WorkplaceStatus.assigned);
+        expect(assigned.workplaceStatus, WorkplaceStatus.assigned);
+        expect(assigned.instanceId, unassigned.instanceId);
+      });
+
+      test('copyWith preserves workplaceStatus when not specified', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#2',
+          roleType: 'coder',
+          nickname: 'Bob',
+          workplaceStatus: WorkplaceStatus.unassigned,
+        );
+        final modified = agent.copyWith(nickname: 'Bob 2');
+        expect(modified.workplaceStatus, WorkplaceStatus.unassigned);
+      });
+
+      test('toJson omits workplaceStatus when assigned (backward compat)', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        expect(agent.toJson().containsKey('workplaceStatus'), isFalse);
+      });
+
+      test('toJson includes workplaceStatus when unassigned', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#2',
+          roleType: 'coder',
+          nickname: 'Bob',
+          workplaceStatus: WorkplaceStatus.unassigned,
+        );
+        expect(agent.toJson()['workplaceStatus'], WorkplaceStatus.unassigned.index);
+      });
+
+      test('fromJson defaults to assigned when key missing (old saves)', () {
+        final agent = AgentGameData.fromJson({
+          'instanceId': 'coder#1',
+          'roleType': 'coder',
+          'nickname': 'Alice',
+        });
+        expect(agent.workplaceStatus, WorkplaceStatus.assigned);
+      });
+
+      test('round-trips unassigned through JSON', () {
+        final original = AgentGameData(
+          instanceId: 'coder#2',
+          roleType: 'coder',
+          nickname: 'Bob',
+          workplaceStatus: WorkplaceStatus.unassigned,
+        );
+        final restored = AgentGameData.fromJson(original.toJson());
+        expect(restored.workplaceStatus, WorkplaceStatus.unassigned);
+      });
+    });
+
     group('characterId (Roster v1 link)', () {
       test('defaults to null for legacy / role-flow hires', () {
         final agent = AgentGameData(

@@ -150,5 +150,19 @@ void main() {
       )));
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('falls back to first message text when all messages are status',
+        (tester) async {
+      final msgs = [
+        _msg('читаю файл', category: MessageCategory.status, threadId: 'th6'),
+      ];
+      await tester.pumpWidget(_wrap(ThreadTile(
+        threadId: 'th6',
+        messages: msgs,
+        messageBuilder: builder,
+      )));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 }

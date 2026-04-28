@@ -91,6 +91,31 @@ void main() {
       );
       expect(m.toJson().containsKey('target'), false);
     });
+
+    test('copyWith preserves status when not provided', () {
+      final m = Mission(
+        id: 'm',
+        briefing: 'b',
+        category: DevCategory.deploy,
+        status: MissionStatus.active,
+        xp: 0,
+        estimatedMinutes: 0,
+      );
+      expect(m.copyWith().status, MissionStatus.active);
+    });
+
+    test('copyWith preserves completedAt when not provided', () {
+      final ts = DateTime.parse('2026-04-26T12:00:00Z');
+      final m = Mission(
+        id: 'm',
+        briefing: 'b',
+        category: DevCategory.deploy,
+        xp: 0,
+        estimatedMinutes: 0,
+        completedAt: ts,
+      );
+      expect(m.copyWith().completedAt, ts);
+    });
   });
 
   group('MissionBriefing derived state', () {
@@ -241,6 +266,19 @@ void main() {
       });
       expect(minimal.missions, isEmpty);
       expect(minimal.completedAt, isNull);
+    });
+
+    test('fromJson with completedAt parses the timestamp', () {
+      final b = MissionBriefing.fromJson({
+        'id': 'b1',
+        'projectPath': '/proj',
+        'objective': 'Ship it',
+        'missions': <dynamic>[],
+        'scoreBreakdown': <String, dynamic>{},
+        'createdAt': '2026-04-26T00:00:00Z',
+        'completedAt': '2026-04-27T10:00:00Z',
+      });
+      expect(b.completedAt, DateTime.parse('2026-04-27T10:00:00Z'));
     });
   });
 }

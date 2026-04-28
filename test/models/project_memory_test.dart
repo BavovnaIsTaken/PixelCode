@@ -270,4 +270,37 @@ void main() {
       expect(result, contains('Beta'));
     });
   });
+
+  // ─── _humanizeAge branches via formatForPrompt ───────────────────────────
+
+  group('formatForPrompt age labels', () {
+    ProjectMemoryEntry aged(Duration age) => ProjectMemoryEntry(
+          summary: 'note',
+          timestamp: DateTime.now().subtract(age),
+        );
+
+    test('2 days old shows Nd ago', () {
+      final result =
+          ProjectMemoryEntry.formatForPrompt([aged(const Duration(days: 2))]);
+      expect(result, contains('2d ago'));
+    });
+
+    test('6 days old shows 6d ago', () {
+      final result =
+          ProjectMemoryEntry.formatForPrompt([aged(const Duration(days: 6))]);
+      expect(result, contains('6d ago'));
+    });
+
+    test('7 days old shows 1w ago', () {
+      final result =
+          ProjectMemoryEntry.formatForPrompt([aged(const Duration(days: 7))]);
+      expect(result, contains('1w ago'));
+    });
+
+    test('14 days old shows 2w ago', () {
+      final result =
+          ProjectMemoryEntry.formatForPrompt([aged(const Duration(days: 14))]);
+      expect(result, contains('2w ago'));
+    });
+  });
 }

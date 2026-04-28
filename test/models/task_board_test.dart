@@ -431,5 +431,16 @@ void main() {
       final decoded = BoardState.decode(board.encode());
       expect(decoded.tasks, isEmpty);
     });
+
+    test('fromJson with missing tasks key falls back to empty list', () {
+      final board = BoardState.fromJson({});
+      expect(board.tasks, isEmpty);
+    });
+
+    test('toJson with tasks serializes task list', () {
+      final board = BoardState(tasks: [card('t1', TaskColumn.backlog)]);
+      final json = board.toJson();
+      expect((json['tasks'] as List).length, 1);
+    });
   });
 }

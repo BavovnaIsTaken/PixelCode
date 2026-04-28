@@ -363,6 +363,40 @@ void main() {
     expect(seeded.outputJson, '{"format":"quest_line"}');
   });
 
+  test('facilitatorBoardTaskStream is a broadcast stream', () {
+    expect(facilitatorBoardTaskStream, isA<Stream<String>>());
+    expect(facilitatorBoardTaskStream.isBroadcast, isTrue);
+  });
+
+  test('start — uses _defaultDecode when no decodeOutput is injected', () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+    final output = _seededOutput();
+
+    // Omit decodeOutput → the private _defaultDecode is wired in, which
+    // delegates to FacilitatorOutputPersistenceService.decode.
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      persistOutput: (_, _) async {},
+    );
+
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'Test',
+      answers: const {},
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(output));
+
+    final result = await future;
+    expect(result, isA<FacilitatorSeedSuccess>());
+    await messages.close();
+  });
+
   test('FacilitatorErrorMessage.fromJson round-trips', () {
     final raw = jsonEncode({
       'type': 'facilitator_error',

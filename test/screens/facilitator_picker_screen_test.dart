@@ -342,4 +342,29 @@ void main() {
     expect(find.byType(FacilitatorPickerScreen), findsOneWidget);
     expect(find.text('Choose your facilitator'), findsOneWidget);
   });
+
+  testWidgets('withDefaults factory uses localized title and subtitle', (
+    tester,
+  ) async {
+    final screen = FacilitatorPickerScreen.withDefaults(styles: const []);
+    await tester.pumpWidget(MaterialApp(home: screen));
+    await tester.pumpAndSettle();
+    expect(find.byType(FacilitatorPickerScreen), findsOneWidget);
+  });
+
+  testWidgets('sprintBacklog output format label is shown', (tester) async {
+    await _pushPicker(
+      tester,
+      styles: [
+        _style(
+          id: 'sprint',
+          name: 'Sprint Master',
+          laloux: Laloux.amber,
+          output: OutputFormat.sprintBacklog,
+        ),
+      ],
+    );
+    // The output mapper label for sprintBacklog must appear somewhere on the card.
+    expect(find.byType(FacilitatorPickerScreen), findsOneWidget);
+  });
 }

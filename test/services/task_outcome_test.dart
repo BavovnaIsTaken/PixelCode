@@ -122,5 +122,100 @@ void main() {
     test('divergentTaskTypes covers expected IDs', () {
       expect(divergentTaskTypes, containsAll({'architecture', 'product-spec', 'ui-design'}));
     });
+
+    test('workstationTaskTypes covers coding/testing/debugging', () {
+      expect(workstationTaskTypes, containsAll({'coding', 'testing', 'debugging'}));
+    });
+
+    test('unassigned agent on coding task has higher incomplete rate', () {
+      final rng = Random(42);
+      var incompleteAssigned = 0;
+      var incompleteUnassigned = 0;
+      const n = 2000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              taskType: 'coding',
+              isUnassigned: false,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteAssigned++;
+        }
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              taskType: 'coding',
+              isUnassigned: true,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteUnassigned++;
+        }
+      }
+      // Unassigned penalty (−0.25 success) must produce more incompletes.
+      expect(incompleteUnassigned, greaterThan(incompleteAssigned));
+    });
+
+    test('unassigned penalty does NOT apply on non-workstation tasks', () {
+      // For a task like "architecture", isUnassigned should have no extra effect.
+      final rng = Random(7);
+      var incompleteAssigned = 0;
+      var incompleteUnassigned = 0;
+      const n = 2000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              taskType: 'architecture',
+              isUnassigned: false,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteAssigned++;
+        }
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              taskType: 'architecture',
+              isUnassigned: true,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteUnassigned++;
+        }
+      }
+      // Without the penalty the two distributions should be within normal
+      // statistical noise (~5% tolerance on 2000 samples).
+      final diff = (incompleteUnassigned - incompleteAssigned).abs();
+      expect(diff, lessThan(n * 0.05));
+    });
+
+    test('high-reliability unassigned agent on coding task still completes', () {
+      // reliabilitySkill 15 → success 1.0; penalty −0.25 → 0.75 still > 0.
+      final rng = Random(99);
+      var incomplete = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 15,
+              taskType: 'coding',
+              isUnassigned: true,
+            ) ==
+            TaskOutcome.incomplete) {
+          incomplete++;
+        }
+      }
+      // ~25% incomplete expected, not 0 and not all.
+      expect(incomplete, greaterThan(180));
+      expect(incomplete, lessThan(320));
+    });
   });
 }

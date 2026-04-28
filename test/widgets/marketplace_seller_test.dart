@@ -108,6 +108,11 @@ void main() {
 
       // Verify create listing button
       expect(find.text('Create Listing'), findsOneWidget);
+
+      // Tapping "Create Listing" should not throw (callback is a no-op placeholder)
+      await tester.tap(find.text('Create Listing'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     });
 
     // ─── Test 5.4: Listing selection from seller view ───

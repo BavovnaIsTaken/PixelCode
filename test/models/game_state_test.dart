@@ -250,7 +250,7 @@ void main() {
           },
           nickname: 'TestName',
           ownedCosmetics: {'hat_1', 'hat_2'},
-          ownedFurniture: {'desk_oak', 'chair_leather'},
+          furnitureInventory: {'desk_oak': 1, 'chair_leather': 1},
         );
 
         final json = original.toJson();

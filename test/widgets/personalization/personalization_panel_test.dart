@@ -218,6 +218,78 @@ void main() {
 
       expect(find.byIcon(Icons.delete_outline), findsOneWidget);
     });
+
+    testWidgets('tapping delete icon on strength calls removeLesson',
+        (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: 'str-1',
+          agentId: 'coder#1',
+          type: TraitType.strength,
+          category: 'coding',
+          tag: 'removable',
+          lesson: 'Remove me strength',
+          frequency: 1,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+      await tester.pumpWidget(buildTestApp(traits));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('tapping delete icon on weakness calls removeLesson',
+        (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: 'weak-1',
+          agentId: 'coder#1',
+          type: TraitType.weakness,
+          category: 'testing',
+          tag: 'fixable',
+          lesson: 'Remove me weakness',
+          frequency: 1,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+      await tester.pumpWidget(buildTestApp(traits));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('tapping clear-all button calls _clearAll', (tester) async {
+      final now = DateTime.now();
+      final traits = [
+        AgentTrait(
+          id: 'a',
+          agentId: 'coder#1',
+          type: TraitType.strength,
+          category: 'coding',
+          tag: 'alpha',
+          lesson: 'Lesson A',
+          frequency: 1,
+          firstSeen: now,
+          lastSeen: now,
+        ),
+      ];
+      await tester.pumpWidget(buildTestApp(traits));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.delete_sweep_outlined), findsOneWidget);
+      await tester.tap(find.byIcon(Icons.delete_sweep_outlined));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 }
 
@@ -227,4 +299,9 @@ class _FakeTraitsNotifier extends TraitsNotifier {
 
   @override
   List<AgentTrait> build() => _initial;
+
+  @override
+  void removeLesson(String lessonId) {
+    state = state.where((t) => t.id != lessonId).toList();
+  }
 }
