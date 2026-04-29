@@ -241,11 +241,6 @@ class _TeamRow extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     _VendorPill(provider: instance.provider),
-                    if (instance.specializations.isNotEmpty) ...[
-                      const SizedBox(width: 6),
-                      _SpecializationBadge(
-                          specializations: instance.specializations),
-                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -256,6 +251,11 @@ class _TeamRow extends StatelessWidget {
                     fontSize: 9,
                   ),
                 ),
+                if (instance.specializations.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  _SpecializationBadgeRow(
+                      specializations: instance.specializations),
+                ],
               ],
             ),
           ),
@@ -823,33 +823,48 @@ class _StatBars extends StatelessWidget {
 
 // ─── Vendor pill ───────────────────────────────────────────────────────────
 
-class _SpecializationBadge extends StatelessWidget {
+class _SpecializationBadgeRow extends StatelessWidget {
   final Set<String> specializations;
-  const _SpecializationBadge({required this.specializations});
+  const _SpecializationBadgeRow({required this.specializations});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 4,
+      runSpacing: 3,
+      children: [
+        for (final spec in specializations) _SpecPill(label: spec),
+      ],
+    );
+  }
+}
+
+class _SpecPill extends StatelessWidget {
+  final String label;
+  const _SpecPill({required this.label});
 
   @override
   Widget build(BuildContext context) {
     const color = Color(0xFFF59E0B);
-    final tooltip = 'Спеціалізація: ${specializations.join(", ")}';
     return Tooltip(
-      message: tooltip,
+      message: 'Спеціалізація: $label (+15% крит)',
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.star, size: 8, color: color),
+            const Icon(Icons.star, size: 7, color: color),
             const SizedBox(width: 2),
             Text(
-              '${specializations.length}',
+              label,
               style: const TextStyle(
                 color: color,
-                fontSize: 8,
+                fontSize: 7,
                 fontWeight: FontWeight.w700,
               ),
             ),

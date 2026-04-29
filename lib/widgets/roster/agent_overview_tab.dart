@@ -183,6 +183,12 @@ class AgentOverviewTab extends ConsumerWidget {
         ),
         const SizedBox(height: 12),
 
+        // Specializations — C.1 earned topic badges
+        if (agent.specializations.isNotEmpty) ...[
+          _SpecializationsCard(specializations: agent.specializations),
+          const SizedBox(height: 12),
+        ],
+
         // Backend swap — D.1 Advanced Settings
         _BackendSwapCard(agent: agent),
         const SizedBox(height: 12),
@@ -502,6 +508,77 @@ class _InfoCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: children,
       ),
+    );
+  }
+}
+
+class _SpecializationsCard extends StatelessWidget {
+  final Set<String> specializations;
+  const _SpecializationsCard({required this.specializations});
+
+  @override
+  Widget build(BuildContext context) {
+    const amber = Color(0xFFF59E0B);
+    return _InfoCard(
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.star, size: 13, color: amber),
+            const SizedBox(width: 6),
+            Text(
+              'Спеціалізації',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '+15% крит / спеціалізація',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 5,
+          runSpacing: 5,
+          children: [
+            for (final spec in specializations)
+              Tooltip(
+                message: 'Спеціалізація: $spec — +15% крит на цьому типі задач',
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: amber.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: amber.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.star, size: 9, color: amber),
+                      const SizedBox(width: 3),
+                      Text(
+                        spec,
+                        style: const TextStyle(
+                          color: amber,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
