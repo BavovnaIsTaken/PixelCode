@@ -21,7 +21,8 @@
     "in_progress": "в роботі",
     "ship": "задеплоїли",
     "critical_path": "критичний шлях",
-    "scope": "scope"
+    "scope": "scope",
+    "testing": "тестування"
   },
   "ceremonySchedule": [
     {

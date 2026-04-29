@@ -19,7 +19,8 @@
     "retro": "monthly review",
     "done": "delivered",
     "in_progress": "in flight",
-    "ship": "release to production"
+    "ship": "release to production",
+    "testing": "validation"
   },
   "ceremonySchedule": [
     {
@@ -42,7 +43,11 @@
       "id": "stakeholders",
       "prompt": "Who will use this? Internal only, or external users with accounts?",
       "inputKind": "choice",
-      "choices": ["Internal / personal use", "External users (with accounts)", "Multi-tenant (organizations)"],
+      "choices": [
+        "Internal / personal use",
+        "External users (with accounts)",
+        "Multi-tenant (organizations)"
+      ],
       "mapsTo": "auth"
     },
     {
@@ -55,7 +60,11 @@
       "id": "deadline",
       "prompt": "Target delivery: quick MVP or full launch-ready?",
       "inputKind": "choice",
-      "choices": ["MVP — couple of days", "Mid-scope — couple of weeks", "Full launch — multi-month"],
+      "choices": [
+        "MVP — couple of days",
+        "Mid-scope — couple of weeks",
+        "Full launch — multi-month"
+      ],
       "mapsTo": "none"
     }
   ],

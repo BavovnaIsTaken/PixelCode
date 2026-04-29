@@ -14,10 +14,12 @@ import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/task_board.dart';
 import '../../models/work_log_entry.dart';
+import '../../providers/active_facilitator_style_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../providers/task_progress_provider.dart';
+import '../../utils/kanban_labels.dart';
 
 // ─── Sticky note colors ─────────────────────────────────────────────────────
 
@@ -237,7 +239,7 @@ class _ColumnTabRail extends StatelessWidget {
   }
 }
 
-class _TabItem extends StatelessWidget {
+class _TabItem extends ConsumerWidget {
   final TaskColumn column;
   final int count;
   final bool isActive;
@@ -251,9 +253,10 @@ class _TabItem extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.appColors;
     final columnColor = _columnColors[column]!;
+    final style = ref.watch(activeFacilitatorStyleProvider).valueOrNull;
 
     return GestureDetector(
       onTap: onTap,
@@ -298,7 +301,7 @@ class _TabItem extends StatelessWidget {
             // Label
             Flexible(
               child: Text(
-                column.label,
+                kanbanColumnLabel(column, style),
                 style: TextStyle(
                   color: isActive
                       ? colors.textHigh
@@ -684,7 +687,7 @@ class _MobileSwipeCard extends ConsumerWidget {
   }
 }
 
-class _SwipeBackground extends StatelessWidget {
+class _SwipeBackground extends ConsumerWidget {
   final TaskColumn column;
   final Alignment alignment;
   final IconData icon;
@@ -696,8 +699,9 @@ class _SwipeBackground extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final color = _columnColors[column]!;
+    final style = ref.watch(activeFacilitatorStyleProvider).valueOrNull;
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -713,7 +717,7 @@ class _SwipeBackground extends StatelessWidget {
           Icon(icon, color: color.withValues(alpha: 0.8), size: 18),
           const SizedBox(width: 6),
           Text(
-            column.label,
+            kanbanColumnLabel(column, style),
             style: TextStyle(
               color: color.withValues(alpha: 0.8),
               fontSize: 12,
@@ -1058,7 +1062,10 @@ class _TaskDetailContent extends ConsumerWidget {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    task.column.label,
+                    kanbanColumnLabel(
+                      task.column,
+                      ref.watch(activeFacilitatorStyleProvider).valueOrNull,
+                    ),
                     style: TextStyle(
                       color: columnColor,
                       fontSize: 12,
@@ -1455,7 +1462,7 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-class _MoveColumnButton extends StatelessWidget {
+class _MoveColumnButton extends ConsumerWidget {
   final TaskColumn column;
   final bool isCurrent;
   final VoidCallback? onTap;
@@ -1467,8 +1474,9 @@ class _MoveColumnButton extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final color = _columnColors[column]!;
+    final style = ref.watch(activeFacilitatorStyleProvider).valueOrNull;
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
@@ -1498,7 +1506,7 @@ class _MoveColumnButton extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                column.label,
+                kanbanColumnLabel(column, style),
                 style: TextStyle(
                   color: isCurrent
                       ? color
@@ -2077,7 +2085,12 @@ class _DesktopColumn extends ConsumerWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        column.label,
+                        kanbanColumnLabel(
+                          column,
+                          ref
+                              .watch(activeFacilitatorStyleProvider)
+                              .valueOrNull,
+                        ),
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.8),
                           fontSize: 12,

@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/facilitator_style.dart';
+import '../../providers/active_facilitator_style_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../screens/facilitator/facilitator_intake_screen.dart';
 import '../../screens/facilitator/facilitator_picker_screen.dart';
@@ -123,16 +124,34 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
           }
           return output;
         },
-    pickStyle: pickStyle ??
-        (styles) {
-          log('pushing FacilitatorPickerScreen (${styles.length} styles)');
-          return navigator.push<FacilitatorStyle>(
-            MaterialPageRoute(
-              builder: (_) => FacilitatorPickerScreen(styles: styles),
-              fullscreenDialog: true,
-            ),
-          );
-        },
+    pickStyle: (styles) async {
+      final chosen = pickStyle != null
+          ? await pickStyle(styles)
+          : await () {
+              log('pushing FacilitatorPickerScreen (${styles.length} styles)');
+              return navigator.push<FacilitatorStyle>(
+                MaterialPageRoute(
+                  builder: (_) => FacilitatorPickerScreen(styles: styles),
+                  fullscreenDialog: true,
+                ),
+              );
+            }();
+      if (chosen != null) {
+        // Mirror the pick into the active-style provider so the lexicon
+        // swap kicks in immediately for kanban/chat/ceremony surfaces.
+        // Best-effort — a test container without a SharedPreferences
+        // override would throw synchronously inside setStyle; the
+        // onboarding flow itself does not depend on the mirror succeeding.
+        try {
+          await ref
+              .read(activeFacilitatorStyleProvider.notifier)
+              .setStyle(chosen);
+        } catch (e) {
+          log('mirroring style to active provider failed: $e');
+        }
+      }
+      return chosen;
+    },
     pickIntake: pickIntake ??
         (style) {
           log('pushing FacilitatorIntakeScreen for style=${style.id}');

@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../models/task_board.dart';
+import '../../providers/active_facilitator_style_provider.dart';
+import '../../utils/kanban_labels.dart';
 
 /// Rendered in place of a standard chat bubble when a [ChatMessage] has
 /// [MessageCategory.taskLinked]. Displays a compact board-task-added row.
-class BoardAddedBubble extends StatelessWidget {
+class BoardAddedBubble extends ConsumerWidget {
   /// Title of the task that was added to the backlog.
   final String title;
 
@@ -12,8 +17,10 @@ class BoardAddedBubble extends StatelessWidget {
   const BoardAddedBubble({super.key, required this.title, this.onView});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     const stickyYellow = Color(0xFFFFC107);
+    final style = ref.watch(activeFacilitatorStyleProvider).valueOrNull;
+    final backlogLabel = kanbanColumnLabel(TaskColumn.backlog, style);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Container(
@@ -34,7 +41,7 @@ class BoardAddedBubble extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Додано в беклог: "$title"',
+                'Додано в $backlogLabel: "$title"',
                 style: TextStyle(
                   color: Colors.white.withValues(alpha: 0.8),
                   fontSize: 11,

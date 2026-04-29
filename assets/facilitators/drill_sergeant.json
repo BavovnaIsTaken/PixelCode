@@ -19,7 +19,8 @@
     "retro": "post-action review",
     "done": "complete",
     "in_progress": "active",
-    "ship": "deploy now"
+    "ship": "deploy now",
+    "testing": "QA"
   },
   "ceremonySchedule": [
     {
@@ -43,7 +44,11 @@
       "id": "users",
       "prompt": "Хто цільова аудиторія. Соло, відділ, чи відкритий публіці?",
       "inputKind": "choice",
-      "choices": ["Соло", "Відділ", "Публіка"],
+      "choices": [
+        "Соло",
+        "Відділ",
+        "Публіка"
+      ],
       "mapsTo": "auth"
     }
   ],
