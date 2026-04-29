@@ -540,6 +540,14 @@ const double kSpecializationCritBonus = 0.15;
 /// without trivializing the roll.
 const double kMaxSpecializationCritBonus = 0.30;
 
+/// Success-chance bonus granted per accumulated lesson on any task.
+/// 0.5% per lesson → 20 lessons = +10% success (= −10% incomplete rate).
+const double kLessonSuccessBonusPerLesson = 0.005;
+
+/// Hard cap on the aggregate lesson-driven success bonus. Keeps the mechanic
+/// visible without trivializing the roll for agents with hundreds of lessons.
+const double kMaxLessonSuccessBonus = 0.10;
+
 // ─── Agent passives ───────────────────────────────────────────────────────
 
 class AgentPassive {

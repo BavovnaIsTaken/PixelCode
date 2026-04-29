@@ -295,4 +295,93 @@ void main() {
       expect(crits, lessThan(n * 0.38));
     });
   });
+
+  group('lessonSuccessBonus', () {
+    test('zero lessons yields no bonus', () {
+      expect(lessonSuccessBonus(lessonCount: 0), 0.0);
+    });
+
+    test('scales at 0.005 per lesson', () {
+      expect(lessonSuccessBonus(lessonCount: 10), closeTo(0.05, 1e-9));
+      expect(lessonSuccessBonus(lessonCount: 20), closeTo(0.10, 1e-9));
+    });
+
+    test('caps at kMaxLessonSuccessBonusInRoll', () {
+      expect(lessonSuccessBonus(lessonCount: 100), kMaxLessonSuccessBonusInRoll);
+    });
+  });
+
+  group('rollOutcome — lesson bonus', () {
+    test('lesson bonus reduces incomplete rate', () {
+      final rng = Random(23);
+      var incompleteNoLessons = 0;
+      var incompleteMaxLessons = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteNoLessons++;
+        }
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              lessonBonus: kMaxLessonSuccessBonusInRoll,
+            ) ==
+            TaskOutcome.incomplete) {
+          incompleteMaxLessons++;
+        }
+      }
+      // With max lesson bonus the agent should have meaningfully fewer incompletes.
+      expect(incompleteNoLessons, greaterThan(incompleteMaxLessons));
+      expect(incompleteNoLessons - incompleteMaxLessons, greaterThan(n * 0.04));
+    });
+
+    test('lesson bonus is capped at kMaxLessonSuccessBonusInRoll', () {
+      // reliability=0 → base 0.85; cap adds at most +0.10 → 0.95 success.
+      // Incomplete rate ~5%, never near 0% (uncapped) or 15% (no bonus).
+      final rng = Random(29);
+      var incomplete = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 10,
+              creativitySkill: 0,
+              reliabilitySkill: 0,
+              lessonBonus: 99.0,
+            ) ==
+            TaskOutcome.incomplete) {
+          incomplete++;
+        }
+      }
+      expect(incomplete, greaterThan(n * 0.02));
+      expect(incomplete, lessThan(n * 0.10));
+    });
+
+    test('lesson bonus does NOT produce crits on non-divergent tasks', () {
+      final rng = Random(37);
+      var crits = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 0,
+              creativitySkill: 50,
+              reliabilitySkill: 15,
+              isDivergentTask: false,
+              lessonBonus: kMaxLessonSuccessBonusInRoll,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      expect(crits, 0);
+    });
+  });
 }

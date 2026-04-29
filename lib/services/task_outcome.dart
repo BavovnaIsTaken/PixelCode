@@ -66,12 +66,25 @@ const double kUnassignedIncompletePenalty = 0.25;
 /// (no model imports). Keep the two values in sync.
 const double kMaxSpecializationCritBonusInRoll = 0.30;
 
+/// Hard cap on the lesson-driven success bonus applied inside [rollOutcome].
+/// Mirrors `kMaxLessonSuccessBonus` in game_economy.dart. Keep in sync.
+const double kMaxLessonSuccessBonusInRoll = 0.10;
+
+/// `kLessonSuccessBonusPerLesson * lessonCount`, clamped to
+/// `[0, kMaxLessonSuccessBonusInRoll]`.
+/// * 0 lessons → no bonus.
+/// * 20 lessons → +10% success (= −10% incomplete rate).
+double lessonSuccessBonus({required int lessonCount}) =>
+    (0.005 * lessonCount).clamp(0.0, kMaxLessonSuccessBonusInRoll);
+
 /// Rolls the final outcome for a task at the `testing → done` transition.
 ///
 /// Order of checks:
 /// 1. Reliability gate (incomplete if we roll above the success threshold).
 ///    Agents without a workstation on [workstationTaskTypes] suffer a −0.25
 ///    penalty to their success chance.
+///    [lessonBonus] (from accumulated lessons) adds to the success chance,
+///    partially offsetting the base incomplete rate.
 /// 2. Bug check (Precision).
 /// 3. Crit check (Creativity + specialization, divergent tasks only).
 /// 4. Otherwise `clean`.
@@ -80,6 +93,9 @@ const double kMaxSpecializationCritBonusInRoll = 0.30;
 /// unlocked specializations matching the current `taskType`. Caller computes
 /// it; this function just clamps it defensively and folds it into the
 /// crit chance.
+///
+/// [lessonBonus] is the additive success-chance bonus from accumulated lessons
+/// (see [lessonSuccessBonus]). Caller computes it; clamped defensively here.
 ///
 /// [rng] is injectable for deterministic tests.
 TaskOutcome rollOutcome({
@@ -91,12 +107,14 @@ TaskOutcome rollOutcome({
   bool isUnassigned = false,
   String taskType = '',
   double specializationCritBonus = 0.0,
+  double lessonBonus = 0.0,
 }) {
   final baseSuccess = completionSuccessChance(reliabilitySkill: reliabilitySkill);
   final needsDesk = isUnassigned && workstationTaskTypes.contains(taskType);
+  final clampedLesson = lessonBonus.clamp(0.0, kMaxLessonSuccessBonusInRoll);
   final adjustedSuccess = needsDesk
-      ? (baseSuccess - kUnassignedIncompletePenalty).clamp(0.0, 1.0)
-      : baseSuccess;
+      ? (baseSuccess + clampedLesson - kUnassignedIncompletePenalty).clamp(0.0, 1.0)
+      : (baseSuccess + clampedLesson).clamp(0.0, 1.0);
 
   if (rng.nextDouble() > adjustedSuccess) {
     return TaskOutcome.incomplete;
