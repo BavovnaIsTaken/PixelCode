@@ -60,9 +60,8 @@ node_modules/
 # Git worktrees
 .worktrees/
 
-# LeanKG local index / config
+# LeanKG local index (DB + cache, not config)
 .leankg/
-leankg.yaml
 
 # Claude Code local instructions
 CLAUDE.md
