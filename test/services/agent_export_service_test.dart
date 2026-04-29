@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/services/agent_export_service.dart';
@@ -275,6 +277,56 @@ void main() {
       final bp = AgentBlueprint.fromAgent(_makeAgent());
       final spawn = service.toSpawnData(bp);
       expect(spawn, isA<CustomAgentSpawnData>());
+    });
+  });
+
+  // ─── File I/O ─────────────────────────────────────────────────────────────
+
+  group('AgentExportService file I/O', () {
+    late Directory tmp;
+
+    setUp(() {
+      tmp = Directory.systemTemp.createTempSync('pixelcode_export_test_');
+    });
+
+    tearDown(() => tmp.deleteSync(recursive: true));
+
+    test('exportToFile writes a .agent.json file', () async {
+      final bp = AgentBlueprint.fromAgent(_makeAgent(nickname: 'TestAgent'));
+      final path = await service.exportToFile(bp, outputDir: tmp);
+
+      expect(path, endsWith('.agent.json'));
+      expect(File(path).existsSync(), isTrue);
+    });
+
+    test('exportToFile sanitizes ASCII nickname in filename', () async {
+      final bp = AgentBlueprint.fromAgent(_makeAgent(nickname: 'My Agent!'));
+      final path = await service.exportToFile(bp, outputDir: tmp);
+
+      expect(path, contains('My_Agent_'));
+    });
+
+    test('exportToFile + importFromFile roundtrips all fields', () async {
+      final bp = AgentBlueprint.fromAgent(_makeAgent(
+        nickname: 'RoundTrip',
+        customSystemPrompt: 'Always test.',
+        characterId: 'andriy_coder',
+      ));
+      final path = await service.exportToFile(bp, outputDir: tmp);
+      final restored = await service.importFromFile(path);
+
+      expect(restored.nickname, 'RoundTrip');
+      expect(restored.customSystemPrompt, 'Always test.');
+      expect(restored.characterId, 'andriy_coder');
+      expect(restored.skills, bp.skills);
+    });
+
+    test('importFromFile throws FileSystemException for nonexistent file',
+        () async {
+      expect(
+        () => service.importFromFile('${tmp.path}/nonexistent.agent.json'),
+        throwsA(isA<FileSystemException>()),
+      );
     });
   });
 }

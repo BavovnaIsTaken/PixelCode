@@ -135,17 +135,24 @@ class AgentExportService {
 
   /// Write [blueprint] to `<documents>/PixelCode/<nickname>.agent.json`.
   /// Returns the absolute file path on success.
-  Future<String> exportToFile(AgentBlueprint blueprint) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final exportDir = Directory('${docsDir.path}/$_kExportSubdir');
+  ///
+  /// Pass [outputDir] to override the target directory (used in tests to
+  /// avoid calling [getApplicationDocumentsDirectory]).
+  Future<String> exportToFile(
+    AgentBlueprint blueprint, {
+    Directory? outputDir,
+  }) async {
+    final exportDir = outputDir ??
+        Directory(
+          '${(await getApplicationDocumentsDirectory()).path}/$_kExportSubdir',
+        );
     if (!exportDir.existsSync()) exportDir.createSync(recursive: true);
 
     final safeName = blueprint.nickname
         .replaceAll(RegExp(r'[^\w\- ]'), '_')
         .trim()
         .replaceAll(' ', '_');
-    final fileName = '$safeName.agent.json';
-    final file = File('${exportDir.path}/$fileName');
+    final file = File('${exportDir.path}/$safeName.agent.json');
     file.writeAsStringSync(exportToString(blueprint));
     return file.path;
   }

@@ -16,7 +16,10 @@ import 'package:pixelcode/services/agent_export_service.dart';
 class AgentOverviewTab extends ConsumerWidget {
   final String instanceId;
 
-  const AgentOverviewTab({required this.instanceId, super.key});
+  /// Override the file-export function (used in tests to avoid file I/O).
+  final Future<String> Function(AgentBlueprint)? exportFn;
+
+  const AgentOverviewTab({required this.instanceId, super.key, this.exportFn});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -185,7 +188,7 @@ class AgentOverviewTab extends ConsumerWidget {
         const SizedBox(height: 12),
 
         // Export — D Agent JSON export
-        _ExportCard(agent: agent),
+        _ExportCard(agent: agent, exportFn: exportFn),
       ],
     );
   }
@@ -360,7 +363,8 @@ class _ProviderButton extends StatelessWidget {
 
 class _ExportCard extends StatefulWidget {
   final AgentGameData agent;
-  const _ExportCard({required this.agent});
+  final Future<String> Function(AgentBlueprint)? exportFn;
+  const _ExportCard({required this.agent, this.exportFn});
 
   @override
   State<_ExportCard> createState() => _ExportCardState();
@@ -373,8 +377,8 @@ class _ExportCardState extends State<_ExportCard> {
     setState(() => _exporting = true);
     try {
       final blueprint = AgentBlueprint.fromAgent(widget.agent);
-      const service = AgentExportService();
-      final path = await service.exportToFile(blueprint);
+      final fn = widget.exportFn ?? const AgentExportService().exportToFile;
+      final path = await fn(blueprint);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

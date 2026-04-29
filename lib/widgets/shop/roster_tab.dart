@@ -462,7 +462,7 @@ class _ImportAgentCard extends StatelessWidget {
         ),
       ),
     );
-    controller.dispose();
+    // controller is a local variable — no dispose needed; GC handles it.
   }
 
   @override
