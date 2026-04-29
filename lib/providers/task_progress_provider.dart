@@ -12,6 +12,7 @@ import '../models/game_economy.dart';
 import '../models/task_board.dart';
 import '../models/work_log_entry.dart';
 import '../services/task_outcome.dart';
+import 'agent_traits_provider.dart';
 import 'game_economy_provider.dart';
 import 'task_board_provider.dart';
 
@@ -217,6 +218,9 @@ class TaskProgressNotifier extends Notifier<void> {
         ? kSpecializationCritBonus
         : 0.0;
 
+    final lessonCount =
+        ref.read(agentTraitsProvider(agent.instanceId)).length;
+
     final outcome = rollOutcome(
       rng: _rng,
       precisionSkill: agent.skills[SkillType.precision] ?? 1,
@@ -225,6 +229,7 @@ class TaskProgressNotifier extends Notifier<void> {
       isDivergentTask: divergentTaskTypes.contains(task.taskType),
       taskType: task.taskType,
       specializationCritBonus: specBonus,
+      lessonBonus: lessonSuccessBonus(lessonCount: lessonCount),
     );
 
     final (TaskColumn next, double quality) = switch (outcome) {
