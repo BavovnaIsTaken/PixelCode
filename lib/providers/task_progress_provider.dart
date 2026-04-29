@@ -213,12 +213,18 @@ class TaskProgressNotifier extends Notifier<void> {
       return;
     }
 
+    final specBonus = agent.specializations.contains(task.taskType)
+        ? kSpecializationCritBonus
+        : 0.0;
+
     final outcome = rollOutcome(
       rng: _rng,
       precisionSkill: agent.skills[SkillType.precision] ?? 1,
       creativitySkill: agent.skills[SkillType.creativity] ?? 1,
       reliabilitySkill: agent.skills[SkillType.reliability] ?? 1,
       isDivergentTask: divergentTaskTypes.contains(task.taskType),
+      taskType: task.taskType,
+      specializationCritBonus: specBonus,
     );
 
     final (TaskColumn next, double quality) = switch (outcome) {
@@ -241,6 +247,14 @@ class TaskProgressNotifier extends Notifier<void> {
     // Crit = 100% bonus gold.
     if (outcome == TaskOutcome.crit) {
       ref.read(gameEconomyProvider.notifier).awardCritBonus();
+    }
+
+    // Successful outcomes (clean / crit) feed the specialization counter;
+    // bug / incomplete don't count.
+    if (outcome == TaskOutcome.clean || outcome == TaskOutcome.crit) {
+      ref
+          .read(gameEconomyProvider.notifier)
+          .recordTaskCompletion(agent.instanceId, task.taskType);
     }
 
     ref.read(taskBoardProvider.notifier).moveTask(taskId: task.id, column: next);

@@ -505,6 +505,49 @@ class GameEconomyNotifier extends Notifier<GameState> {
     return levelsGained;
   }
 
+  /// Record one successful (`clean` or `crit`) task completion against the
+  /// agent's per-`taskType` counter. If the counter crosses
+  /// [kSpecializationThreshold] for the first time, that task type is added
+  /// to the agent's [AgentGameData.specializations] set (the keystone slice
+  /// of C.1 — see docs/ROADMAP.md). Returns the freshly unlocked task type
+  /// when an unlock fires, or `null` otherwise.
+  ///
+  /// No-op for empty [taskType] (untyped tasks shouldn't pollute the counter).
+  String? recordTaskCompletion(String instanceId, String taskType) {
+    if (taskType.isEmpty) return null;
+    final agent = state.agents[instanceId];
+    if (agent == null) return null;
+
+    final prevCount = agent.taskCompletionsByType[taskType] ?? 0;
+    final nextCount = prevCount + 1;
+
+    final updatedCounters =
+        Map<String, int>.from(agent.taskCompletionsByType);
+    updatedCounters[taskType] = nextCount;
+
+    Set<String>? updatedSpecs;
+    String? unlocked;
+    if (nextCount >= kSpecializationThreshold &&
+        !agent.specializations.contains(taskType)) {
+      updatedSpecs = {...agent.specializations, taskType};
+      unlocked = taskType;
+      // Telemetry baseline for the C.1 "grown vs raw" delta check.
+      // ignore: avoid_print
+      print(
+        '[telemetry] specialization_unlocked '
+        'agent=$instanceId topic=$taskType count=$nextCount',
+      );
+    }
+
+    final updated = Map<String, AgentGameData>.from(state.agents);
+    updated[instanceId] = agent.copyWith(
+      taskCompletionsByType: updatedCounters,
+      specializations: updatedSpecs ?? agent.specializations,
+    );
+    _updateStateAndSync(state.copyWith(agents: updated));
+    return unlocked;
+  }
+
   /// Award a one-off crit bonus (100% of a typical task reward).
   /// Called when a task completes with a creativity crit.
   void awardCritBonus() {

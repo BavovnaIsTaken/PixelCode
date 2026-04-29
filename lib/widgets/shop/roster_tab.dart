@@ -241,6 +241,11 @@ class _TeamRow extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     _VendorPill(provider: instance.provider),
+                    if (instance.specializations.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      _SpecializationBadge(
+                          specializations: instance.specializations),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -817,6 +822,43 @@ class _StatBars extends StatelessWidget {
 }
 
 // ─── Vendor pill ───────────────────────────────────────────────────────────
+
+class _SpecializationBadge extends StatelessWidget {
+  final Set<String> specializations;
+  const _SpecializationBadge({required this.specializations});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFFF59E0B);
+    final tooltip = 'Спеціалізація: ${specializations.join(", ")}';
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.star, size: 8, color: color),
+            const SizedBox(width: 2),
+            Text(
+              '${specializations.length}',
+              style: const TextStyle(
+                color: color,
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _VendorPill extends StatelessWidget {
   final AgentProviderType provider;

@@ -449,5 +449,74 @@ void main() {
         expect(agent.characterId, isNull);
       });
     });
+
+    group('specialization fields (C.1)', () {
+      test('fresh agent has empty counters and specializations', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        expect(agent.taskCompletionsByType, isEmpty);
+        expect(agent.specializations, isEmpty);
+      });
+
+      test('toJson omits both fields when empty (backward compat)', () {
+        final agent = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        final json = agent.toJson();
+        expect(json.containsKey('taskCompletionsByType'), isFalse);
+        expect(json.containsKey('specializations'), isFalse);
+      });
+
+      test('round-trips populated counters and specializations', () {
+        final original = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+          taskCompletionsByType: const {'coding': 25, 'testing': 4},
+          specializations: const {'coding'},
+        );
+        final restored = AgentGameData.fromJson(original.toJson());
+        expect(restored.taskCompletionsByType, {'coding': 25, 'testing': 4});
+        expect(restored.specializations, {'coding'});
+      });
+
+      test('fromJson defaults to empty when keys missing (old saves)', () {
+        final agent = AgentGameData.fromJson({
+          'instanceId': 'a1',
+          'roleType': 'coder',
+          'nickname': 'Alice',
+        });
+        expect(agent.taskCompletionsByType, isEmpty);
+        expect(agent.specializations, isEmpty);
+      });
+
+      test('copyWith updates counters and specializations independently', () {
+        final original = AgentGameData(
+          instanceId: 'coder#1',
+          roleType: 'coder',
+          nickname: 'Alice',
+        );
+        final updated = original.copyWith(
+          taskCompletionsByType: const {'coding': 1},
+        );
+        expect(updated.taskCompletionsByType, {'coding': 1});
+        expect(updated.specializations, isEmpty);
+
+        final specced = updated.copyWith(specializations: {'coding'});
+        expect(specced.taskCompletionsByType, {'coding': 1});
+        expect(specced.specializations, {'coding'});
+      });
+
+      test('threshold and bonus constants match expected balance', () {
+        expect(kSpecializationThreshold, 20);
+        expect(kSpecializationCritBonus, 0.15);
+        expect(kMaxSpecializationCritBonus, 0.30);
+      });
+    });
   });
 }

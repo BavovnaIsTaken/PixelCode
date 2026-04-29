@@ -393,6 +393,19 @@ class AgentGameData {
   /// agents; newly hired agents should be created with [WorkplaceStatus.unassigned].
   final WorkplaceStatus workplaceStatus;
 
+  /// Per-`taskType` completion counters. Increments only on successful
+  /// outcomes (`clean` / `crit`); bug/incomplete do not count. Used by the
+  /// specialization unlock mechanic (C.1) — once a counter crosses
+  /// [kSpecializationThreshold] for a task type, that type joins
+  /// [specializations] and grants a crit-roll bonus on matching tasks.
+  final Map<String, int> taskCompletionsByType;
+
+  /// Set of `taskType` keys this agent is specialized in. Empty for fresh
+  /// agents; populated lazily as completion counters cross the threshold.
+  /// Each unlocked specialization adds [kSpecializationCritBonus] to the
+  /// crit roll on tasks of that type, capped at [kMaxSpecializationCritBonus].
+  final Set<String> specializations;
+
   const AgentGameData({
     required this.instanceId,
     required this.roleType,
@@ -406,6 +419,8 @@ class AgentGameData {
     this.customSystemPrompt,
     this.personalityPreset,
     this.workplaceStatus = WorkplaceStatus.assigned,
+    this.taskCompletionsByType = const {},
+    this.specializations = const {},
   });
 
   /// Average skill value — purely a cosmetic summary for UI.
@@ -429,6 +444,8 @@ class AgentGameData {
     Object? customSystemPrompt = _agentSentinel,
     Object? personalityPreset = _agentSentinel,
     WorkplaceStatus? workplaceStatus,
+    Map<String, int>? taskCompletionsByType,
+    Set<String>? specializations,
   }) =>
       AgentGameData(
         instanceId: instanceId,
@@ -447,6 +464,9 @@ class AgentGameData {
             ? this.personalityPreset
             : personalityPreset as String?,
         workplaceStatus: workplaceStatus ?? this.workplaceStatus,
+        taskCompletionsByType:
+            taskCompletionsByType ?? this.taskCompletionsByType,
+        specializations: specializations ?? this.specializations,
       );
 
   Map<String, dynamic> toJson() => {
@@ -465,6 +485,10 @@ class AgentGameData {
         if (personalityPreset != null) 'personalityPreset': personalityPreset,
         if (workplaceStatus != WorkplaceStatus.assigned)
           'workplaceStatus': workplaceStatus.index,
+        if (taskCompletionsByType.isNotEmpty)
+          'taskCompletionsByType': taskCompletionsByType,
+        if (specializations.isNotEmpty)
+          'specializations': specializations.toList(),
       };
 
   factory AgentGameData.fromJson(Map<String, dynamic> json) => AgentGameData(
@@ -485,8 +509,36 @@ class AgentGameData {
         personalityPreset: json['personalityPreset'] as String?,
         workplaceStatus: WorkplaceStatus.values[
             json['workplaceStatus'] as int? ?? WorkplaceStatus.assigned.index],
+        taskCompletionsByType: {
+          for (final e
+              in (json['taskCompletionsByType'] as Map<String, dynamic>? ?? {})
+                  .entries)
+            e.key: (e.value as num).toInt(),
+        },
+        specializations: {
+          for (final v in (json['specializations'] as List<dynamic>? ?? const []))
+            v as String,
+        },
       );
 }
+
+/// Number of successful task completions on a single `taskType` required
+/// to unlock a specialization for that type. Tuned for the C.1 keystone
+/// slice — high enough that fresh hires don't trivially earn it, low enough
+/// that an active player feels the unlock within a session arc.
+const int kSpecializationThreshold = 20;
+
+/// Crit-chance bonus granted by a single matching specialization on a
+/// divergent task. Capped at [kMaxSpecializationCritBonus] when summed
+/// across multiple matching specializations (defensive — current design
+/// has at most one match per task, but the cap protects future stacking).
+const double kSpecializationCritBonus = 0.15;
+
+/// Hard cap on aggregate specialization-driven crit bonus, per
+/// [docs/ROADMAP.md](../../docs/ROADMAP.md) C.1 risk-watch ("cap on a
+/// reasonable maximum, not 2×"). Keeps grown agents distinctly better
+/// without trivializing the roll.
+const double kMaxSpecializationCritBonus = 0.30;
 
 // ─── Agent passives ───────────────────────────────────────────────────────
 

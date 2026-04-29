@@ -60,6 +60,12 @@ const workstationTaskTypes = <String>{
 /// and is working on a [workstationTaskTypes] task. −0.25 success rate.
 const double kUnassignedIncompletePenalty = 0.25;
 
+/// Hard cap on the aggregate specialization crit bonus applied inside
+/// [rollOutcome]. Mirrors `kMaxSpecializationCritBonus` in game_economy.dart;
+/// duplicated here because [rollOutcome] is intentionally dependency-free
+/// (no model imports). Keep the two values in sync.
+const double kMaxSpecializationCritBonusInRoll = 0.30;
+
 /// Rolls the final outcome for a task at the `testing → done` transition.
 ///
 /// Order of checks:
@@ -67,8 +73,13 @@ const double kUnassignedIncompletePenalty = 0.25;
 ///    Agents without a workstation on [workstationTaskTypes] suffer a −0.25
 ///    penalty to their success chance.
 /// 2. Bug check (Precision).
-/// 3. Crit check (Creativity, divergent tasks only).
+/// 3. Crit check (Creativity + specialization, divergent tasks only).
 /// 4. Otherwise `clean`.
+///
+/// [specializationCritBonus] is the additive crit bonus from this agent's
+/// unlocked specializations matching the current `taskType`. Caller computes
+/// it; this function just clamps it defensively and folds it into the
+/// crit chance.
 ///
 /// [rng] is injectable for deterministic tests.
 TaskOutcome rollOutcome({
@@ -79,6 +90,7 @@ TaskOutcome rollOutcome({
   bool isDivergentTask = false,
   bool isUnassigned = false,
   String taskType = '',
+  double specializationCritBonus = 0.0,
 }) {
   final baseSuccess = completionSuccessChance(reliabilitySkill: reliabilitySkill);
   final needsDesk = isUnassigned && workstationTaskTypes.contains(taskType);
@@ -92,9 +104,13 @@ TaskOutcome rollOutcome({
   if (rng.nextDouble() < bugChance(precisionSkill: precisionSkill)) {
     return TaskOutcome.bug;
   }
-  if (isDivergentTask &&
-      rng.nextDouble() < critChance(creativitySkill: creativitySkill)) {
-    return TaskOutcome.crit;
+  if (isDivergentTask) {
+    final base = critChance(creativitySkill: creativitySkill);
+    final bonus =
+        specializationCritBonus.clamp(0.0, kMaxSpecializationCritBonusInRoll);
+    if (rng.nextDouble() < (base + bonus).clamp(0.0, 1.0)) {
+      return TaskOutcome.crit;
+    }
   }
   return TaskOutcome.clean;
 }

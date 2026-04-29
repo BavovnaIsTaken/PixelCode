@@ -217,5 +217,82 @@ void main() {
       expect(incomplete, greaterThan(180));
       expect(incomplete, lessThan(320));
     });
+
+    test('specialization bonus raises crit rate on divergent tasks', () {
+      final rng = Random(11);
+      var crits = 0;
+      var critsBaseline = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 5,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              specializationCritBonus: 0.15,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 5,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+            ) ==
+            TaskOutcome.crit) {
+          critsBaseline++;
+        }
+      }
+      // base critChance(5) = 0.10; with +0.15 bonus → 0.25.
+      // Bonus run must be meaningfully higher (delta well above noise).
+      expect(crits - critsBaseline, greaterThan(n * 0.08));
+    });
+
+    test('specialization bonus does NOT fire on non-divergent tasks', () {
+      final rng = Random(13);
+      var crits = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 50,
+              reliabilitySkill: 15,
+              isDivergentTask: false,
+              specializationCritBonus: 0.30,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      expect(crits, 0);
+    });
+
+    test('specialization bonus is capped at kMaxSpecializationCritBonusInRoll',
+        () {
+      // Pass an absurd bonus; effective contribution must equal the cap.
+      // base critChance(0) = 0; with cap = 0.30 → ~30% crit on divergent.
+      final rng = Random(17);
+      var crits = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 0,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              specializationCritBonus: 5.0, // wildly above the cap
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      // Should sit around 30% (the cap), never near 100%.
+      expect(crits, greaterThan(n * 0.22));
+      expect(crits, lessThan(n * 0.38));
+    });
   });
 }

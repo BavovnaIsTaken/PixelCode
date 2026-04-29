@@ -713,4 +713,90 @@ void main() {
       expect(c.read(gameEconomyProvider).agents.length, before);
     });
   });
+
+  group('recordTaskCompletion (C.1 specialization unlock)', () {
+    test('increments per-taskType counter on each call', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      notifier.recordTaskCompletion('coder#1', 'coding');
+      notifier.recordTaskCompletion('coder#1', 'coding');
+      notifier.recordTaskCompletion('coder#1', 'testing');
+
+      final agent = c.read(gameEconomyProvider).agents['coder#1']!;
+      expect(agent.taskCompletionsByType, {'coding': 2, 'testing': 1});
+    });
+
+    test('does NOT unlock specialization below threshold', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      String? lastUnlocked;
+      for (var i = 0; i < kSpecializationThreshold - 1; i++) {
+        lastUnlocked = notifier.recordTaskCompletion('coder#1', 'coding');
+      }
+      expect(lastUnlocked, isNull);
+      expect(c.read(gameEconomyProvider).agents['coder#1']!.specializations,
+          isEmpty);
+    });
+
+    test('unlocks exactly once when counter crosses threshold', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      String? unlockedAtThreshold;
+      for (var i = 0; i < kSpecializationThreshold; i++) {
+        final r = notifier.recordTaskCompletion('coder#1', 'coding');
+        if (i == kSpecializationThreshold - 1) unlockedAtThreshold = r;
+      }
+      expect(unlockedAtThreshold, 'coding');
+
+      // Subsequent completions on the same type don't fire another unlock.
+      final extra = notifier.recordTaskCompletion('coder#1', 'coding');
+      expect(extra, isNull);
+
+      final agent = c.read(gameEconomyProvider).agents['coder#1']!;
+      expect(agent.specializations, {'coding'});
+      expect(agent.taskCompletionsByType['coding'],
+          kSpecializationThreshold + 1);
+    });
+
+    test('tracks counters per task type independently', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      for (var i = 0; i < kSpecializationThreshold; i++) {
+        notifier.recordTaskCompletion('coder#1', 'coding');
+      }
+      // Hitting threshold on a second type unlocks it independently.
+      String? secondUnlock;
+      for (var i = 0; i < kSpecializationThreshold; i++) {
+        final r = notifier.recordTaskCompletion('coder#1', 'architecture');
+        if (i == kSpecializationThreshold - 1) secondUnlock = r;
+      }
+      expect(secondUnlock, 'architecture');
+
+      final agent = c.read(gameEconomyProvider).agents['coder#1']!;
+      expect(agent.specializations, {'coding', 'architecture'});
+    });
+
+    test('ignores empty taskType (untyped tasks should not pollute counters)',
+        () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      final r = notifier.recordTaskCompletion('coder#1', '');
+      expect(r, isNull);
+      expect(c.read(gameEconomyProvider).agents['coder#1']!.taskCompletionsByType,
+          isEmpty);
+    });
+
+    test('no-op for unknown agent', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+
+      final r = notifier.recordTaskCompletion('ghost#99', 'coding');
+      expect(r, isNull);
+    });
+  });
 }
