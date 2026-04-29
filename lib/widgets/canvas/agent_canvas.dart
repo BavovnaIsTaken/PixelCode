@@ -393,6 +393,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       buildMode.corridorAnchorCol,
                                   corridorAnchorRow:
                                       buildMode.corridorAnchorRow,
+                                  agentSpecializations: {
+                                    for (final e
+                                        in gameEconomy.agents.entries)
+                                      if (e.value.specializations.isNotEmpty)
+                                        e.key: e.value.specializations,
+                                  },
                                 ),
                               ),
                             ),

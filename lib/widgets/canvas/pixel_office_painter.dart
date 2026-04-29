@@ -66,6 +66,10 @@ class PixelOfficePainter extends CustomPainter {
   final int? corridorAnchorCol;
   final int? corridorAnchorRow;
 
+  /// instanceId → set of earned specialization topic keys (C.1).
+  /// Used to draw a micro-glyph above specialized agents on the canvas.
+  final Map<String, Set<String>> agentSpecializations;
+
   PixelOfficePainter({
     required this.gameState,
     this.sprites,
@@ -88,6 +92,7 @@ class PixelOfficePainter extends CustomPainter {
     this.placedCorridors = const [],
     this.corridorAnchorCol,
     this.corridorAnchorRow,
+    this.agentSpecializations = const {},
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -536,6 +541,21 @@ class PixelOfficePainter extends CustomPainter {
             );
           }
         }
+      }));
+    }
+
+    // ── Specialization micro-glyph (C.1) ──
+    // A 2px amber square in the top-right corner of the sprite head area,
+    // visible only when the agent has at least one earned specialization.
+    final specs = agentSpecializations[ch.instanceId];
+    if (specs != null && specs.isNotEmpty) {
+      final headX = ch.x + kSpriteW / 2 - 1;
+      final headY = ch.y + sittingOffset - kSpriteH + 1;
+      drawables.add(_Drawable(charZY + 0.002, (c) {
+        c.drawRect(
+          Rect.fromLTWH(headX, headY, 2, 2),
+          Paint()..color = const Color(0xFFF59E0B),
+        );
       }));
     }
 
