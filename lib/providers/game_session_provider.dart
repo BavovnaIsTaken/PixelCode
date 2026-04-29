@@ -1,7 +1,7 @@
 /// Multi-device session presence provider.
 ///
 /// Tracks whether this client is the primary (write-capable) device or a
-/// viewer, and surfaces takeover requests so the UI can react.
+/// viewer. Takeover is fully automatic — no user interaction required.
 library;
 
 import 'dart:async';
@@ -23,9 +23,6 @@ enum GameSessionMode {
   /// Another device holds the primary session. Read-only view.
   viewer,
 
-  /// This device sent a takeover request and is waiting for the primary.
-  takeoverPending,
-
   /// WebSocket is disconnected — playing locally.
   offline,
 }
@@ -33,16 +30,12 @@ enum GameSessionMode {
 class GameSessionState {
   final GameSessionMode mode;
 
-  /// Device name of the current primary (populated in viewer/takeoverPending).
+  /// Device name of the current primary (populated in viewer mode).
   final String? primaryDevice;
-
-  /// Device that requested to take over (populated in primary mode when request arrives).
-  final String? takeoverRequestFrom;
 
   const GameSessionState({
     this.mode = GameSessionMode.offline,
     this.primaryDevice,
-    this.takeoverRequestFrom,
   });
 
   bool get canWrite =>
@@ -51,16 +44,12 @@ class GameSessionState {
   GameSessionState copyWith({
     GameSessionMode? mode,
     String? primaryDevice,
-    String? takeoverRequestFrom,
-    bool clearTakeoverRequest = false,
     bool clearPrimaryDevice = false,
   }) =>
       GameSessionState(
         mode: mode ?? this.mode,
-        primaryDevice: clearPrimaryDevice ? null : (primaryDevice ?? this.primaryDevice),
-        takeoverRequestFrom: clearTakeoverRequest
-            ? null
-            : (takeoverRequestFrom ?? this.takeoverRequestFrom),
+        primaryDevice:
+            clearPrimaryDevice ? null : (primaryDevice ?? this.primaryDevice),
       );
 }
 
@@ -80,9 +69,8 @@ class GameSessionNotifier extends Notifier<GameSessionState> {
     _connSub?.cancel();
     _connSub = ws.connectionStatus.listen((connected) {
       if (!connected) {
-        state = GameSessionState(mode: GameSessionMode.offline);
+        state = const GameSessionState(mode: GameSessionMode.offline);
       }
-      // When reconnecting, the server will push session_status — no action needed here.
     });
 
     ref.onDispose(() {
@@ -97,50 +85,35 @@ class GameSessionNotifier extends Notifier<GameSessionState> {
     switch (msg) {
       case SessionStatusMessage(:final mode, :final primaryDevice):
         final isAlone = mode == SessionMode.primary && primaryDevice == null;
-        state = GameSessionState(
-          mode: isAlone
-              ? GameSessionMode.sole
-              : mode == SessionMode.primary
-                  ? GameSessionMode.primary
-                  : GameSessionMode.viewer,
-          primaryDevice: primaryDevice,
-        );
-
-      case SessionTakeoverRequestMessage(:final fromDevice):
-        // We are primary; a viewer is asking to take over.
-        state = state.copyWith(takeoverRequestFrom: fromDevice);
+        final newMode = isAlone
+            ? GameSessionMode.sole
+            : mode == SessionMode.primary
+                ? GameSessionMode.primary
+                : GameSessionMode.viewer;
+        state = GameSessionState(mode: newMode, primaryDevice: primaryDevice);
+        // Auto-claim: silently become primary without user interaction.
+        if (newMode == GameSessionMode.viewer) _claimSession();
 
       case SessionTakenMessage():
-        // We were primary but session was transferred away.
-        state = state.copyWith(
-          mode: GameSessionMode.viewer,
-          clearTakeoverRequest: true,
-        );
+        // Flip to viewer immediately so canWrite goes false.
+        // Server will follow up with session_status → viewer, which also calls _claimSession().
+        state = state.copyWith(mode: GameSessionMode.viewer);
 
       default:
         break;
     }
   }
 
-  /// Request to become primary (only valid from viewer mode).
-  void claimSession() {
-    if (state.mode != GameSessionMode.viewer) return;
-    state = state.copyWith(mode: GameSessionMode.takeoverPending);
+  void _claimSession() {
+    if (state.canWrite) return;
     ref.read(wsServiceProvider).claimSession();
   }
 
-  /// Voluntarily release the primary session (e.g. user tapped "Let other device in").
+  /// Voluntarily release the primary session.
   void releaseSession() {
     if (!state.canWrite) return;
     ref.read(wsServiceProvider).releaseSession();
-    // State will update when server sends session_status to the new primary.
   }
-
-  /// Dismiss the incoming takeover request without yielding (user chose to keep playing).
-  void dismissTakeoverRequest() {
-    state = state.copyWith(clearTakeoverRequest: true);
-  }
-
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────────

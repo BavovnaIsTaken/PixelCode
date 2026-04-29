@@ -145,7 +145,6 @@ sealed class ServerMessage {
       'facilitator_error' => FacilitatorErrorMessage.fromJson(json),
       'facilitator_output_sync' => FacilitatorOutputSyncMessage.fromJson(json),
       'session_status' => SessionStatusMessage.fromJson(json),
-      'session_takeover_request' => SessionTakeoverRequestMessage.fromJson(json),
       'session_taken' => SessionTakenMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
@@ -971,15 +970,6 @@ class SessionStatusMessage implements ServerMessage {
             ? SessionMode.primary
             : SessionMode.viewer,
         primaryDevice: json['primaryDevice'] as String?,
-      );
-}
-
-class SessionTakeoverRequestMessage implements ServerMessage {
-  final String fromDevice;
-  SessionTakeoverRequestMessage({required this.fromDevice});
-  factory SessionTakeoverRequestMessage.fromJson(Map<String, dynamic> json) =>
-      SessionTakeoverRequestMessage(
-        fromDevice: json['fromDevice'] as String? ?? 'another device',
       );
 }
 

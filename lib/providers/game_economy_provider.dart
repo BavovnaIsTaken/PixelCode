@@ -100,8 +100,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _syncTimer = Timer(const Duration(milliseconds: 500), () {
       // Viewer devices must not push state to avoid clobbering the primary.
       final sessionMode = ref.read(gameSessionProvider).mode;
-      if (sessionMode == GameSessionMode.viewer ||
-          sessionMode == GameSessionMode.takeoverPending) {
+      if (sessionMode == GameSessionMode.viewer) {
         return;
       }
 

@@ -747,14 +747,8 @@ interface ActiveSession {
   ws: WebSocket;
 }
 
-interface PendingTakeover {
-  claimantWs: WebSocket;
-  timeoutHandle: ReturnType<typeof setTimeout>;
-}
-
 /** The device currently holding the primary session (write authority). */
 let activeSession: ActiveSession | null = null;
-let pendingTakeover: PendingTakeover | null = null;
 
 /** True if the given WebSocket is the current primary. */
 function isPrimary(ws: WebSocket): boolean {
@@ -782,12 +776,8 @@ function broadcastSessionStatus(): void {
   }
 }
 
-/** Transfer the session to a new client: cancel pending takeover, update active, notify all. */
+/** Transfer the session to a new client: update active, notify all. */
 function transferSession(newPrimaryWs: WebSocket): void {
-  if (pendingTakeover) {
-    clearTimeout(pendingTakeover.timeoutHandle);
-    pendingTakeover = null;
-  }
   const oldPrimaryWs = activeSession?.ws ?? null;
   claimSession(newPrimaryWs);
   // Notify old primary that the session was taken
@@ -801,10 +791,6 @@ function transferSession(newPrimaryWs: WebSocket): void {
 /** Called on disconnect: if primary left, auto-promote first available viewer. */
 function handlePrimaryDisconnect(): void {
   activeSession = null;
-  if (pendingTakeover) {
-    clearTimeout(pendingTakeover.timeoutHandle);
-    pendingTakeover = null;
-  }
   // Promote the first still-connected client
   for (const [clientWs] of connectedClients.entries()) {
     if (clientWs.readyState === WebSocket.OPEN) {
@@ -2428,15 +2414,18 @@ function readBundleId(): string {
 
 async function iosDeployCheck(ws: WebSocket): Promise<void> {
   let hasFlutter = false;
+  const flutterBin = findFlutter();
 
-  try {
-    await new Promise<void>((resolve) => {
-      execFile("flutter", ["--version"], { timeout: 10000 }, (err) => {
-        hasFlutter = !err;
-        resolve();
+  if (flutterBin) {
+    try {
+      await new Promise<void>((resolve) => {
+        execFile(flutterBin, ["--version"], { timeout: 10000 }, (err) => {
+          hasFlutter = !err;
+          resolve();
+        });
       });
-    });
-  } catch { /* not installed */ }
+    } catch { /* not installed */ }
+  }
 
   send(ws, { type: "ios_deploy_status", subtype: "deps_result", hasFlutter } as any);
 }
@@ -2492,11 +2481,13 @@ async function trySilentInstall(ws: WebSocket, appPath: string, deviceName: stri
 async function iosDeployStart(ws: WebSocket): Promise<void> {
   dbg("info", "deploy", "Starting iOS build…");
 
+  const flutterBin = findFlutter() ?? "flutter";
+
   // Step 1: Build .app bundle
   sendDeployLog(ws, "Побудова iOS додатку...");
-  sendDeployLog(ws, "Команда: flutter build ios --release");
+  sendDeployLog(ws, `Команда: ${flutterBin} build ios --release`);
 
-  const buildProcess = spawn("flutter", ["build", "ios", "--release"], {
+  const buildProcess = spawn(flutterBin, ["build", "ios", "--release"], {
     cwd: PROJECT_CWD,
   });
   activeDeployProcess.set(ws, buildProcess);
@@ -2670,6 +2661,18 @@ function findAndroidSdk(): string | null {
   return null;
 }
 
+/** Resolve flutter binary — check PATH, then common install locations. */
+function findFlutter(): string | null {
+  try {
+    const p = execFileSync("which", ["flutter"], { timeout: 3000 }).toString().trim();
+    if (p) return p;
+  } catch { /* not in PATH */ }
+  for (const p of ["/opt/homebrew/bin/flutter", "/usr/local/bin/flutter", `${homedir()}/flutter/bin/flutter`]) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 /** Resolve adb binary — prefer Android SDK's platform-tools, fall back to PATH. */
 function findAdb(): string | null {
   const sdk = findAndroidSdk();
@@ -2686,15 +2689,18 @@ function findAdb(): string | null {
 
 async function androidDeployCheck(ws: WebSocket): Promise<void> {
   let hasFlutter = false;
+  const flutterBin = findFlutter();
 
-  try {
-    await new Promise<void>((resolve) => {
-      execFile("flutter", ["--version"], { timeout: 10000 }, (err) => {
-        hasFlutter = !err;
-        resolve();
+  if (flutterBin) {
+    try {
+      await new Promise<void>((resolve) => {
+        execFile(flutterBin, ["--version"], { timeout: 10000 }, (err) => {
+          hasFlutter = !err;
+          resolve();
+        });
       });
-    });
-  } catch { /* not installed */ }
+    } catch { /* not installed */ }
+  }
 
   // Also require Android SDK to be present.
   const hasAndroidSdk = findAndroidSdk() !== null;
@@ -2821,10 +2827,12 @@ async function tryAdbLaunch(ws: WebSocket, adbPath: string, serial: string): Pro
 async function androidDeployStart(ws: WebSocket, requestedSerial?: string): Promise<void> {
   dbg("info", "deploy", `Starting Android build…${requestedSerial ? ` (target: ${requestedSerial})` : ""}`);
 
-  sendAndroidDeployLog(ws, "Побудова Android APK...");
-  sendAndroidDeployLog(ws, "Команда: flutter build apk --release");
+  const flutterBin = findFlutter() ?? "flutter";
 
-  const buildProcess = spawn("flutter", ["build", "apk", "--release"], {
+  sendAndroidDeployLog(ws, "Побудова Android APK...");
+  sendAndroidDeployLog(ws, `Команда: ${flutterBin} build apk --release`);
+
+  const buildProcess = spawn(flutterBin, ["build", "apk", "--release"], {
     cwd: PROJECT_CWD,
   });
   activeAndroidDeployProcess.set(ws, buildProcess);
@@ -3910,46 +3918,15 @@ wss.on("connection", (ws, request) => {
         // ─── Session presence ───────────────────────────────────────────
         case "session_claim": {
           if (isPrimary(ws)) break; // already primary
-          const claimant = connectedClients.get(ws);
-          if (!claimant) break;
-
-          if (!activeSession || activeSession.ws.readyState !== WebSocket.OPEN) {
-            // No active primary — take it immediately
-            transferSession(ws);
-            break;
-          }
-
-          // Ask current primary to yield; auto-transfer after 5 s
-          if (pendingTakeover) {
-            clearTimeout(pendingTakeover.timeoutHandle);
-          }
-          const timeoutHandle = setTimeout(() => {
-            if (pendingTakeover?.claimantWs === ws) {
-              dbg("info", "session", `Takeover timeout — auto-transferring to ${claimant.deviceName}`);
-              transferSession(ws);
-            }
-          }, 5000);
-          pendingTakeover = { claimantWs: ws, timeoutHandle };
-
-          send(activeSession.ws, {
-            type: "session_takeover_request",
-            fromDevice: claimant.deviceName,
-          } as any);
-          dbg("info", "session", `Takeover request: ${claimant.deviceName} → ${activeSession.deviceName}`);
+          if (!connectedClients.get(ws)) break;
+          transferSession(ws);
           break;
         }
 
         case "session_release": {
           if (!isPrimary(ws)) break;
-          const target = pendingTakeover?.claimantWs ?? null;
-          if (target && target.readyState === WebSocket.OPEN) {
-            transferSession(target);
-          } else {
-            // No pending claimant — just clear the active session; next client_info will claim
-            activeSession = null;
-            if (pendingTakeover) { clearTimeout(pendingTakeover.timeoutHandle); pendingTakeover = null; }
-            broadcastSessionStatus();
-          }
+          activeSession = null;
+          broadcastSessionStatus();
           break;
         }
 

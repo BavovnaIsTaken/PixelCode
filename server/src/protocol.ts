@@ -496,11 +496,6 @@ export type ServerMessage =
       primaryDevice?: string;
     }
   | {
-      type: "session_takeover_request";
-      /** Device name of the viewer requesting to take over. */
-      fromDevice: string;
-    }
-  | {
       type: "session_taken";
       /** Device name of the device that took the session. */
       byDevice: string;
