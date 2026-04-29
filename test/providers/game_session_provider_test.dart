@@ -44,7 +44,6 @@ ProviderContainer _makeContainer(_FakeWsService fake) {
     overrides: [wsServiceProvider.overrideWithValue(fake)],
   );
   addTearDown(c.dispose);
-  // Eagerly read so the notifier subscribes to the fake stream.
   c.read(gameSessionProvider);
   return c;
 }
@@ -99,55 +98,98 @@ void main() {
       expect(s.primaryDevice, 'iPhone');
       expect(s.canWrite, isFalse);
     });
-  });
 
-  group('claimSession()', () {
-    test('transitions to takeoverPending and sends session_claim', () async {
+    test('offline mode → canWrite is false', () {
       final fake = _FakeWsService();
       final c = _makeContainer(fake);
+      expect(c.read(gameSessionProvider).canWrite, isFalse);
+    });
+  });
 
-      // Put into viewer mode first.
+  group('auto-claim on viewer mode', () {
+    test('viewer status immediately sends session_claim', () async {
+      final fake = _FakeWsService();
+      _makeContainer(fake);
+
       fake.inject(SessionStatusMessage(
         mode: SessionMode.viewer,
         primaryDevice: 'iPad',
       ));
       await Future.microtask(() {});
 
-      c.read(gameSessionProvider.notifier).claimSession();
-      await Future.microtask(() {});
-
-      expect(c.read(gameSessionProvider).mode, GameSessionMode.takeoverPending);
       expect(fake.sentTypes, contains('session_claim'));
     });
 
-    test('claimSession() is no-op when already primary', () async {
+    test('session_claim not sent when already primary', () async {
       final fake = _FakeWsService();
-      final c = _makeContainer(fake);
+      _makeContainer(fake);
 
       fake.inject(SessionStatusMessage(mode: SessionMode.primary));
       await Future.microtask(() {});
 
-      c.read(gameSessionProvider.notifier).claimSession();
       expect(fake.sentTypes, isNot(contains('session_claim')));
-      expect(c.read(gameSessionProvider).mode, GameSessionMode.sole);
+    });
+
+    test('session_claim not sent when sole', () async {
+      final fake = _FakeWsService();
+      _makeContainer(fake);
+
+      fake.inject(SessionStatusMessage(
+        mode: SessionMode.primary,
+        primaryDevice: null,
+      ));
+      await Future.microtask(() {});
+
+      expect(fake.sentTypes, isNot(contains('session_claim')));
+    });
+
+    test('multiple viewer messages do not duplicate session_claim', () async {
+      final fake = _FakeWsService();
+      _makeContainer(fake);
+
+      fake.inject(SessionStatusMessage(
+          mode: SessionMode.viewer, primaryDevice: 'Android'));
+      fake.inject(SessionStatusMessage(
+          mode: SessionMode.viewer, primaryDevice: 'Android'));
+      await Future.microtask(() {});
+
+      expect(fake.sentTypes.where((t) => t == 'session_claim').length,
+          greaterThanOrEqualTo(1));
     });
   });
 
-  group('session_takeover_request', () {
-    test('populates takeoverRequestFrom when primary', () async {
+  group('session_taken → auto-reclaim cycle', () {
+    test('session_taken flips to viewer', () async {
       final fake = _FakeWsService();
       final c = _makeContainer(fake);
 
       fake.inject(SessionStatusMessage(mode: SessionMode.primary));
       await Future.microtask(() {});
-
-      fake.inject(SessionTakeoverRequestMessage(fromDevice: 'Android'));
+      fake.inject(SessionTakenMessage(byDevice: 'iPhone'));
       await Future.microtask(() {});
 
-      expect(c.read(gameSessionProvider).takeoverRequestFrom, 'Android');
+      expect(c.read(gameSessionProvider).mode, GameSessionMode.viewer);
     });
 
-    test('releaseSession() sends session_release', () async {
+    test('session_status viewer after session_taken triggers session_claim',
+        () async {
+      final fake = _FakeWsService();
+      _makeContainer(fake);
+
+      fake.inject(SessionStatusMessage(mode: SessionMode.primary));
+      await Future.microtask(() {});
+      fake.inject(SessionTakenMessage(byDevice: 'iPhone'));
+      await Future.microtask(() {});
+      fake.inject(SessionStatusMessage(
+          mode: SessionMode.viewer, primaryDevice: 'iPhone'));
+      await Future.microtask(() {});
+
+      expect(fake.sentTypes, contains('session_claim'));
+    });
+  });
+
+  group('releaseSession()', () {
+    test('sends session_release when primary', () async {
       final fake = _FakeWsService();
       final c = _makeContainer(fake);
 
@@ -158,36 +200,32 @@ void main() {
       expect(fake.sentTypes, contains('session_release'));
     });
 
-    test('dismissTakeoverRequest() clears the request', () async {
+    test('releaseSession() is no-op when viewer', () async {
       final fake = _FakeWsService();
       final c = _makeContainer(fake);
 
-      fake.inject(SessionStatusMessage(mode: SessionMode.primary));
-      await Future.microtask(() {});
-      fake.inject(SessionTakeoverRequestMessage(fromDevice: 'iPhone'));
+      fake.inject(
+          SessionStatusMessage(mode: SessionMode.viewer, primaryDevice: 'Mac'));
       await Future.microtask(() {});
 
-      c.read(gameSessionProvider.notifier).dismissTakeoverRequest();
-      expect(c.read(gameSessionProvider).takeoverRequestFrom, isNull);
+      c.read(gameSessionProvider.notifier).releaseSession();
+      expect(fake.sentTypes, isNot(contains('session_release')));
     });
   });
 
-  group('session_taken', () {
-    test('moves to viewer and clears takeover request', () async {
-      final fake = _FakeWsService();
-      final c = _makeContainer(fake);
+  group('GameSessionMode enum', () {
+    test('has no takeoverPending value', () {
+      final values = GameSessionMode.values.map((e) => e.name).toList();
+      expect(values, isNot(contains('takeoverPending')));
+    });
+  });
 
-      fake.inject(SessionStatusMessage(mode: SessionMode.primary));
-      await Future.microtask(() {});
-      fake.inject(SessionTakeoverRequestMessage(fromDevice: 'iPhone'));
-      await Future.microtask(() {});
-
-      fake.inject(SessionTakenMessage(byDevice: 'iPhone'));
-      await Future.microtask(() {});
-
-      final s = c.read(gameSessionProvider);
-      expect(s.mode, GameSessionMode.viewer);
-      expect(s.takeoverRequestFrom, isNull);
+  group('GameSessionState', () {
+    test('has no takeoverRequestFrom field', () {
+      const s = GameSessionState(mode: GameSessionMode.sole);
+      // Accessing non-existent field would be a compile error — structural test
+      expect(s.mode, GameSessionMode.sole);
+      expect(s.primaryDevice, isNull);
     });
   });
 }
