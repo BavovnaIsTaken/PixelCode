@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pixelcode/models/agent_level.dart';
 import 'package:pixelcode/models/agent_message.dart';
+import 'package:pixelcode/models/agent_trait.dart';
 import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/models/roster_catalog.dart';
+import 'package:pixelcode/providers/agent_traits_provider.dart';
 import 'package:pixelcode/providers/deepseek_auth_provider.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/kimi_auth_provider.dart';
@@ -31,6 +33,7 @@ class AgentOverviewTab extends ConsumerWidget {
     final xpNeeded = xpToNextLevel(agent.level);
     final xpProgress =
         xpNeeded > 0 ? (agent.xp / xpNeeded).clamp(0.0, 1.0) : 1.0;
+    final traits = ref.watch(agentTraitsProvider(instanceId));
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -186,6 +189,12 @@ class AgentOverviewTab extends ConsumerWidget {
         // Specializations — C.1 earned topic badges
         if (agent.specializations.isNotEmpty) ...[
           _SpecializationsCard(specializations: agent.specializations),
+          const SizedBox(height: 12),
+        ],
+
+        // Trait badges — C.1 personality biases from accumulated lessons
+        if (traits.isNotEmpty) ...[
+          _TraitBadgesCard(traits: traits),
           const SizedBox(height: 12),
         ],
 
@@ -582,6 +591,115 @@ class _SpecializationsCard extends StatelessWidget {
     );
   }
 }
+
+// ─── Trait badges card ────────────────────────────────────────────────────────
+
+class _TraitBadgesCard extends StatelessWidget {
+  final List<AgentTrait> traits;
+  const _TraitBadgesCard({required this.traits});
+
+  static const _green = Color(0xFF22C55E);
+  static const _amber = Color(0xFFF59E0B);
+
+  @override
+  Widget build(BuildContext context) {
+    final strengths = traits.where((t) => t.type == TraitType.strength).toList();
+    final weaknesses = traits.where((t) => t.type == TraitType.weakness).toList();
+
+    return _InfoCard(
+      children: [
+        Row(
+          children: [
+            Icon(Icons.psychology, size: 13, color: Colors.white.withValues(alpha: 0.45)),
+            const SizedBox(width: 6),
+            Text(
+              'Риси характеру',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              'впливають на стиль відповідей',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.25),
+                fontSize: 9,
+              ),
+            ),
+          ],
+        ),
+        if (strengths.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: [for (final t in strengths) _TraitPill(trait: t, color: _green)],
+          ),
+        ],
+        if (weaknesses.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: [for (final t in weaknesses) _TraitPill(trait: t, color: _amber)],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _TraitPill extends StatelessWidget {
+  final AgentTrait trait;
+  final Color color;
+  const _TraitPill({required this.trait, required this.color});
+
+  double get _opacity => switch (trait.emphasis) {
+        TraitEmphasis.critical => 1.0,
+        TraitEmphasis.important => 0.75,
+        TraitEmphasis.note => 0.5,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color.withValues(alpha: _opacity);
+    return Tooltip(
+      message: '${trait.lesson} (×${trait.frequency})',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1 * _opacity),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.35 * _opacity)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (trait.type == TraitType.strength)
+              Icon(Icons.arrow_upward, size: 8, color: c)
+            else
+              Icon(Icons.arrow_downward, size: 8, color: c),
+            const SizedBox(width: 3),
+            Text(
+              trait.tag.replaceAll('-', ' '),
+              style: TextStyle(
+                color: c,
+                fontSize: 10,
+                fontWeight: trait.emphasis == TraitEmphasis.critical
+                    ? FontWeight.w700
+                    : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Skill row ────────────────────────────────────────────────────────────────
 
 class _SkillRow extends StatelessWidget {
   final SkillType skill;

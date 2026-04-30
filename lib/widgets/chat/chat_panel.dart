@@ -10,8 +10,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../models/agent_message.dart';
+import '../../models/agent_trait.dart';
 import '../../models/app_theme.dart';
 import '../../providers/agent_provider.dart';
+import '../../providers/agent_traits_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import '../../services/facilitator_session_service.dart';
@@ -858,7 +860,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         children: [
           // Header
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -866,33 +868,39 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                 ),
               ),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                GestureDetector(
-                  onTap: _showAgentPicker,
-                  child: Row(
-                    children: [
-                      const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
-                      const SizedBox(width: 8),
-                      Text(
-                        _agentNickname(ref, ref.watch(selectedAgentProvider)),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: _showAgentPicker,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.chat_outlined, color: Color(0xFF00C0D1), size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            _agentNickname(ref, ref.watch(selectedAgentProvider)),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (selectedIsActive) ...[
+                            const SizedBox(width: 6),
+                            _AgentBusyDot(),
+                          ],
+                        ],
                       ),
-                      if (selectedIsActive) ...[
-                        const SizedBox(width: 6),
-                        _AgentBusyDot(),
-                      ],
-                    ],
-                  ),
+                    ),
+                    const Spacer(),
+                    _CopySnippetButton(onTap: _copyChatSnippet),
+                    const SizedBox(width: 8),
+                    _BypassToggle(),
+                  ],
                 ),
-                const Spacer(),
-                _CopySnippetButton(onTap: _copyChatSnippet),
-                const SizedBox(width: 8),
-                _BypassToggle(),
+                _ChatHeaderTraitBadges(agentId: ref.watch(selectedAgentProvider)),
               ],
             ),
           ),
@@ -2144,6 +2152,74 @@ class _TypingDotsState extends State<_TypingDots>
           }),
         );
       },
+    );
+  }
+}
+
+// ─── Chat header trait badges ─────────────────────────────────────────────────
+
+/// Shows the top-3 trait pills for the selected agent below the chat header
+/// row. Hidden when the agent has no accumulated traits yet.
+class _ChatHeaderTraitBadges extends ConsumerWidget {
+  final String agentId;
+  const _ChatHeaderTraitBadges({required this.agentId});
+
+  static const _green = Color(0xFF22C55E);
+  static const _amber = Color(0xFFF59E0B);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final traits = ref.watch(agentTraitsProvider(agentId)).take(3).toList();
+    if (traits.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 4,
+        runSpacing: 4,
+        children: [
+          for (final t in traits)
+            _ChatTraitChip(
+              trait: t,
+              color: t.type == TraitType.strength ? _green : _amber,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatTraitChip extends StatelessWidget {
+  final AgentTrait trait;
+  final Color color;
+  const _ChatTraitChip({required this.trait, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final alpha = switch (trait.emphasis) {
+      TraitEmphasis.critical => 1.0,
+      TraitEmphasis.important => 0.7,
+      TraitEmphasis.note => 0.45,
+    };
+    final c = color.withValues(alpha: alpha);
+    return Tooltip(
+      message: '${trait.lesson} (×${trait.frequency})',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(3),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Text(
+          trait.tag.replaceAll('-', ' '),
+          style: TextStyle(
+            color: c,
+            fontSize: 9,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
     );
   }
 }
