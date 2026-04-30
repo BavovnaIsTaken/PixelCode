@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:pixelcode/models/agent_trait.dart';
 import 'package:pixelcode/providers/agent_provider.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
@@ -13,12 +14,44 @@ import '../../helpers/fake_ws_service.dart';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-Future<ProviderContainer> _makeContainer() async {
+class _PresetTraitsNotifier extends TraitsNotifier {
+  final List<AgentTrait> initial;
+  _PresetTraitsNotifier(this.initial);
+  @override
+  List<AgentTrait> build() => initial;
+}
+
+AgentTrait _trait({
+  required String id,
+  required String agentId,
+  required TraitType type,
+  required String tag,
+  int frequency = 1,
+}) {
+  final now = DateTime(2026, 1, 1);
+  return AgentTrait(
+    id: id,
+    agentId: agentId,
+    type: type,
+    category: 'code_quality',
+    tag: tag,
+    lesson: 'Lesson for $tag',
+    frequency: frequency,
+    firstSeen: now,
+    lastSeen: now,
+  );
+}
+
+Future<ProviderContainer> _makeContainer({
+  List<AgentTrait> traits = const [],
+}) async {
   SharedPreferences.setMockInitialValues({});
   final prefs = await SharedPreferences.getInstance();
   return ProviderContainer(overrides: [
     sharedPrefsProvider.overrideWithValue(prefs),
     wsServiceProvider.overrideWith((_) => FakeAgentWsService()),
+    if (traits.isNotEmpty)
+      traitsProvider.overrideWith(() => _PresetTraitsNotifier(traits)),
   ]);
 }
 
@@ -123,6 +156,86 @@ void main() {
       await tester.pump();
 
       expect(find.textContaining('Помилка експорту'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+  });
+
+  group('_TraitBadgesCard', () {
+    testWidgets('not rendered when agent has no traits', (tester) async {
+      final container = await _makeContainer();
+      final coder = container
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .firstWhere((a) => a.roleType == 'coder');
+
+      await _pumpOverviewTab(tester, container, coder.instanceId);
+      await tester.pump();
+
+      expect(find.text('Риси характеру'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+
+    testWidgets('renders strength and weakness tags', (tester) async {
+      final container = await _makeContainer(traits: [
+        _trait(id: 's1', agentId: 'coder#1', type: TraitType.strength, tag: 'clean-code', frequency: 6),
+        _trait(id: 'w1', agentId: 'coder#1', type: TraitType.weakness, tag: 'null-checks', frequency: 3),
+      ]);
+      final coder = container
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .firstWhere((a) => a.roleType == 'coder');
+
+      await _pumpOverviewTab(tester, container, coder.instanceId);
+      await tester.pump();
+
+      expect(find.text('Риси характеру'), findsOneWidget);
+      expect(find.text('clean code'), findsOneWidget);
+      expect(find.text('null checks'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+
+    testWidgets('does not render traits of a different agent', (tester) async {
+      final container = await _makeContainer(traits: [
+        _trait(id: 's1', agentId: 'tech-lead#1', type: TraitType.strength, tag: 'architecture'),
+      ]);
+      final coder = container
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .firstWhere((a) => a.roleType == 'coder');
+
+      await _pumpOverviewTab(tester, container, coder.instanceId);
+      await tester.pump();
+
+      expect(find.text('Риси характеру'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+
+    testWidgets('critical trait (freq≥5) renders with bold weight', (tester) async {
+      final container = await _makeContainer(traits: [
+        _trait(id: 's1', agentId: 'coder#1', type: TraitType.strength, tag: 'performance', frequency: 7),
+      ]);
+      final coder = container
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .firstWhere((a) => a.roleType == 'coder');
+
+      await _pumpOverviewTab(tester, container, coder.instanceId);
+      await tester.pump();
+
+      final text = tester.widget<Text>(find.text('performance'));
+      expect(text.style?.fontWeight, FontWeight.w700);
 
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();
