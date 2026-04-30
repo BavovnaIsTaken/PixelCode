@@ -76,6 +76,7 @@ import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./heal
 import type { HealthItemId } from "./protocol.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { handleAdminRequest, recordLog, type AdminContext } from "./admin.js";
+import { runBuildDoctor, publishBuildFix } from "./build_doctor.js";
 
 // ─── Config (file → env → CLI flags, highest precedence last) ───────────────
 
@@ -491,6 +492,31 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
 function historyFilePath(projectCwd: string): string {
   const cwdKey = projectCwd.replace(/\//g, "-").replace(/^-/, "");
   return join(homedir(), ".claude", "projects", cwdKey, "chat_history.json");
+}
+
+/** Returns the path where shared team memory is persisted for a given project dir. */
+function teamMemoryFile(projectCwd: string): string {
+  const cwdKey = projectCwd.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".claude", "projects", cwdKey, "team_memory.txt");
+}
+
+function loadTeamMemory(projectCwd: string): string | null {
+  try {
+    const f = teamMemoryFile(projectCwd);
+    return existsSync(f) ? readFileSync(f, "utf-8") : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveTeamMemory(projectCwd: string, memories: string): void {
+  try {
+    const f = teamMemoryFile(projectCwd);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, memories, "utf-8");
+  } catch (e) {
+    dbg("warn", "project", `Failed to save team memory: ${e}`);
+  }
 }
 
 const chatHistory = new ChatHistory();
@@ -2829,38 +2855,80 @@ async function androidDeployStart(ws: WebSocket, requestedSerial?: string): Prom
 
   const flutterBin = findFlutter() ?? "flutter";
 
-  sendAndroidDeployLog(ws, "Побудова Android APK...");
-  sendAndroidDeployLog(ws, `Команда: ${flutterBin} build apk --release`);
+  const runFlutterBuild = async (): Promise<{ exitCode: number | null; log: string }> => {
+    sendAndroidDeployLog(ws, "Побудова Android APK...");
+    sendAndroidDeployLog(ws, `Команда: ${flutterBin} build apk --release`);
 
-  const buildProcess = spawn(flutterBin, ["build", "apk", "--release"], {
-    cwd: PROJECT_CWD,
-  });
-  activeAndroidDeployProcess.set(ws, buildProcess);
+    const proc = spawn(flutterBin, ["build", "apk", "--release"], { cwd: PROJECT_CWD });
+    activeAndroidDeployProcess.set(ws, proc);
 
-  buildProcess.stdout.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (line.trim()) sendAndroidDeployLog(ws, line.trim());
-    }
-  });
-  buildProcess.stderr.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (line.trim()) sendAndroidDeployError(ws, line.trim());
-    }
-  });
+    const logLines: string[] = [];
 
-  const buildExitCode = await new Promise<number | null>((resolve) => {
-    buildProcess.on("close", resolve);
-    buildProcess.on("error", (err) => {
-      sendAndroidDeployError(ws, `Помилка при побудові: ${err.message}`);
-      resolve(1);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        const t = line.trim();
+        if (t) { sendAndroidDeployLog(ws, t); logLines.push(t); }
+      }
     });
-  });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        const t = line.trim();
+        if (t) { sendAndroidDeployError(ws, t); logLines.push(t); }
+      }
+    });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      proc.on("close", resolve);
+      proc.on("error", (err) => {
+        sendAndroidDeployError(ws, `Помилка при побудові: ${err.message}`);
+        resolve(1);
+      });
+    });
+
+    return { exitCode, log: logLines.join("\n") };
+  };
+
+  let { exitCode: buildExitCode, log: buildLog } = await runFlutterBuild();
 
   if (buildExitCode !== 0) {
-    sendAndroidDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
-    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
-    activeAndroidDeployProcess.delete(ws);
-    return;
+    sendAndroidDeployLog(ws, "");
+    sendAndroidDeployLog(ws, "── Build Doctor ─────────────────────────────────");
+    sendAndroidDeployLog(ws, "Білд впав. Запускаю AI Doctor для діагностики...");
+
+    const doctorResult = await runBuildDoctor(
+      buildLog,
+      PROJECT_CWD,
+      (msg) => sendAndroidDeployLog(ws, msg),
+    );
+
+    if (doctorResult.fixed) {
+      sendAndroidDeployLog(ws, "");
+      sendAndroidDeployLog(ws, "── Retry Build ──────────────────────────────────");
+      sendAndroidDeployLog(ws, "Фікс застосовано. Повторний білд...");
+      sendAndroidDeployLog(ws, "");
+
+      ({ exitCode: buildExitCode, log: buildLog } = await runFlutterBuild());
+    }
+
+    if (buildExitCode !== 0) {
+      sendAndroidDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
+      send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+      activeAndroidDeployProcess.delete(ws);
+      return;
+    }
+
+    sendAndroidDeployLog(ws, "");
+    sendAndroidDeployLog(ws, "Retry успішний!");
+    sendAndroidDeployLog(ws, "");
+
+    // Publish doctor's changes to git
+    sendAndroidDeployLog(ws, "── Git ──────────────────────────────────────────");
+    await publishBuildFix(
+      PROJECT_CWD,
+      doctorResult.summary,
+      (msg) => sendAndroidDeployLog(ws, msg),
+    );
+    sendAndroidDeployLog(ws, "");
   }
 
   const apkCandidates = [
@@ -3310,6 +3378,9 @@ wss.on("connection", (ws, request) => {
   }
   sendBoardState(ws);
   sendTraits(ws);
+  // Restore shared team memory for this project so every client (incl. mobile) gets captain context
+  const savedMemory = loadTeamMemory(PROJECT_CWD);
+  if (savedMemory) clientProjectContext.set(ws, savedMemory);
   // Send existing chat history so new clients are in sync
   sendChatHistory(ws);
   // Send stored game state for cross-device sync
@@ -3478,8 +3549,10 @@ wss.on("connection", (ws, request) => {
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
-          // Clear per-client UI/state
-          clientProjectContext.delete(ws);
+          // Clear per-client UI/state; restore team memory for new project if available
+          const newMemory = loadTeamMemory(PROJECT_CWD);
+          if (newMemory) clientProjectContext.set(ws, newMemory);
+          else clientProjectContext.delete(ws);
           clientGameState.delete(ws);
           getCommLog(ws).length = 0;
           getMetrics(ws).clear();
@@ -3501,6 +3574,7 @@ wss.on("connection", (ws, request) => {
         case "set_project_context": {
           const memories = (msg as { type: "set_project_context"; memories: string }).memories;
           clientProjectContext.set(ws, memories);
+          saveTeamMemory(PROJECT_CWD, memories);
           dbg("info", "project", `Project memory set (${memories.length} chars)`);
           sendDebug(ws, "info", "project", `Team memory loaded (${memories.length} chars)`);
           break;
