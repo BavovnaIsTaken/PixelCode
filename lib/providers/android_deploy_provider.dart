@@ -1,9 +1,12 @@
 /// Global Android deploy state — one-click build+install from the toolbar.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/agent_message.dart' show AndroidDeployStatusMessage, AndroidDevice;
 import '../models/deploy_state.dart';
 import '../services/android_deploy_service.dart';
 import 'agent_provider.dart';
@@ -12,26 +15,35 @@ import 'agent_provider.dart';
 
 class AndroidDeployNotifier extends Notifier<DeployState> {
   AndroidDeployService? _service;
+  StreamSubscription? _deviceWatchSub;
 
   @override
   DeployState build() => const DeployState();
 
-  AndroidDeployService _ensureService() {
+  // ─── Device watching ──────────────────────────────────────────────────────
+
+  void startWatchingDevices() {
     final ws = ref.read(wsServiceProvider);
-    return _service ??= AndroidDeployService(wsService: ws);
+    _deviceWatchSub?.cancel();
+    _deviceWatchSub = ws.messages.listen((msg) {
+      if (msg is AndroidDeployStatusMessage && msg.subtype == 'devices_list') {
+        _onDevicesList(msg.devices ?? const []);
+      }
+    });
+    ws.androidDeployWatchDevices();
   }
 
-  /// Refresh the list of connected Android devices (adb devices -l).
-  Future<void> refreshDevices() async {
-    final svc = _ensureService();
-    final devices = await svc.listDevices();
+  void stopWatchingDevices() {
+    _deviceWatchSub?.cancel();
+    _deviceWatchSub = null;
+    ref.read(wsServiceProvider).androidDeployUnwatchDevices();
+  }
 
-    // Prefer keeping an existing selection if it's still available & ready.
+  void _onDevicesList(List<AndroidDevice> devices) {
     final currentSerial = state.selectedSerial;
     final stillThere = devices.any(
       (d) => d.serial == currentSerial && d.isReady,
     );
-    // Otherwise auto-pick the first ready device.
     final autoPick = devices.firstWhere(
       (d) => d.isReady,
       orElse: () => const AndroidDevice(serial: '', model: '', state: ''),
@@ -50,6 +62,8 @@ class AndroidDeployNotifier extends Notifier<DeployState> {
   void selectDevice(String serial) {
     state = state.copyWith(selectedSerial: serial);
   }
+
+  // ─── Deploy ───────────────────────────────────────────────────────────────
 
   /// One-click: check deps → build → serve APK download URL.
   Future<void> deploy() async {

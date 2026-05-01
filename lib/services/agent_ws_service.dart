@@ -503,8 +503,12 @@ class AgentWsService {
     _send({'type': 'android_deploy_check'});
   }
 
-  void androidDeployListDevices() {
-    _send({'type': 'android_deploy_list_devices'});
+  void androidDeployWatchDevices() {
+    _send({'type': 'android_deploy_watch_devices'});
+  }
+
+  void androidDeployUnwatchDevices() {
+    _send({'type': 'android_deploy_unwatch_devices'});
   }
 
   void androidDeployStart({String? deviceSerial}) {
