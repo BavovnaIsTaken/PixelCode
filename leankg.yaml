@@ -1,23 +1,22 @@
 project:
-  name: PixelCode
+  name: .leankg
   root: .
   languages:
   - typescript
   - javascript
+  - python
   - kotlin
 indexer:
   exclude:
   - '**/node_modules/**'
   - '**/vendor/**'
-  - '**/build/**'
-  - '**/.dart_tool/**'
-  - '**/coverage/**'
-  - '**/.claude/worktrees/**'
   include:
+  - '*.go'
   - '*.ts'
-  - '*.js'
+  - '*.py'
+  - '*.java'
   - '*.kt'
-  - '*.dart'
+  - '*.xml'
 mcp:
   enabled: true
   port: 3000
