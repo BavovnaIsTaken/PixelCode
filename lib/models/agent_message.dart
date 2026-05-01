@@ -1027,11 +1027,50 @@ class FacilitatorSeededMessage implements ServerMessage {
       );
 }
 
+/// Reason the server returned `facilitator_error`. Lets the UI pick the
+/// right copy and action (retry vs. settings prompt vs. style picker).
+enum FacilitatorErrorCode {
+  /// LLM call exceeded its time budget; user should retry.
+  timeout,
+
+  /// LLM returned no/invalid JSON; user should retry or pick another style.
+  parse,
+
+  /// Provider rate-limited; back off and retry.
+  rateLimit,
+
+  /// API key missing or rejected; route the user to Settings.
+  auth,
+
+  /// Anything else — generic message + retry.
+  unknown;
+
+  static FacilitatorErrorCode fromKey(String? key) => switch (key) {
+        'timeout' => FacilitatorErrorCode.timeout,
+        'parse' => FacilitatorErrorCode.parse,
+        'rate_limit' => FacilitatorErrorCode.rateLimit,
+        'auth' => FacilitatorErrorCode.auth,
+        _ => FacilitatorErrorCode.unknown,
+      };
+}
+
 class FacilitatorErrorMessage implements ServerMessage {
   final String error;
-  FacilitatorErrorMessage({required this.error});
+
+  /// Optional typed code from the server (WP4). Pre-WP4 servers omit it
+  /// and the client falls back to [FacilitatorErrorCode.unknown].
+  final FacilitatorErrorCode code;
+
+  FacilitatorErrorMessage({
+    required this.error,
+    this.code = FacilitatorErrorCode.unknown,
+  });
+
   factory FacilitatorErrorMessage.fromJson(Map<String, dynamic> json) =>
-      FacilitatorErrorMessage(error: json['error'] as String? ?? '');
+      FacilitatorErrorMessage(
+        error: json['error'] as String? ?? '',
+        code: FacilitatorErrorCode.fromKey(json['code'] as String?),
+      );
 }
 
 /// Cross-device sync — same payload shape as [FacilitatorSeededMessage],

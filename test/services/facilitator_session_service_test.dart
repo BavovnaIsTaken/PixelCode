@@ -363,6 +363,218 @@ void main() {
     expect(seeded.outputJson, '{"format":"quest_line"}');
   });
 
+  // ─── WP7: typed error code propagation + batch path ────────────────────
+
+  test('start — server timeout error surfaces FacilitatorErrorCode.timeout',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: _FakeKanban().create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(FacilitatorErrorMessage(
+      error: 'LLM call exceeded 60000ms',
+      code: FacilitatorErrorCode.timeout,
+    ));
+    final result = await future;
+    final fail = result as FacilitatorSeedFailure;
+    expect(fail.code, FacilitatorErrorCode.timeout);
+    expect(fail.isRetryable, isTrue);
+    await messages.close();
+  });
+
+  test('start — auth failure is NOT retryable', () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: _FakeKanban().create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(FacilitatorErrorMessage(
+      error: '401 unauthorized',
+      code: FacilitatorErrorCode.auth,
+    ));
+    final fail = (await future) as FacilitatorSeedFailure;
+    expect(fail.code, FacilitatorErrorCode.auth);
+    expect(fail.isRetryable, isFalse);
+    await messages.close();
+  });
+
+  test('start — parse failure is NOT retryable', () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: _FakeKanban().create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(FacilitatorErrorMessage(
+      error: 'no JSON block',
+      code: FacilitatorErrorCode.parse,
+    ));
+    final fail = (await future) as FacilitatorSeedFailure;
+    expect(fail.code, FacilitatorErrorCode.parse);
+    expect(fail.isRetryable, isFalse);
+    await messages.close();
+  });
+
+  test('start — local timeout uses FacilitatorErrorCode.timeout', () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: _FakeKanban().create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final fail = (await service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+      timeout: const Duration(milliseconds: 30),
+    )) as FacilitatorSeedFailure;
+    expect(fail.code, FacilitatorErrorCode.timeout);
+    expect(fail.isRetryable, isTrue);
+    await messages.close();
+  });
+
+  test(
+      'start — uses board_seed_batch when service exposes it; per-task path is skipped',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final perTaskKanban = _FakeKanban();
+    final batchCalls = <Map<String, Object?>>[];
+
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: perTaskKanban.create,
+      seedBoardBatch: ({String? batchId, String? source, required List<Map<String, dynamic>> tasks}) {
+        batchCalls.add({
+          'batchId': batchId,
+          'source': source,
+          'taskCount': tasks.length,
+          'firstTitle': tasks.isEmpty ? null : tasks.first['title'],
+        });
+      },
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(_seededOutput()));
+    final ok = (await future) as FacilitatorSeedSuccess;
+    expect(ok.kanbanTaskCount, 2);
+    // Atomic batch path used.
+    expect(batchCalls, hasLength(1));
+    expect(batchCalls.first['source'], 'facilitator');
+    expect(batchCalls.first['taskCount'], 2);
+    expect(batchCalls.first['batchId'], startsWith('facilitator-'));
+    // Per-task path not used.
+    expect(perTaskKanban.calls, isEmpty);
+    await messages.close();
+  });
+
+  test(
+      'start — falls back to per-task createKanbanTask when seedBoardBatch is absent',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      // seedBoardBatch omitted on purpose
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'p',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(_seededOutput()));
+    final ok = (await future) as FacilitatorSeedSuccess;
+    expect(ok.kanbanTaskCount, 2);
+    expect(kanban.calls, hasLength(2));
+    await messages.close();
+  });
+
+  test('FacilitatorErrorCode.fromKey maps every typed code', () {
+    expect(FacilitatorErrorCode.fromKey('timeout'),
+        FacilitatorErrorCode.timeout);
+    expect(FacilitatorErrorCode.fromKey('parse'),
+        FacilitatorErrorCode.parse);
+    expect(FacilitatorErrorCode.fromKey('rate_limit'),
+        FacilitatorErrorCode.rateLimit);
+    expect(FacilitatorErrorCode.fromKey('auth'),
+        FacilitatorErrorCode.auth);
+    expect(FacilitatorErrorCode.fromKey('unknown'),
+        FacilitatorErrorCode.unknown);
+    // Unknown / null keys fall back to unknown so the UI is never
+    // forced to pattern-match against an open enum.
+    expect(FacilitatorErrorCode.fromKey(null),
+        FacilitatorErrorCode.unknown);
+    expect(FacilitatorErrorCode.fromKey('made_up'),
+        FacilitatorErrorCode.unknown);
+  });
+
+  test('FacilitatorErrorMessage.fromJson reads the optional code field', () {
+    final raw = jsonEncode({
+      'type': 'facilitator_error',
+      'error': 'Boom',
+      'code': 'rate_limit',
+    });
+    final msg = ServerMessage.fromJson(raw) as FacilitatorErrorMessage;
+    expect(msg.code, FacilitatorErrorCode.rateLimit);
+    expect(msg.error, 'Boom');
+  });
+
+  test('FacilitatorErrorMessage.fromJson defaults to unknown when code missing',
+      () {
+    final raw = jsonEncode({
+      'type': 'facilitator_error',
+      'error': 'Boom',
+    });
+    final msg = ServerMessage.fromJson(raw) as FacilitatorErrorMessage;
+    expect(msg.code, FacilitatorErrorCode.unknown);
+  });
+
   test('facilitatorBoardTaskStream is a broadcast stream', () {
     expect(facilitatorBoardTaskStream, isA<Stream<String>>());
     expect(facilitatorBoardTaskStream.isBroadcast, isTrue);

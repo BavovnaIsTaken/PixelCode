@@ -132,6 +132,83 @@ void main() {
       expect(v, isNull);
     });
 
+    test('surfaces lost id via lostFacilitatorStyleIdProvider when asset is missing',
+        () async {
+      const path = '/tmp/p';
+      final c = await _makeContainer(
+        project: Project(
+            path: path, name: 'p', lastOpened: DateTime(2026, 4, 28)),
+        initialPrefs: {
+          ActiveFacilitatorStyleNotifier.prefsKeyFor(path):
+              'ghost_style_renamed',
+        },
+      );
+      c
+          .read(activeFacilitatorStyleProvider.notifier)
+          .debugSetAssetLoader(_fakeAssetLoader);
+      c.invalidate(activeFacilitatorStyleProvider);
+      // Settle the provider's first build.
+      await c.read(activeFacilitatorStyleProvider.future);
+      expect(
+        c.read(lostFacilitatorStyleIdProvider),
+        'ghost_style_renamed',
+        reason: 'UI must be able to prompt the user to re-pick',
+      );
+    });
+
+    test('lost-id marker clears once the user picks a new style', () async {
+      const path = '/tmp/p';
+      final c = await _makeContainer(
+        project: Project(
+            path: path, name: 'p', lastOpened: DateTime(2026, 4, 28)),
+        initialPrefs: {
+          ActiveFacilitatorStyleNotifier.prefsKeyFor(path): 'ghost_style',
+        },
+      );
+      c
+          .read(activeFacilitatorStyleProvider.notifier)
+          .debugSetAssetLoader(_fakeAssetLoader);
+      c.invalidate(activeFacilitatorStyleProvider);
+      await c.read(activeFacilitatorStyleProvider.future);
+      expect(c.read(lostFacilitatorStyleIdProvider), 'ghost_style');
+
+      final replacement = FacilitatorStyle.fromJson({
+        'id': 'game_master',
+        'displayName': 'GM',
+        'tagline': '',
+        'laloux': 'green',
+        'personaPrompt': '',
+        'outputMapper': 'questLine',
+        'toneModifiers': <String, dynamic>{},
+      });
+      await c
+          .read(activeFacilitatorStyleProvider.notifier)
+          .setStyle(replacement);
+
+      expect(c.read(lostFacilitatorStyleIdProvider), isNull,
+          reason: 'marker is the user-facing problem; setStyle resolves it');
+    });
+
+    test('lost-id marker also clears via clear()', () async {
+      const path = '/tmp/p';
+      final c = await _makeContainer(
+        project: Project(
+            path: path, name: 'p', lastOpened: DateTime(2026, 4, 28)),
+        initialPrefs: {
+          ActiveFacilitatorStyleNotifier.prefsKeyFor(path): 'ghost_style',
+        },
+      );
+      c
+          .read(activeFacilitatorStyleProvider.notifier)
+          .debugSetAssetLoader(_fakeAssetLoader);
+      c.invalidate(activeFacilitatorStyleProvider);
+      await c.read(activeFacilitatorStyleProvider.future);
+      expect(c.read(lostFacilitatorStyleIdProvider), 'ghost_style');
+
+      await c.read(activeFacilitatorStyleProvider.notifier).clear();
+      expect(c.read(lostFacilitatorStyleIdProvider), isNull);
+    });
+
     test('setStyle persists styleId and updates state', () async {
       const path = '/tmp/p';
       final c = await _makeContainer(
