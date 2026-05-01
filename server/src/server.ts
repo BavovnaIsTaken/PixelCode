@@ -38,6 +38,7 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { BoardWriter, isValidBoardColumn, loadBoard } from "./board_persistence.js";
+import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
 import { KimiBackend } from "./kimi_backend.js";
@@ -672,15 +673,38 @@ function gameStateFile(projectPath: string): string {
 function loadPersistedGameState(): void {
   const file = gameStateFile(PROJECT_CWD);
   if (!existsSync(file)) return;
+  let rawText: string;
   try {
-    const raw = JSON.parse(readFileSync(file, "utf-8")) as { fullState?: string; updatedAt?: number };
-    if (typeof raw.fullState === "string" && typeof raw.updatedAt === "number") {
-      latestFullGameState = raw.fullState;
-      latestStateUpdatedAt = raw.updatedAt;
-      dbg("info", "game", `Loaded persisted game state (updatedAt=${raw.updatedAt})`);
-    }
+    rawText = readFileSync(file, "utf-8");
   } catch (e) {
-    dbg("warn", "game", `Failed to load persisted game state: ${e}`);
+    dbg("warn", "game", `Failed to read persisted game state: ${e}`);
+    return;
+  }
+
+  const result = classifyPersistedGameState(rawText);
+  switch (result.kind) {
+    case "loaded":
+      latestFullGameState = result.envelope.fullState;
+      latestStateUpdatedAt = result.envelope.updatedAt;
+      dbg("info", "game", `Loaded persisted game state (updatedAt=${result.envelope.updatedAt})`);
+      return;
+    case "shape_mismatch":
+      dbg("warn", "game", `Persisted game state has wrong shape; ignoring (${result.reason})`);
+      return;
+    case "quarantine_outer":
+    case "quarantine_inner": {
+      const target = `${file}.broken-${Date.now()}`;
+      try { writeFileSync(target, rawText); } catch { /* best effort */ }
+      try { rmSync(file); } catch { /* best effort */ }
+      dbg(
+        "warn",
+        "game",
+        `Game state quarantined to ${target} (${result.kind === "quarantine_outer" ? "outer" : "inner"} parse: ${result.reason})`,
+      );
+      return;
+    }
+    case "fresh":
+      return;
   }
 }
 
@@ -3739,9 +3763,49 @@ wss.on("connection", (ws, request) => {
 
         case "set_game_state": {
           const gs: GameStateData = { instances: msg.instances };
-          clientGameState.set(ws, gs);
+
+          // Stash any newly-arrived API keys before validating so an
+          // instance whose key arrives in the same message is accepted.
           if (msg.deepseekApiKey) clientDeepSeekKey.set(ws, msg.deepseekApiKey);
           if (msg.kimiApiKey) clientKimiKey.set(ws, msg.kimiApiKey);
+
+          // Pre-validate the payload — bad role types, two managers,
+          // out-of-range stats, or non-Claude hires without a session key
+          // are rejected up front. The user gets a clear, structured
+          // error instead of a cryptic dispatch-time failure.
+          const validation = validateGameState(gs, {
+            hasDeepseekKey: !!clientDeepSeekKey.get(ws),
+            hasKimiKey: !!clientKimiKey.get(ws),
+          });
+          if (!validation.ok) {
+            send(ws, { type: "set_game_state_error", errors: validation.errors });
+            dbg(
+              "warn",
+              "game",
+              `Rejected set_game_state: ${validation.errors.length} validation error(s)`,
+            );
+            for (const e of validation.errors) {
+              dbg("warn", "game", `  ${e.code} on ${e.instanceId}: ${e.message}`);
+            }
+            break;
+          }
+
+          // Diff against the previous accepted roster so we can clean up
+          // any in-flight bookkeeping for instances that just got fired.
+          const prevState = clientGameState.get(ws);
+          const fired = firedInstanceIds(prevState, gs);
+
+          clientGameState.set(ws, gs);
+
+          if (fired.length > 0) {
+            const tasks = activeAgentTasks.get(ws);
+            for (const id of fired) {
+              tasks?.delete(id);
+              send(ws, { type: "agent_fired", instanceId: id });
+              dbg("info", "game", `Fired instance ${id}; cleared in-flight bookkeeping`);
+            }
+          }
+
           const instanceIds = Object.keys(gs.instances);
           const teamSummary = instanceIds
             .map((id) => `${id} (${gs.instances[id].nickname}, hw=${gs.instances[id].hardware})`)

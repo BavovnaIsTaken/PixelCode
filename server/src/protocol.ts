@@ -330,6 +330,26 @@ export type ServerMessage =
       type: "summary_result";
       summary: string;
     }
+  // Roster — server-side validation rejected the set_game_state payload.
+  // Sent only when at least one instance failed validation; the server's
+  // internal state is unchanged and the client should surface these to
+  // the user (toast / dialog) and roll back the offending mutation.
+  | {
+      type: "set_game_state_error";
+      errors: Array<{
+        instanceId: string;
+        code: string;
+        message: string;
+      }>;
+    }
+  // Roster — emitted right after a successful set_game_state for every
+  // instanceId that disappeared from the roster compared to the previous
+  // accepted state. Lets the client clean up agent-scoped UI (open chat
+  // tabs, busy indicators) without diff'ing two snapshots itself.
+  | {
+      type: "agent_fired";
+      instanceId: string;
+    }
   // Live input sync
   | { type: "input_text"; text: string }
   | { type: "input_images"; images: string[] }
