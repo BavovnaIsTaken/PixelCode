@@ -1496,6 +1496,38 @@ function createDispatchServer(ws: WebSocket) {
   });
 }
 
+// ─── Sub-agent mirror helpers (pure, exported for tests) ─────────────────────
+
+/** Payload sent to the manager's chat to surface a sub-agent tool-use in a thread. */
+export function subAgentMirrorToolUse(
+  managerAgentId: string,
+  toolUseId: string,
+  toolName: string,
+  status: string,
+  threadId: string,
+) {
+  return { type: "tool_use" as const, agentId: managerAgentId, toolUseId: toolUseId + "_m", toolName, status, threadId };
+}
+
+/** Payload sent to the manager's chat to surface a sub-agent final message in a thread. */
+export function subAgentMirrorMessage(
+  managerAgentId: string,
+  messageId: string,
+  text: string,
+  threadId: string,
+) {
+  return { type: "assistant_message_done" as const, messageId: messageId + "_m", text, agentId: managerAgentId, threadId };
+}
+
+/** Payload sent to the manager's chat to surface a sub-agent streaming delta in a thread. */
+export function subAgentMirrorDelta(
+  managerAgentId: string,
+  text: string,
+  threadId: string,
+) {
+  return { type: "assistant_text" as const, text, isPartial: true as const, agentId: managerAgentId, threadId };
+}
+
 // ─── Sub-agent message handling ─────────────────────────────────────────────
 
 /** Handle real-time messages from independently running sub-agents. */
@@ -1521,14 +1553,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
               threadId: dispatchId,
             });
             // Mirror to manager's chat so the captain sees sub-agent activity as a thread
-            broadcastAll({
-              type: "tool_use",
-              agentId: managerAgentId,
-              toolUseId: block.id + "_m",
-              toolName: block.name,
-              status,
-              threadId: dispatchId,
-            });
+            broadcastAll(subAgentMirrorToolUse(managerAgentId, block.id, block.name, status, dispatchId));
             emitActivity(ws, agentId, "tool_use", status);
           }
         }
@@ -1540,7 +1565,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
           chatHistory.save(historyFilePath(PROJECT_CWD));
           broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId });
           // Mirror result to manager's thread
-          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid + "_m", text, agentId: managerAgentId, threadId: dispatchId });
+          broadcastAll(subAgentMirrorMessage(managerAgentId, asst.uuid, text, dispatchId));
         }
         break;
       }
@@ -1552,7 +1577,7 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
           broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId, threadId: dispatchId });
           // Mirror streaming to manager's thread
-          broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId: managerAgentId, threadId: dispatchId });
+          broadcastAll(subAgentMirrorDelta(managerAgentId, event.delta.text, dispatchId));
         }
         break;
       }
