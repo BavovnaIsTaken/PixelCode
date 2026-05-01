@@ -136,6 +136,11 @@ PixelCode-клієнт **не запускає сервер сам** — у по
 **Якщо збираєш десктоп-білд під macOS або плануєш iOS-таргет:**
 - Xcode 15+ та Command Line Tools (`xcode-select --install`)
 - CocoaPods: `brew install cocoapods` (або `sudo gem install cocoapods`)
+- На Apple Silicon (M1/M2/M3) Homebrew встановлює утиліти у `/opt/homebrew/bin`, а не `/usr/local/bin`. Щоб `pod` був видимий для Flutter і VS Code, додай до `~/.zprofile`:
+  ```bash
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+  ```
+  Після цього перезапусти термінал і VS Code. Без цього `flutter run` з VS Code падатиме з `CocoaPods not installed`.
 
 **Для деплою на фізичний iPhone / iPad:**
 - **Apple ID / Apple Developer account.** Безкоштовний Apple ID теж працює (personal team → sideload, перепідписати раз на 7 днів). Платний акаунт — до 1 року без перепідпису.
@@ -165,6 +170,7 @@ flutter pub get
 (cd server && npm install && npm link)
 
 # Тільки якщо збираєш під macOS або iOS
+flutter precache --ios      # завантажує iOS/macOS-артефакти движка Flutter (потрібно 1 раз)
 (cd macos && pod install)   # або (cd ios && pod install)
 
 # 1) Підняти сервер (launcher :9719 + server :9720, тримається у фоні)
@@ -236,7 +242,9 @@ flutter run -d <device-id>                # iPhone по USB або Android пр�
 | `server/ directory not found at …` у логах | Flutter запущено з неправильним `cwd` | Запускай `flutter run` з кореня репо, не з `macos/` чи `ios/`. |
 | «Unauthenticated» / 401 у серверних логах | Немає ні OAuth-сесії, ні `ANTHROPIC_API_KEY` | Запусти `claude` у терміналі й пройди OAuth, або `export ANTHROPIC_API_KEY=…` і перезапусти клієнт. |
 | Мобільний клієнт не бачить сервер | Пристрої у різних Wi-Fi / macOS-фаєрвол блокує `node` | System Settings → Network → Firewall → дозволь вхідні для `node`; переконайся що обидва у тій самій мережі. |
+| `pod install` падає з `must exist` / `flutter precache` | Відсутній кеш iOS-артефактів | `flutter precache --ios`, потім `pod install`. |
 | `pod install` падає | Застарілий CocoaPods | `brew upgrade cocoapods` або `sudo gem install cocoapods`. |
+| `CocoaPods not installed` у VS Code при `flutter run` | `/opt/homebrew/bin` відсутній у PATH для GUI-процесів | Додай `eval "$(/opt/homebrew/bin/brew shellenv)"` у `~/.zprofile`, повністю перезапусти VS Code. |
 | `EADDRINUSE :9720` | Попередній серверний процес завис | `lsof -ti:9720 \| xargs kill -9`, або запусти з `PORT=9721 npm run dev`. |
 | `npm` / `node` не знайдено при автозапуску з Finder | PATH не підхопився | Сервер стартує через `/bin/zsh -l`, тож потрібно щоб `node`/`npm` були у PATH твого `~/.zshrc` / `~/.zprofile`. |
 | PixelDock: `LAUNCHER UNREACHABLE` / `zsh: command not found: pixelcode-server` | Глобальний CLI не встановлений | `cd server && npm link` (див. §3a). Після цього `pixelcode-server start`. |
@@ -390,6 +398,11 @@ The PixelCode client **does not start the server itself** — earlier versions d
 **Building on macOS or targeting iOS:**
 - Xcode 15+ and Command Line Tools (`xcode-select --install`)
 - CocoaPods: `brew install cocoapods` (or `sudo gem install cocoapods`)
+- On Apple Silicon (M1/M2/M3) Homebrew installs to `/opt/homebrew/bin`, not `/usr/local/bin`. Add this to `~/.zprofile` so Flutter and VS Code can find `pod`:
+  ```bash
+  eval "$(/opt/homebrew/bin/brew shellenv)"
+  ```
+  Then restart your terminal and VS Code. Without this, `flutter run` from VS Code will fail with `CocoaPods not installed`.
 
 **Deploying to a physical iPhone / iPad:**
 - **Apple ID / Apple Developer account.** A free Apple ID works (personal team → sideload, re-sign every 7 days). Paid account — up to 1 year without re-signing.
@@ -419,6 +432,7 @@ flutter pub get
 (cd server && npm install && npm link)
 
 # Only when building for macOS or iOS
+flutter precache --ios      # downloads iOS/macOS engine artifacts (once)
 (cd macos && pod install)   # or (cd ios && pod install)
 
 # 1) Bring the server up (launcher :9719 + server :9720, lives in the background)
@@ -490,7 +504,9 @@ For **one-click install of a prebuilt `.ipa` / `.apk` onto a device**, open the 
 | `server/ directory not found at …` in logs | Flutter launched from the wrong `cwd` | Run `flutter run` from the repo root, not from `macos/` or `ios/`. |
 | `Unauthenticated` / 401 in server logs | No OAuth session and no `ANTHROPIC_API_KEY` | Run `claude` in a terminal and complete OAuth, or `export ANTHROPIC_API_KEY=…` and relaunch the client. |
 | Mobile client can't see the server | Devices on different Wi-Fi, or macOS firewall blocking `node` | System Settings → Network → Firewall → allow incoming for `node`; verify both devices share a network. |
+| `pod install` fails with `must exist` / `flutter precache` | Missing iOS engine artifact cache | Run `flutter precache --ios`, then `pod install`. |
 | `pod install` fails | Outdated CocoaPods | `brew upgrade cocoapods` or `sudo gem install cocoapods`. |
+| `CocoaPods not installed` in VS Code when running `flutter run` | `/opt/homebrew/bin` not on PATH for GUI processes | Add `eval "$(/opt/homebrew/bin/brew shellenv)"` to `~/.zprofile`, then fully restart VS Code. |
 | `EADDRINUSE :9720` | A previous server process is still alive | `lsof -ti:9720 \| xargs kill -9`, or start with `PORT=9721 npm run dev`. |
 | `npm` / `node` not found when launched from Finder | PATH not inherited | Server launches via `/bin/zsh -l`, so `node`/`npm` must be on the PATH set in your `~/.zshrc` / `~/.zprofile`. |
 | PixelDock: `LAUNCHER UNREACHABLE` / `zsh: command not found: pixelcode-server` | Global CLI not installed | `cd server && npm link` (see §3a). Then `pixelcode-server start`. |
