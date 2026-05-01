@@ -67,6 +67,9 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   void initState() {
     super.initState();
     _wsService = ref.read(wsServiceProvider);
+    // Eagerly subscribe before connect() so broadcast stream logs aren't lost
+    // when the console panel is closed (provider would otherwise be lazy-init'd).
+    ref.read(debugLogProvider);
     _lifecycleListener = AppLifecycleListener(
       onExitRequested: () async {
         await _wsService.dispose();
