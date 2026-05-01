@@ -1501,6 +1501,7 @@ function createDispatchServer(ws: WebSocket) {
 /** Handle real-time messages from independently running sub-agents. */
 function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, dispatchId: string): void {
   if (ws.readyState !== WebSocket.OPEN) return;
+  const managerAgentId = resolveRoleInstance(ws, "manager");
 
   try {
     switch (message.type) {
@@ -1519,6 +1520,15 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
               status,
               threadId: dispatchId,
             });
+            // Mirror to manager's chat so the captain sees sub-agent activity as a thread
+            broadcastAll({
+              type: "tool_use",
+              agentId: managerAgentId,
+              toolUseId: block.id + "_m",
+              toolName: block.name,
+              status,
+              threadId: dispatchId,
+            });
             emitActivity(ws, agentId, "tool_use", status);
           }
         }
@@ -1529,6 +1539,8 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
           chatHistory.add({ role: "assistant", text, agentId, timestamp: new Date().toISOString() });
           chatHistory.save(historyFilePath(PROJECT_CWD));
           broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId });
+          // Mirror result to manager's thread
+          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid + "_m", text, agentId: managerAgentId, threadId: dispatchId });
         }
         break;
       }
@@ -1539,6 +1551,8 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         const event = partial.event;
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
           broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId, threadId: dispatchId });
+          // Mirror streaming to manager's thread
+          broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId: managerAgentId, threadId: dispatchId });
         }
         break;
       }
@@ -1806,7 +1820,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       ...(mcpServers ? { mcpServers } : {}),
       cwd: PROJECT_CWD,
       includePartialMessages: true,
-      permissionMode: (clientBypassPermissions.get(ws) ? "bypassPermissions" : "acceptEdits") as "bypassPermissions" | "acceptEdits",
+      permissionMode: "bypassPermissions",
       maxTurns: 50,
       persistSession: true,
       continue: false,
@@ -2777,6 +2791,41 @@ async function androidDeployListDevices(ws: WebSocket): Promise<void> {
   const adbPath = findAdb();
   const devices = adbPath ? await listAndroidDevices(adbPath) : [];
   send(ws, { type: "android_deploy_status", subtype: "devices_list", devices } as any);
+}
+
+// ─── Android device watcher (push on change, 3 s poll) ────────────────────
+
+const activeDeviceWatchers = new Map<WebSocket, ReturnType<typeof setInterval>>();
+const lastSentDeviceList = new Map<WebSocket, string>();
+
+async function androidDeployWatchDevices(ws: WebSocket): Promise<void> {
+  androidDeployUnwatchDevices(ws);
+  const adbPath = findAdb();
+
+  const poll = async () => {
+    try {
+      const devices = adbPath ? await listAndroidDevices(adbPath) : [];
+      const json = JSON.stringify(devices);
+      if (json !== lastSentDeviceList.get(ws)) {
+        lastSentDeviceList.set(ws, json);
+        send(ws, { type: "android_deploy_status", subtype: "devices_list", devices } as any);
+      }
+    } catch {
+      // silently skip failed poll — next tick will retry
+    }
+  };
+
+  await poll();
+  activeDeviceWatchers.set(ws, setInterval(poll, 3000));
+}
+
+function androidDeployUnwatchDevices(ws: WebSocket): void {
+  const timer = activeDeviceWatchers.get(ws);
+  if (timer !== undefined) {
+    clearInterval(timer);
+    activeDeviceWatchers.delete(ws);
+    lastSentDeviceList.delete(ws);
+  }
 }
 
 /** Try to install APK silently via adb. Returns true on success. */
@@ -3855,6 +3904,16 @@ wss.on("connection", (ws, request) => {
           });
           break;
 
+        case "android_deploy_watch_devices":
+          androidDeployWatchDevices(ws).catch((err) => {
+            sendAndroidDeployError(ws, `Watch devices failed: ${err}`);
+          });
+          break;
+
+        case "android_deploy_unwatch_devices":
+          androidDeployUnwatchDevices(ws);
+          break;
+
         case "android_deploy_start": {
           const serial = (msg as { type: "android_deploy_start"; deviceSerial?: string }).deviceSerial;
           androidDeployStart(ws, serial).catch((err) => {
@@ -4047,6 +4106,7 @@ wss.on("connection", (ws, request) => {
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
     agentRunner.cancelAll(ws);
+    androidDeployUnwatchDevices(ws);
     connectedClients.delete(ws);
     clientFacilitatorState.delete(ws);
     // Session presence: if primary disconnected, promote a viewer

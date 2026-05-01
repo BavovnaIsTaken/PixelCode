@@ -177,7 +177,7 @@ export class AgentRunner {
           allowedTools: agentTools,
           cwd: projectCwd,
           includePartialMessages: true,
-          permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
+          permissionMode: "bypassPermissions",
           maxTurns: 30,
           persistSession: false,
           abortController,
