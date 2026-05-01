@@ -20,9 +20,47 @@ import {
 } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
-import type { TaskCardData } from "./protocol.js";
+import type { TaskCardData, TaskColumnKey } from "./protocol.js";
 
 export const BOARD_SCHEMA_VERSION = 1;
+
+/** Authoritative list of board columns. Centralised here so handlers and
+ * persistence stay in sync. */
+export const BOARD_COLUMNS: readonly TaskColumnKey[] = [
+  "backlog",
+  "in_progress",
+  "testing",
+  "done",
+];
+
+const BOARD_COLUMN_SET: ReadonlySet<TaskColumnKey> = new Set(BOARD_COLUMNS);
+
+/** Type-guard: narrows arbitrary input to a valid column key. */
+export function isValidBoardColumn(value: unknown): value is TaskColumnKey {
+  return typeof value === "string" && BOARD_COLUMN_SET.has(value as TaskColumnKey);
+}
+
+/**
+ * Decide what to send in response to `board_get_state{since}`.
+ *
+ * If the client's `since` matches the current revision we ship a cheap
+ * `unchanged` message; otherwise we send the full snapshot. Pure function
+ * so the routing logic can be unit-tested without standing up a server.
+ */
+export type BoardGetStateReply =
+  | { kind: "unchanged"; revision: number }
+  | { kind: "full"; revision: number; tasks: TaskCardData[] };
+
+export function planBoardGetState(
+  since: number | undefined,
+  currentRevision: number,
+  tasks: TaskCardData[],
+): BoardGetStateReply {
+  if (typeof since === "number" && since === currentRevision) {
+    return { kind: "unchanged", revision: currentRevision };
+  }
+  return { kind: "full", revision: currentRevision, tasks };
+}
 
 export interface BoardSnapshot {
   version: number;

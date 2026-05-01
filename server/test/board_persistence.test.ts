@@ -4,10 +4,13 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSy
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  BOARD_COLUMNS,
   BOARD_SCHEMA_VERSION,
   BoardWriter,
   boardFile,
+  isValidBoardColumn,
   loadBoard,
+  planBoardGetState,
   projectKey,
   writeBoardSync,
 } from "../src/board_persistence.ts";
@@ -282,4 +285,72 @@ test("BoardWriter.flush is a no-op when nothing pending", () => {
   } finally {
     cleanup();
   }
+});
+
+// ─── Board sync helpers (WP2) ─────────────────────────────────────────────
+
+test("BOARD_COLUMNS lists every kanban column exactly once", () => {
+  assert.deepEqual([...BOARD_COLUMNS].sort(), [
+    "backlog",
+    "done",
+    "in_progress",
+    "testing",
+  ]);
+});
+
+test("isValidBoardColumn accepts known columns and rejects everything else", () => {
+  for (const c of BOARD_COLUMNS) {
+    assert.equal(isValidBoardColumn(c), true);
+  }
+  for (const bad of [
+    "Backlog", // wrong case
+    "in-progress", // wrong delimiter
+    "",
+    null,
+    undefined,
+    42,
+    {},
+    "review",
+  ]) {
+    assert.equal(isValidBoardColumn(bad), false, `expected reject: ${String(bad)}`);
+  }
+});
+
+test("planBoardGetState returns 'unchanged' when client revision matches", () => {
+  const reply = planBoardGetState(7, 7, [makeTask()]);
+  assert.equal(reply.kind, "unchanged");
+  assert.equal(reply.revision, 7);
+});
+
+test("planBoardGetState ships full state when client revision is stale", () => {
+  const tasks = [makeTask({ id: "task_1_x" }), makeTask({ id: "task_2_x" })];
+  const reply = planBoardGetState(3, 7, tasks);
+  assert.equal(reply.kind, "full");
+  if (reply.kind === "full") {
+    assert.equal(reply.revision, 7);
+    assert.equal(reply.tasks.length, 2);
+  }
+});
+
+test("planBoardGetState ships full state when client omits since (legacy clients)", () => {
+  const reply = planBoardGetState(undefined, 4, [makeTask()]);
+  assert.equal(reply.kind, "full");
+});
+
+test("planBoardGetState treats client-ahead revision as a mismatch (ships full state)", () => {
+  // Should never happen in practice, but a stale client whose revision is
+  // somehow ahead of the server (e.g. cached after a state reset) must be
+  // resync'd, not silently accepted.
+  const reply = planBoardGetState(99, 5, [makeTask()]);
+  assert.equal(reply.kind, "full");
+  if (reply.kind === "full") {
+    assert.equal(reply.revision, 5);
+  }
+});
+
+test("planBoardGetState 'unchanged' reply does not depend on tasks list", () => {
+  // If the revision matches, the task list is irrelevant — it is not sent.
+  // Verify by passing an obviously stale list.
+  const reply = planBoardGetState(0, 0, []);
+  assert.equal(reply.kind, "unchanged");
 });

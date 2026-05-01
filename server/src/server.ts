@@ -37,7 +37,7 @@ import {
   type GameStateData,
   type HiredAgentInfo,
 } from "./agents.js";
-import { BoardWriter, loadBoard } from "./board_persistence.js";
+import { BoardWriter, isValidBoardColumn, loadBoard } from "./board_persistence.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
 import { KimiBackend } from "./kimi_backend.js";
@@ -2055,6 +2055,14 @@ const boardTasks: Map<string, TaskCardData> = new Map();
 let boardTaskCounter = 0;
 const boardWriter = new BoardWriter(PROJECT_CWD);
 
+/**
+ * Monotonically increasing revision. Bumped after every successful
+ * mutation, *before* commitBoardChange()/broadcast so all observers see the
+ * same number. Reconnecting clients can pass it back via
+ * `board_get_state{since}` to skip a full snapshot when nothing changed.
+ */
+let boardRevision = 0;
+
 (function hydrateBoard() {
   const r = loadBoard(PROJECT_CWD);
   for (const t of r.tasks) boardTasks.set(t.id, t);
@@ -2066,7 +2074,9 @@ const boardWriter = new BoardWriter(PROJECT_CWD);
   }
 })();
 
-function persistBoard(): void {
+/** Bump revision and persist. Call exactly once per applied mutation. */
+function commitBoardChange(): void {
+  boardRevision++;
   boardWriter.schedule(Array.from(boardTasks.values()));
 }
 
@@ -2076,26 +2086,52 @@ export function flushBoard(): void {
 
 function broadcastBoardState(): void {
   const tasks = Array.from(boardTasks.values());
-  const msg: ServerMessage = { type: "board_state", tasks };
+  const msg: ServerMessage = { type: "board_state", tasks, revision: boardRevision };
+  const payload = JSON.stringify(msg);
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(msg));
+      client.send(payload);
     }
   }
 }
 
-function sendBoardState(ws: WebSocket): void {
+function sendBoardState(ws: WebSocket, since?: number): void {
+  if (typeof since === "number" && since === boardRevision) {
+    // Client is already current — no need to ship every task again.
+    send(ws, { type: "board_state_unchanged", revision: boardRevision });
+    return;
+  }
   const tasks = Array.from(boardTasks.values());
-  send(ws, { type: "board_state", tasks });
+  send(ws, { type: "board_state", tasks, revision: boardRevision });
 }
 
 function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
+  // The transport-level JSON parse only narrows by `type`; the rest of the
+  // payload is untrusted (a stale client, a buggy script, or a future
+  // version can send unexpected shapes). Wrap the whole switch so a
+  // malformed message can never break the WebSocket — it just drops the
+  // command and logs.
+  try {
+    handleBoardMessageInner(ws, msg);
+  } catch (e) {
+    dbg("warn", "board", `Dropped malformed board message (${msg.type}): ${e}`);
+  }
+}
+
+function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
   switch (msg.type) {
     case "board_get_state":
-      sendBoardState(ws);
+      sendBoardState(ws, msg.since);
       break;
 
     case "board_create_task": {
+      // Reject empty or non-string titles silently — they correspond to a
+      // buggy client that should fix itself, but should not crash the
+      // server or pollute the board with blank cards.
+      if (typeof msg.title !== "string" || msg.title.trim().length === 0) {
+        dbg("warn", "board", `Rejected board_create_task: empty/invalid title`);
+        break;
+      }
       const id = `task_${++boardTaskCounter}_${Date.now()}`;
       const now = new Date().toISOString();
       const task: TaskCardData = {
@@ -2115,19 +2151,23 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       };
       boardTasks.set(id, task);
       dbg("info", "board", `Created task: ${task.title} (${id})`);
-      persistBoard();
+      commitBoardChange();
       broadcastBoardState();
       break;
     }
 
     case "board_move_task": {
+      if (!isValidBoardColumn(msg.column)) {
+        dbg("warn", "board", `Rejected board_move_task: invalid column "${msg.column}"`);
+        break;
+      }
       const task = boardTasks.get(msg.taskId);
       if (task) {
         const oldColumn = task.column;
-        task.column = msg.column as TaskColumnKey;
+        task.column = msg.column;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
-        persistBoard();
+        commitBoardChange();
         broadcastBoardState();
 
         // Auto-enqueue board tasks moved to in_progress for the manager
@@ -2159,6 +2199,10 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       const task = boardTasks.get(msg.taskId);
       if (task) {
         const updates = msg.updates;
+        if (updates.column !== undefined && !isValidBoardColumn(updates.column)) {
+          dbg("warn", "board", `Rejected board_update_task: invalid column "${updates.column}"`);
+          break;
+        }
         if (updates.title !== undefined) task.title = updates.title;
         if (updates.description !== undefined) task.description = updates.description;
         if (updates.priority !== undefined) task.priority = updates.priority;
@@ -2166,7 +2210,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         if (updates.column !== undefined) task.column = updates.column;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Updated task ${msg.taskId}`);
-        persistBoard();
+        commitBoardChange();
         broadcastBoardState();
       }
       break;
@@ -2175,7 +2219,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
     case "board_delete_task": {
       if (boardTasks.delete(msg.taskId)) {
         dbg("info", "board", `Deleted task ${msg.taskId}`);
-        persistBoard();
+        commitBoardChange();
         broadcastBoardState();
       }
       break;
@@ -2193,7 +2237,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         }
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `${msg.assign ? "Assigned" : "Unassigned"} ${msg.agentId} on task ${msg.taskId}`);
-        persistBoard();
+        commitBoardChange();
         broadcastBoardState();
       }
       break;
@@ -2218,7 +2262,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       task.attachments = [...(task.attachments ?? []), attachment];
       task.updatedAt = attachment.uploadedAt;
       dbg("info", "board", `Added attachment "${msg.name}" (${msg.sizeBytes}B) to ${msg.taskId}`);
-      persistBoard();
+      commitBoardChange();
       broadcastBoardState();
       break;
     }
@@ -2231,7 +2275,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       if (task.attachments.length !== before) {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Removed attachment ${msg.attachmentId} from ${msg.taskId}`);
-        persistBoard();
+        commitBoardChange();
         broadcastBoardState();
       }
       break;

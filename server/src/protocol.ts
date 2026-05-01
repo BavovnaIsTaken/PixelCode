@@ -29,7 +29,17 @@ export type ClientMessage =
   | { type: "interrupt" }
   | { type: "get_status" }
   // Task board
-  | { type: "board_get_state" }
+  | {
+      type: "board_get_state";
+      /**
+       * Last revision the client has already applied. If the current server
+       * revision matches, the server replies with `board_state_unchanged`
+       * (no payload) instead of a full `board_state`. Lets reconnecting
+       * clients avoid re-rendering identical state. Optional for backward
+       * compatibility — old clients omit it and always get full state.
+       */
+      since?: number;
+    }
   | {
       type: "board_create_task";
       title: string;
@@ -298,6 +308,22 @@ export type ServerMessage =
   | {
       type: "board_state";
       tasks: TaskCardData[];
+      /**
+       * Monotonically increasing revision, bumped on every server-side
+       * mutation. Clients track the last revision they applied; an older
+       * broadcast that arrives out of order can be ignored. Optional so
+       * older clients keep working — they simply ignore the field.
+       */
+      revision?: number;
+    }
+  | {
+      /**
+       * Sent in response to a `board_get_state` with a `since` matching
+       * the current server revision. Lets a reconnecting client know its
+       * cached state is current without re-shipping every task.
+       */
+      type: "board_state_unchanged";
+      revision: number;
     }
   // Project memory
   | {
