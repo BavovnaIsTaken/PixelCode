@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/agent_message.dart';
+import 'chat_grouping.dart';
 
 // ─── ThreadSkeleton ──────────────────────────────────────────────────────────
 
@@ -202,7 +203,7 @@ class _ThreadTileState extends State<ThreadTile> {
               MessageCategory.awaitingReply => const Color(0xFF00C0D1),
               MessageCategory.status => Colors.white.withValues(alpha: 0.28),
               MessageCategory.taskLinked => const Color(0xFFFFC107),
-              null => Colors.white.withValues(alpha: 0.22),
+              MessageCategory.packBreak || null => Colors.white.withValues(alpha: 0.22),
             })
         .toList();
   }
@@ -357,6 +358,301 @@ class _ThreadTileState extends State<ThreadTile> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── PackTile ─────────────────────────────────────────────────────────────────
+
+/// A collapsible deck widget for a [MessagePack].
+///
+/// Collapsed: shows the newest message as the top card with older messages
+/// peeking as thin strips behind it. Tap to expand.
+/// Expanded: accordion reveals all messages with an animated [SizeTransition].
+class PackTile extends StatefulWidget {
+  final MessagePack pack;
+
+  /// Called for each message inside the pack. Typically returns a `_ChatBubble`.
+  final Widget Function(ChatMessage) messageBuilder;
+
+  const PackTile({
+    super.key,
+    required this.pack,
+    required this.messageBuilder,
+  });
+
+  @override
+  State<PackTile> createState() => _PackTileState();
+}
+
+class _PackTileState extends State<PackTile> with SingleTickerProviderStateMixin {
+  bool _expanded = false;
+  late final AnimationController _ctrl;
+  late final Animation<double> _sizeFactor;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 280),
+    );
+    _sizeFactor = CurvedAnimation(
+      parent: _ctrl,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Color get _accent {
+    final parts = widget.pack.senderId.split(':');
+    return agentColorFor(parts.length > 1 ? parts.last : parts.first);
+  }
+
+  void _expand() {
+    setState(() => _expanded = true);
+    _ctrl.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Scrollable.ensureVisible(
+        context,
+        alignment: 0.1,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  void _collapse() {
+    _ctrl.reverse().then((_) {
+      if (mounted) setState(() => _expanded = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final messages = widget.pack.messages;
+    final accent = _accent;
+    final peekCount = (messages.length - 1).clamp(0, 3);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!_expanded)
+            _CollapsedDeck(
+              messages: messages,
+              accent: accent,
+              peekCount: peekCount,
+              messageBuilder: widget.messageBuilder,
+              onTap: _expand,
+            )
+          else
+            _CollapseHandle(accent: accent, count: messages.length, onTap: _collapse),
+          SizeTransition(
+            sizeFactor: _sizeFactor,
+            axisAlignment: -1,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(color: accent, width: 3),
+                  right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                  bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                ),
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: messages.map(widget.messageBuilder).toList(),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CollapsedDeck extends StatelessWidget {
+  final List<ChatMessage> messages;
+  final Color accent;
+  final int peekCount;
+  final Widget Function(ChatMessage) messageBuilder;
+  final VoidCallback onTap;
+
+  const _CollapsedDeck({
+    required this.messages,
+    required this.accent,
+    required this.peekCount,
+    required this.messageBuilder,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Padding(
+        // Reserve space below the top card for peeking strips.
+        padding: EdgeInsets.only(bottom: peekCount * 8.0),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Peek cards (deepest first in Z-order so top card renders on top).
+            ...List.generate(peekCount, (pi) {
+              final idx = pi + 1;
+              return Positioned(
+                bottom: -(idx * 8.0),
+                left: idx * 3.0,
+                right: idx * 3.0,
+                height: 16,
+                child: Opacity(
+                  opacity: (1.0 - idx * 0.25).clamp(0.0, 1.0),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.03),
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(8),
+                        bottomRight: Radius.circular(8),
+                      ),
+                      border: Border(
+                        left: BorderSide(
+                          color: accent.withValues(alpha: 0.55),
+                          width: 3,
+                        ),
+                        bottom: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.06),
+                        ),
+                        right: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.06),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).reversed,
+            // Top card (newest message).
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.02),
+                  border: Border(
+                    left: BorderSide(color: accent, width: 3),
+                    top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                    right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                    bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (messages.length >= 2)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: accent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '×${messages.length}',
+                                style: TextStyle(
+                                  color: accent,
+                                  fontSize: 10,
+                                  fontFeatures: const [FontFeature.tabularFigures()],
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    messageBuilder(messages.last),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CollapseHandle extends StatelessWidget {
+  final Color accent;
+  final int count;
+  final VoidCallback onTap;
+
+  const _CollapseHandle({
+    required this.accent,
+    required this.count,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        height: 32,
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.06),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
+          border: Border(
+            left: BorderSide(color: accent, width: 3),
+            top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+            right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            Icon(Icons.expand_less, size: 13, color: accent.withValues(alpha: 0.7)),
+            const SizedBox(width: 6),
+            Text(
+              'Згорнути',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.45),
+                fontSize: 11,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '$count повідомлень',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.28),
+                fontSize: 10,
+              ),
+            ),
+            const SizedBox(width: 12),
+          ],
         ),
       ),
     );

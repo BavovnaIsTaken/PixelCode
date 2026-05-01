@@ -998,12 +998,17 @@ enum MessageCategory {
 
   /// A board task was added — rendered as a board-linkage announcement row.
   taskLinked,
+
+  /// Sentinel that marks an explicit thematic break between message packs.
+  /// Never rendered as a bubble — only used by buildChatItems to flush bursts.
+  packBreak,
 }
 
 MessageCategory? _parseCategory(String? s) => switch (s) {
       'awaitingReply' => MessageCategory.awaitingReply,
       'status' => MessageCategory.status,
       'taskLinked' => MessageCategory.taskLinked,
+      'packBreak' => MessageCategory.packBreak,
       _ => null,
     };
 

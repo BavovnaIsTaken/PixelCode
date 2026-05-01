@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +20,7 @@ import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import '../../services/facilitator_session_service.dart';
 import 'board_added_bubble.dart';
+import 'chat_grouping.dart';
 import 'message_decorations.dart';
 import 'send_button.dart';
 import 'thread_widget.dart';
@@ -68,72 +71,7 @@ String _agentNickname(WidgetRef ref, String id) {
   };
 }
 
-// ─── Chat item grouping ───────────────────────────────────────────────────────
-
-sealed class _ChatItem {}
-
-class _SingleMessage extends _ChatItem {
-  final ChatMessage message;
-  _SingleMessage(this.message);
-}
-
-class _StatusGroup extends _ChatItem {
-  final List<ChatMessage> messages;
-  _StatusGroup(this.messages);
-}
-
-class _ThreadGroup extends _ChatItem {
-  final String id;
-  final List<ChatMessage> messages;
-  _ThreadGroup({required this.id, required this.messages});
-}
-
-/// Groups a flat message list into runs for rendering.
-///
-/// - Consecutive [MessageCategory.status] messages without a `threadId` (≥2)
-///   become a [_StatusGroup].
-/// - Messages sharing a `threadId` become a [_ThreadGroup].
-/// - Everything else is a [_SingleMessage].
-List<_ChatItem> _buildChatItems(List<ChatMessage> messages) {
-  final items = <_ChatItem>[];
-  int i = 0;
-  while (i < messages.length) {
-    final msg = messages[i];
-
-    // Thread group: all consecutive messages sharing the same threadId
-    if (msg.threadId != null) {
-      final id = msg.threadId!;
-      final group = <ChatMessage>[];
-      while (i < messages.length && messages[i].threadId == id) {
-        group.add(messages[i]);
-        i++;
-      }
-      items.add(_ThreadGroup(id: id, messages: group));
-      continue;
-    }
-
-    // Status run: consecutive status messages without a threadId
-    if (msg.category == MessageCategory.status) {
-      final run = <ChatMessage>[];
-      while (i < messages.length &&
-          messages[i].category == MessageCategory.status &&
-          messages[i].threadId == null) {
-        run.add(messages[i]);
-        i++;
-      }
-      if (run.length >= 2) {
-        items.add(_StatusGroup(run));
-      } else {
-        items.add(_SingleMessage(run.first));
-      }
-      continue;
-    }
-
-    items.add(_SingleMessage(msg));
-    i++;
-  }
-  return items;
-}
+// Chat item types and grouping logic live in chat_grouping.dart.
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -161,6 +99,10 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   // Direct-messaging hint: dismissed once per chat opening. If the user ticks
   // the "don't show again" box, the hint is hidden permanently via settings.
   bool _directMsgHintDismissed = false;
+
+  // Message packs state
+  String? _activeAgentFilter;
+  double _pullOffset = 0;
 
   @override
   void initState() {
@@ -215,6 +157,93 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         category: MessageCategory.taskLinked,
       ),
     );
+  }
+
+  void _showNewPackDialog() {
+    void confirm() {
+      ref.read(chatProvider.notifier).addLocalMessage(
+        ChatMessage(
+          role: ChatRole.user,
+          agentId: ref.read(selectedAgentProvider),
+          text: '',
+          category: MessageCategory.packBreak,
+        ),
+      );
+    }
+
+    final isDesktop = !kIsWeb && (Platform.isMacOS || Platform.isWindows);
+    if (isDesktop) {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Новий блок'),
+          content: const Text('Почати новий блок повідомлень?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Скасувати'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                confirm();
+              },
+              child: const Text('Почати'),
+            ),
+          ],
+        ),
+      );
+    } else {
+      showModalBottomSheet<void>(
+        context: context,
+        isDismissible: true,
+        enableDrag: true,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Почати новий блок?',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Наступні повідомлення формуватимуть окремий блок.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.white.withValues(alpha: 0.55),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('Скасувати'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          confirm();
+                        },
+                        child: const Text('Почати'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
   }
 
   void _onFocusChange() => setState(() {});
@@ -713,17 +742,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
       };
 
-  Color _getAgentColor(String agentId) => switch (_roleTypeOf(agentId)) {
-        'manager' => const Color(0xFF00C0D1),
-        'tech-lead' => const Color(0xFFFF6B6B),
-        'coder' => const Color(0xFF4ECDC4),
-        'reviewer' => const Color(0xFFFFA500),
-        'tester' => const Color(0xFFFF6B9D),
-        'security' => const Color(0xFF8E44AD),
-        'ui-ux-designer' => const Color(0xFF3498DB),
-        'llm-specialist' => const Color(0xFF9B59FF),
-        _ => const Color(0xFF95A5A6),
-      };
+  Color _getAgentColor(String agentId) => agentColorFor(agentId);
 
   IconData _getAgentIcon(String agentId) => switch (_roleTypeOf(agentId)) {
         'manager' => Icons.sentiment_very_satisfied,
@@ -741,7 +760,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   Widget build(BuildContext context) {
     final selectedAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
-    final groupedItems = _buildChatItems(messages);
+    final visibleMessages = _activeAgentFilter == null
+        ? messages
+        : messages
+            .where((m) =>
+                m.agentId == _activeAgentFilter ||
+                m.category == MessageCategory.packBreak)
+            .toList();
+    final groupedItems = buildChatItems(visibleMessages);
     final syncState = ref.watch(chatSyncStateProvider);
     final agentStatus = ref.watch(
       agentsProvider.select((m) => m[selectedAgent]?.status ?? AgentStatus.idle),
@@ -897,6 +923,21 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     const Spacer(),
                     _CopySnippetButton(onTap: _copyChatSnippet),
                     const SizedBox(width: 8),
+                    if (!kIsWeb && (Platform.isMacOS || Platform.isWindows))
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: GestureDetector(
+                          onTap: _showNewPackDialog,
+                          child: Tooltip(
+                            message: 'Новий блок',
+                            child: Icon(
+                              Icons.add_box_outlined,
+                              size: 16,
+                              color: Colors.white.withValues(alpha: 0.45),
+                            ),
+                          ),
+                        ),
+                      ),
                     _BypassToggle(),
                   ],
                 ),
@@ -904,6 +945,54 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
               ],
             ),
           ),
+          // Agent filter chips (visible when 2+ unique agents in history)
+          Builder(builder: (context) {
+            final agentIds = messages
+                .where((m) => m.category != MessageCategory.packBreak)
+                .map((m) => m.agentId)
+                .toSet()
+                .toList();
+            if (agentIds.length < 2) return const SizedBox.shrink();
+            return Container(
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: Colors.white.withValues(alpha: 0.04)),
+                ),
+              ),
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: agentIds.length + 1,
+                separatorBuilder: (_, i2) => const SizedBox(width: 6),
+                itemBuilder: (context, i) {
+                  if (i == 0) {
+                    final isAll = _activeAgentFilter == null;
+                    return GestureDetector(
+                      onTap: () => setState(() => _activeAgentFilter = null),
+                      child: _AgentFilterChip(
+                        label: 'Всі',
+                        color: const Color(0xFF00C0D1),
+                        active: isAll,
+                      ),
+                    );
+                  }
+                  final id = agentIds[i - 1];
+                  final isActive = _activeAgentFilter == id;
+                  return GestureDetector(
+                    onTap: () => setState(
+                      () => _activeAgentFilter = isActive ? null : id,
+                    ),
+                    child: _AgentFilterChip(
+                      label: _agentNickname(ref, id),
+                      color: agentColorFor(id),
+                      active: isActive,
+                    ),
+                  );
+                },
+              ),
+            );
+          }),
           // Messages
           Expanded(
             child: syncState == ChatSyncState.syncing
@@ -914,7 +1003,23 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     ? _buildEmptyState()
                     : Stack(
                         children: [
-                          ListView.builder(
+                          NotificationListener<ScrollNotification>(
+                            onNotification: (n) {
+                              if (n is OverscrollNotification && n.overscroll < 0) {
+                                final newOffset = (n.overscroll.abs()).clamp(0.0, 56.0);
+                                if (newOffset != _pullOffset) {
+                                  setState(() => _pullOffset = newOffset);
+                                  if (_pullOffset >= 48 && newOffset < 48) {
+                                    HapticFeedback.mediumImpact();
+                                  }
+                                }
+                              } else if (n is ScrollEndNotification) {
+                                if (_pullOffset >= 48) _showNewPackDialog();
+                                if (_pullOffset > 0) setState(() => _pullOffset = 0);
+                              }
+                              return false;
+                            },
+                            child: ListView.builder(
                             reverse: true,
                             controller: _scrollController,
                             padding: const EdgeInsets.all(16),
@@ -928,25 +1033,39 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                 );
                               }
                               final msgIndex = showThinking ? index - 1 : index;
-                              final item = groupedItems[groupedItems.length - 1 - msgIndex];
+                              final gi = groupedItems.length - 1 - msgIndex;
+                              final item = groupedItems[gi];
+                              final aboveItem = gi - 1 >= 0 ? groupedItems[gi - 1] : null;
+                              final belowItem = gi + 1 < groupedItems.length ? groupedItems[gi + 1] : null;
+                              final sender = itemSender(item);
+                              final hideAvatar = sender != null && aboveItem != null && itemSender(aboveItem) == sender;
+                              final tightBottom = sender != null && belowItem != null && itemSender(belowItem) == sender;
+
                               return switch (item) {
-                                _SingleMessage(:final message) =>
-                                  _ChatBubble(message: message),
-                                _StatusGroup(:final messages) =>
+                                SingleMessage(:final message) =>
+                                  _ChatBubble(message: message, hideAvatar: hideAvatar, tightBottom: tightBottom),
+                                StatusGroup(:final messages) =>
                                   StatusGroupWidget(
                                     key: ValueKey('sg_${messages.first.timestamp.millisecondsSinceEpoch}'),
                                     messages: messages,
                                   ),
-                                _ThreadGroup(:final id, :final messages) =>
+                                ThreadGroup(:final id, :final messages) =>
                                   ThreadTile(
                                     key: ValueKey('t_$id'),
                                     threadId: id,
                                     messages: messages,
                                     messageBuilder: (msg) => _ChatBubble(message: msg),
                                   ),
+                                MessagePack(:final packId, messages: _) =>
+                                  PackTile(
+                                    key: ValueKey('pack_$packId'),
+                                    pack: item,
+                                    messageBuilder: (msg) => _ChatBubble(message: msg),
+                                  ),
                               };
                             },
                           ),
+                          ), // NotificationListener
                           if (!_autoScroll)
                             Positioned(
                               bottom: 12,
@@ -982,6 +1101,43 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                     size: 22,
                                   ),
                                 ),
+                              ),
+                            ),
+                          // Pull-to-new-pack indicator (appears at the bottom of the reversed list)
+                          if (_pullOffset > 0)
+                            Positioned(
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 80),
+                                height: _pullOffset * 0.6,
+                                color: Colors.transparent,
+                                alignment: Alignment.center,
+                                child: _pullOffset >= 28
+                                    ? Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            Icons.add_box_outlined,
+                                            size: 14,
+                                            color: const Color(0xFF00C0D1).withValues(
+                                              alpha: (_pullOffset / 56).clamp(0.0, 1.0),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            _pullOffset >= 48 ? 'Відпустіть' : 'Новий блок',
+                                            style: TextStyle(
+                                              color: const Color(0xFF00C0D1).withValues(
+                                                alpha: (_pullOffset / 56).clamp(0.0, 1.0),
+                                              ),
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : null,
                               ),
                             ),
                         ],
@@ -1347,8 +1503,14 @@ class _InputIconButton extends StatelessWidget {
 
 class _ChatBubble extends ConsumerWidget {
   final ChatMessage message;
+  final bool hideAvatar;
+  final bool tightBottom;
 
-  const _ChatBubble({required this.message});
+  const _ChatBubble({
+    required this.message,
+    this.hideAvatar = false,
+    this.tightBottom = false,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1366,25 +1528,29 @@ class _ChatBubble extends ConsumerWidget {
     final catTextStyle = !isUser ? categoryTextStyle(message.category) : null;
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: EdgeInsets.only(bottom: tightBottom ? 3 : 12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment:
             isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           if (!isUser) ...[
-            Container(
-              width: 28,
-              height: 28,
-              decoration: const BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
+            if (hideAvatar)
+              const SizedBox(width: 36) // same width as avatar + gap
+            else ...[
+              Container(
+                width: 28,
+                height: 28,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
+                  ),
                 ),
+                child: const Icon(Icons.psychology, size: 16, color: Colors.white),
               ),
-              child: const Icon(Icons.psychology, size: 16, color: Colors.white),
-            ),
-            const SizedBox(width: 8),
+              const SizedBox(width: 8),
+            ],
           ],
           Flexible(
             child: Column(
@@ -2218,6 +2384,46 @@ class _ChatTraitChip extends StatelessWidget {
             fontSize: 9,
             fontWeight: FontWeight.w500,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Agent filter chip ────────────────────────────────────────────────────────
+
+class _AgentFilterChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  final bool active;
+
+  const _AgentFilterChip({
+    required this.label,
+    required this.color,
+    required this.active,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: active ? color.withValues(alpha: 0.18) : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: active
+              ? color.withValues(alpha: 0.55)
+              : Colors.white.withValues(alpha: 0.1),
+          width: 1,
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: active ? color : Colors.white.withValues(alpha: 0.45),
+          fontSize: 11,
+          fontWeight: active ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
     );
