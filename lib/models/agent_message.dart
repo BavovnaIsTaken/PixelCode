@@ -120,6 +120,10 @@ sealed class ServerMessage {
       'debug_log' => DebugLogMessage.fromJson(json),
       'error' => ErrorMessage.fromJson(json),
       'board_state' => BoardStateMessage.fromJson(json),
+      'board_state_unchanged' => BoardStateUnchangedMessage.fromJson(json),
+      'board_seed_batch_result' => BoardSeedBatchResultMessage.fromJson(json),
+      'set_game_state_error' => SetGameStateErrorMessage.fromJson(json),
+      'agent_fired' => AgentFiredMessage.fromJson(json),
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
       'input_text' => InputTextMessage.fromJson(json),
@@ -406,7 +410,14 @@ class ErrorMessage implements ServerMessage {
 
 class BoardStateMessage implements ServerMessage {
   final BoardState boardState;
-  BoardStateMessage({required this.boardState});
+
+  /// Server-side monotonic revision. Optional for backward compatibility
+  /// with pre-WP2 servers that omit the field; null means "unknown" and
+  /// the client just keeps its previous revision marker.
+  final int? revision;
+
+  BoardStateMessage({required this.boardState, this.revision});
+
   factory BoardStateMessage.fromJson(Map<String, dynamic> json) =>
       BoardStateMessage(
         boardState: BoardState(
@@ -415,7 +426,103 @@ class BoardStateMessage implements ServerMessage {
                   .toList() ??
               [],
         ),
+        revision: json['revision'] is int ? json['revision'] as int : null,
       );
+}
+
+/// Server replied to `board_get_state{since: r}` and r matches the current
+/// revision — no full snapshot needed. Lets a reconnecting client confirm
+/// its cached state without re-shipping every task.
+class BoardStateUnchangedMessage implements ServerMessage {
+  final int revision;
+  BoardStateUnchangedMessage({required this.revision});
+  factory BoardStateUnchangedMessage.fromJson(Map<String, dynamic> json) =>
+      BoardStateUnchangedMessage(revision: json['revision'] as int);
+}
+
+/// Acknowledgement of a `board_seed_batch` — either every task committed
+/// (`ok=true` plus `committedIds`) or none did (`ok=false` plus `errors`).
+class BoardSeedBatchResultMessage implements ServerMessage {
+  final String? batchId;
+  final bool ok;
+  final List<String> committedIds;
+  final List<BoardSeedBatchError> errors;
+  BoardSeedBatchResultMessage({
+    required this.batchId,
+    required this.ok,
+    required this.committedIds,
+    required this.errors,
+  });
+  factory BoardSeedBatchResultMessage.fromJson(Map<String, dynamic> json) =>
+      BoardSeedBatchResultMessage(
+        batchId: json['batchId'] as String?,
+        ok: json['ok'] == true,
+        committedIds: (json['committedIds'] as List?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const [],
+        errors: (json['errors'] as List?)
+                ?.map((e) =>
+                    BoardSeedBatchError.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+class BoardSeedBatchError {
+  final int index;
+  final String reason;
+  BoardSeedBatchError({required this.index, required this.reason});
+  factory BoardSeedBatchError.fromJson(Map<String, dynamic> json) =>
+      BoardSeedBatchError(
+        index: json['index'] as int,
+        reason: json['reason'] as String,
+      );
+}
+
+/// Server rejected a `set_game_state` payload during validation. The
+/// previous accepted state is unchanged on the server — the client is
+/// expected to surface `errors` (toast/dialog) and roll back the
+/// offending mutation.
+class SetGameStateErrorMessage implements ServerMessage {
+  final List<RosterValidationError> errors;
+  SetGameStateErrorMessage({required this.errors});
+  factory SetGameStateErrorMessage.fromJson(Map<String, dynamic> json) =>
+      SetGameStateErrorMessage(
+        errors: (json['errors'] as List?)
+                ?.map((e) => RosterValidationError.fromJson(
+                    e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+class RosterValidationError {
+  /// instanceId or "*" for collection-level errors (e.g. manager singleton).
+  final String instanceId;
+  final String code;
+  final String message;
+  RosterValidationError({
+    required this.instanceId,
+    required this.code,
+    required this.message,
+  });
+  factory RosterValidationError.fromJson(Map<String, dynamic> json) =>
+      RosterValidationError(
+        instanceId: json['instanceId'] as String? ?? '*',
+        code: json['code'] as String? ?? 'unknown',
+        message: json['message'] as String? ?? '',
+      );
+}
+
+/// Emitted right after a successful `set_game_state` for every
+/// instanceId that disappeared from the roster. Lets the client clean up
+/// per-agent UI (open chats, busy badges) without diff'ing snapshots.
+class AgentFiredMessage implements ServerMessage {
+  final String instanceId;
+  AgentFiredMessage({required this.instanceId});
+  factory AgentFiredMessage.fromJson(Map<String, dynamic> json) =>
+      AgentFiredMessage(instanceId: json['instanceId'] as String);
 }
 
 class SummaryResultMessage implements ServerMessage {

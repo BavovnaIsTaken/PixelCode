@@ -9,7 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/agent_message.dart';
 import '../models/game_economy.dart';
 import '../models/task_board.dart';
-import 'agent_provider.dart';
+import 'ws_provider.dart';
 
 // ─── Assignment gating ─────────────────────────────────────────────────────
 
@@ -34,32 +34,71 @@ String? assignmentRejectionReason(TaskCard task, AgentGameData agent) {
   return null;
 }
 
+// ─── Pure helpers (testable without a provider container) ─────────────────
+
+/// Apply an optimistic column move to a board snapshot. Pure function so
+/// it can be unit-tested independently. Unknown taskIds are returned
+/// unchanged (handler will show no flicker; the next broadcast wins).
+BoardState applyOptimisticMove(
+  BoardState board, {
+  required String taskId,
+  required TaskColumn column,
+  DateTime? now,
+}) {
+  final stamp = now ?? DateTime.now();
+  final tasks = board.tasks.map((t) {
+    if (t.id != taskId) return t;
+    return t.copyWith(column: column, updatedAt: stamp);
+  }).toList();
+  return BoardState(tasks: tasks);
+}
+
 // ─── Board state provider ──────────────────────────────────────────────────
 
 class TaskBoardNotifier extends Notifier<BoardState> {
   StreamSubscription<ServerMessage>? _sub;
   StreamSubscription<bool>? _connSub;
 
+  /// Last server-side revision the client has acknowledged. Sent back
+  /// via `board_get_state{since}` on reconnect so the server can reply
+  /// with `board_state_unchanged` instead of re-shipping every task.
+  /// `null` until the first revision-bearing broadcast lands.
+  int? _appliedRevision;
+
+  @visibleForTesting
+  int? get debugAppliedRevision => _appliedRevision;
+
   @override
   BoardState build() {
     final ws = ref.watch(wsServiceProvider);
     _sub?.cancel();
-    _sub = ws.messages.listen(_onMessage);
 
-    // Request board state once connected (with proper cancellation)
+    // onError defends against a malformed broadcast killing the
+    // listener — without it, a single bad payload meant the board froze
+    // until provider rebuild. We log and stay subscribed.
+    _sub = ws.messages.listen(
+      _onMessage,
+      onError: (Object error, StackTrace stack) {
+        debugPrint('[TaskBoard] message stream error (continuing): $error');
+      },
+    );
+
+    // Request board state on every connection-up edge so a reconnect
+    // after a transient drop also re-syncs. Sending `since` lets the
+    // server short-circuit with `board_state_unchanged` when nothing
+    // changed while we were away.
     _connSub?.cancel();
     if (ws.isConnected) {
       debugPrint('[TaskBoard] Already connected — requesting board state');
-      ws.boardGetState();
-    } else {
-      _connSub = ws.connectionStatus.listen((connected) {
-        if (connected) {
-          _connSub?.cancel();
-          debugPrint('[TaskBoard] Connected — requesting board state');
-          ws.boardGetState();
-        }
-      });
+      ws.boardGetState(since: _appliedRevision);
     }
+    _connSub = ws.connectionStatus.listen((connected) {
+      if (connected) {
+        debugPrint('[TaskBoard] Connected — requesting board state '
+            '(since=$_appliedRevision)');
+        ws.boardGetState(since: _appliedRevision);
+      }
+    });
 
     ref.onDispose(() {
       _sub?.cancel();
@@ -71,8 +110,22 @@ class TaskBoardNotifier extends Notifier<BoardState> {
 
   void _onMessage(ServerMessage msg) {
     if (msg is BoardStateMessage) {
-      debugPrint('[TaskBoard] Received board_state: ${msg.boardState.tasks.length} tasks');
+      debugPrint('[TaskBoard] board_state: '
+          '${msg.boardState.tasks.length} tasks (rev=${msg.revision})');
       state = msg.boardState;
+      if (msg.revision != null) _appliedRevision = msg.revision;
+    } else if (msg is BoardStateUnchangedMessage) {
+      // Server confirmed our cached state is current; nothing to apply,
+      // just update the marker so the next reconnect short-circuits too.
+      debugPrint('[TaskBoard] board_state_unchanged (rev=${msg.revision})');
+      _appliedRevision = msg.revision;
+    } else if (msg is BoardSeedBatchResultMessage) {
+      // Failed batches are surfaced via this provider's error stream so
+      // UI can show a toast; the board state itself doesn't change.
+      if (!msg.ok) {
+        debugPrint('[TaskBoard] board_seed_batch failed: '
+            '${msg.errors.length} error(s)');
+      }
     }
   }
 
@@ -92,18 +145,23 @@ class TaskBoardNotifier extends Notifier<BoardState> {
       return false;
     }
     ws.boardCreateTask(
-          title: title,
-          description: description,
-          color: color,
-          priority: priority,
-          difficulty: difficulty,
-          allowedRoles: allowedRoles,
-          taskType: taskType,
-        );
+      title: title,
+      description: description,
+      color: color,
+      priority: priority,
+      difficulty: difficulty,
+      allowedRoles: allowedRoles,
+      taskType: taskType,
+    );
     return true;
   }
 
+  /// Move a task to [column]. The change is applied to local state
+  /// immediately for snappy drag-and-drop; the next `board_state`
+  /// broadcast wins. If the server rejected the move, the broadcast
+  /// reflects the server's view and the optimistic state is replaced.
   void moveTask({required String taskId, required TaskColumn column}) {
+    state = applyOptimisticMove(state, taskId: taskId, column: column);
     ref.read(wsServiceProvider).boardMoveTask(
           taskId: taskId,
           column: column.key,

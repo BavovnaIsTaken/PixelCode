@@ -260,8 +260,34 @@ class AgentWsService {
 
   // ─── Task board ──────────────────────────────────────────────────────────
 
-  void boardGetState() {
-    _send({'type': 'board_get_state'});
+  /// Request the current board state.
+  ///
+  /// On reconnect, pass [since] = last applied revision so the server can
+  /// reply with a cheap `board_state_unchanged` instead of re-shipping
+  /// every task. Pre-WP2 servers ignore the field and always send a full
+  /// snapshot.
+  void boardGetState({int? since}) {
+    _send({
+      'type': 'board_get_state',
+      'since': ?since,
+    });
+  }
+
+  /// Atomically seed multiple tasks. Server validates every entry first;
+  /// on any failure none are committed and a `board_seed_batch_result`
+  /// with `ok: false` is returned. [source] is stamped onto each task so
+  /// the manager auto-dispatcher can recognise facilitator-emitted tasks.
+  void boardSeedBatch({
+    String? batchId,
+    String? source,
+    required List<Map<String, dynamic>> tasks,
+  }) {
+    _send({
+      'type': 'board_seed_batch',
+      'batchId': ?batchId,
+      'source': ?source,
+      'tasks': tasks,
+    });
   }
 
   void boardCreateTask({
