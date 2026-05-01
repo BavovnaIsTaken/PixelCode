@@ -38,6 +38,7 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./board_persistence.js";
+import { pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
 import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
@@ -2331,13 +2332,40 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
         });
         break;
       }
-      // Commit. Single persist + single broadcast for the whole batch.
-      for (const t of plan.tasks) boardTasks.set(t.id, t);
+      // Commit + auto-dispatch. The manager-LLM was previously the only
+      // one who could route a freshly-seeded backlog onto agents; this
+      // MVP picks deterministic assignees so the daily flow doesn't
+      // demand 10 manual drags after every facilitator intake.
+      const gs = clientGameState.get(ws);
+      const load = activeAgentTasks.get(ws);
+      const dispatchSummary: string[] = [];
+      for (const t of plan.tasks) {
+        boardTasks.set(t.id, t);
+        if (gs && shouldAutoDispatch(t)) {
+          const pick = pickAssignee(t, {
+            instances: gs.instances,
+            load: load ?? new Map<string, number>(),
+            enabled: true,
+          });
+          if (pick) {
+            t.assignedAgents = [pick];
+            t.column = "in_progress";
+            // Bump the in-memory load so the next task in the same
+            // batch sees the updated picture and we spread the work.
+            const tasks = activeAgentTasks.get(ws) ?? new Map();
+            tasks.set(pick, (tasks.get(pick) ?? 0) + 1);
+            activeAgentTasks.set(ws, tasks);
+            dispatchSummary.push(`${t.id}→${pick}`);
+          }
+        }
+      }
       boardTaskCounter = plan.nextCounter;
       dbg(
         "info",
         "board",
-        `Committed board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.tasks.length} task(s)`,
+        `Committed board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.tasks.length} task(s)${
+          dispatchSummary.length ? `; auto-dispatched: ${dispatchSummary.join(", ")}` : ""
+        }`,
       );
       commitBoardChange();
       broadcastBoardState();
