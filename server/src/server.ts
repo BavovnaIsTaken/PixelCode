@@ -37,6 +37,7 @@ import {
   type GameStateData,
   type HiredAgentInfo,
 } from "./agents.js";
+import { BoardWriter, loadBoard } from "./board_persistence.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
 import { KimiBackend } from "./kimi_backend.js";
@@ -2043,10 +2044,35 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
   }
 }
 
-// ─── Task Board (shared across all clients) ────────────────────────────────
+// ─── Task Board (persisted, shared across all clients) ─────────────────────
+//
+// On boot we hydrate from ~/.pixelcode/projects/{key}/board.json so a server
+// restart no longer wipes the kanban. Mutations go through `boardWriter`
+// which debounces disk writes (250ms) and writes atomically (tmp+rename).
+// `flushBoard()` is wired into the SIGINT/SIGTERM handlers below.
 
 const boardTasks: Map<string, TaskCardData> = new Map();
 let boardTaskCounter = 0;
+const boardWriter = new BoardWriter(PROJECT_CWD);
+
+(function hydrateBoard() {
+  const r = loadBoard(PROJECT_CWD);
+  for (const t of r.tasks) boardTasks.set(t.id, t);
+  boardTaskCounter = r.taskCounter;
+  if (r.source === "loaded") {
+    dbg("info", "board", `Loaded ${r.tasks.length} persisted task(s) (counter=${r.taskCounter})`);
+  } else if (r.source === "quarantined") {
+    dbg("warn", "board", `Persisted board was unreadable; quarantined to ${r.quarantinedAs ?? "?"}`);
+  }
+})();
+
+function persistBoard(): void {
+  boardWriter.schedule(Array.from(boardTasks.values()));
+}
+
+export function flushBoard(): void {
+  boardWriter.flush();
+}
 
 function broadcastBoardState(): void {
   const tasks = Array.from(boardTasks.values());
@@ -2089,6 +2115,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       };
       boardTasks.set(id, task);
       dbg("info", "board", `Created task: ${task.title} (${id})`);
+      persistBoard();
       broadcastBoardState();
       break;
     }
@@ -2100,6 +2127,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         task.column = msg.column as TaskColumnKey;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
+        persistBoard();
         broadcastBoardState();
 
         // Auto-enqueue board tasks moved to in_progress for the manager
@@ -2138,6 +2166,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         if (updates.column !== undefined) task.column = updates.column;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Updated task ${msg.taskId}`);
+        persistBoard();
         broadcastBoardState();
       }
       break;
@@ -2146,6 +2175,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
     case "board_delete_task": {
       if (boardTasks.delete(msg.taskId)) {
         dbg("info", "board", `Deleted task ${msg.taskId}`);
+        persistBoard();
         broadcastBoardState();
       }
       break;
@@ -2163,6 +2193,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         }
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `${msg.assign ? "Assigned" : "Unassigned"} ${msg.agentId} on task ${msg.taskId}`);
+        persistBoard();
         broadcastBoardState();
       }
       break;
@@ -2187,6 +2218,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       task.attachments = [...(task.attachments ?? []), attachment];
       task.updatedAt = attachment.uploadedAt;
       dbg("info", "board", `Added attachment "${msg.name}" (${msg.sizeBytes}B) to ${msg.taskId}`);
+      persistBoard();
       broadcastBoardState();
       break;
     }
@@ -2199,6 +2231,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       if (task.attachments.length !== before) {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Removed attachment ${msg.attachmentId} from ${msg.taskId}`);
+        persistBoard();
         broadcastBoardState();
       }
       break;
@@ -3332,7 +3365,10 @@ function buildHealthContext(): HealthContext {
 
 /** Unpublish mDNS, give "goodbye" packets a moment to fly, then exit with `code`. */
 function gracefulExit(code: number, reason: string): void {
-  dbg("info", "shutdown", `${reason} (exit=${code}) — unpublishing mDNS…`);
+  dbg("info", "shutdown", `${reason} (exit=${code}) — flushing board, unpublishing mDNS…`);
+  // Flush any pending debounced board writes before exit so the last user
+  // action survives a Ctrl+C.
+  try { flushBoard(); } catch (e) { dbg("warn", "shutdown", `flushBoard failed: ${e}`); }
   let exited = false;
   const doExit = () => { if (!exited) { exited = true; process.exit(code); } };
   bonjour.unpublishAll(() => {
@@ -3374,6 +3410,7 @@ adminContext = {
   },
 };
 process.on("exit", () => {
+  try { flushBoard(); } catch { /* best effort */ }
   bonjour.unpublishAll();
   bonjour.destroy();
 });
