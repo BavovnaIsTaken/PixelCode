@@ -259,6 +259,59 @@ test("handleStartRequest — generator error surfaces as result.error", async ()
   if (!result.ok) assert.match(result.error, /LLM down/);
 });
 
+test("handleStartRequest — wraps LLMGenerationError(timeout) into result.code='timeout'", async () => {
+  const { LLMGenerationError } = await import("../src/facilitator/llm_runner.js");
+  const generators = new GeneratorRegistry();
+  generators.setGenerator("quest_line", {
+    async generate() {
+      throw new LLMGenerationError("timeout", "LLM call exceeded 60000ms");
+    },
+  });
+  const runner = makeRunner({ generators });
+  const parse = parseStartRequest(makeRequest());
+  assert.equal(parse.ok, true);
+  if (!parse.ok) return;
+  const result = await handleStartRequest(runner, "/tmp/proj", parse.value);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.code, "timeout");
+    assert.match(result.error, /60000ms/);
+  }
+});
+
+test("handleStartRequest — wraps LLMGenerationError(parse) into result.code='parse'", async () => {
+  const { LLMGenerationError } = await import("../src/facilitator/llm_runner.js");
+  const generators = new GeneratorRegistry();
+  generators.setGenerator("quest_line", {
+    async generate() {
+      throw new LLMGenerationError("parse", "LLM returned no JSON block");
+    },
+  });
+  const runner = makeRunner({ generators });
+  const parse = parseStartRequest(makeRequest());
+  assert.equal(parse.ok, true);
+  if (!parse.ok) return;
+  const result = await handleStartRequest(runner, "/tmp/proj", parse.value);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "parse");
+});
+
+test("handleStartRequest — non-typed errors fall back to code='unknown'", async () => {
+  const generators = new GeneratorRegistry();
+  generators.setGenerator("quest_line", {
+    async generate() {
+      throw new Error("totally unexpected");
+    },
+  });
+  const runner = makeRunner({ generators });
+  const parse = parseStartRequest(makeRequest());
+  assert.equal(parse.ok, true);
+  if (!parse.ok) return;
+  const result = await handleStartRequest(runner, "/tmp/proj", parse.value);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.code, "unknown");
+});
+
 test("handleStartRequest — missing generator for outputMapper surfaces typed error", async () => {
   const generators = new GeneratorRegistry(); // default has no sprint_backlog
   const runner = makeRunner({ generators });

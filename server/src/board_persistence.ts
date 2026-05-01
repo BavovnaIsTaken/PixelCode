@@ -62,6 +62,120 @@ export function planBoardGetState(
   return { kind: "full", revision: currentRevision, tasks };
 }
 
+// ─── Atomic batch seed (board_seed_batch) ─────────────────────────────
+
+export interface SeedBatchInput {
+  title: string;
+  description?: string;
+  color?: string;
+  priority?: string;
+  column?: string;
+  difficulty?: number;
+  allowedRoles?: string[];
+  taskType?: string;
+  assignedAgents?: string[];
+}
+
+export interface SeedBatchPlan {
+  ok: boolean;
+  /** Built tasks if ok; never partial — empty when validation fails. */
+  tasks: TaskCardData[];
+  /** Index + reason for the first invalid input. Multiple errors collected
+   *  for diagnostics; the batch is still all-or-nothing. */
+  errors: Array<{ index: number; reason: string }>;
+  /** Counter advanced past the last id used by this batch. Caller updates
+   *  its global counter only when ok=true. */
+  nextCounter: number;
+}
+
+/**
+ * Validate every task in a batch and (if ok) build the TaskCardData
+ * objects. Pure: no IO, no globals — caller installs the result.
+ *
+ * Validation:
+ *   - title must be a non-empty string after trimming
+ *   - column (if present) must be a known board column
+ *   - difficulty (if present) must be a finite number in [1,5]
+ */
+export function planSeedBatch(
+  inputs: SeedBatchInput[],
+  options: {
+    /** Counter to start id allocation from. Each new task uses ++counter. */
+    counter: number;
+    /** Stable timestamp source for `createdAt`/`updatedAt`. */
+    now: () => Date;
+    /** Stable id-token source so two id collisions in the same ms don't
+     *  trip atomic-rename reuse. */
+    idToken: () => number;
+    /** Optional `source` value the caller wants stamped on each card.
+     *  We don't model this in TaskCardData yet (the field is reserved
+     *  for downstream auto-dispatcher work, WP3); the helper records it
+     *  via taskType when no taskType was supplied so the data is at
+     *  least observable. */
+    sourceTag?: string;
+  },
+): SeedBatchPlan {
+  const errors: Array<{ index: number; reason: string }> = [];
+
+  if (!Array.isArray(inputs)) {
+    return { ok: false, tasks: [], errors: [{ index: -1, reason: "tasks is not an array" }], nextCounter: options.counter };
+  }
+
+  for (let i = 0; i < inputs.length; i++) {
+    const t = inputs[i];
+    if (!t || typeof t !== "object") {
+      errors.push({ index: i, reason: "task is not an object" });
+      continue;
+    }
+    if (typeof t.title !== "string" || t.title.trim().length === 0) {
+      errors.push({ index: i, reason: "title must be a non-empty string" });
+    }
+    if (t.column !== undefined && !isValidBoardColumn(t.column)) {
+      errors.push({ index: i, reason: `unknown column "${t.column}"` });
+    }
+    if (
+      t.difficulty !== undefined &&
+      (typeof t.difficulty !== "number" ||
+        !Number.isFinite(t.difficulty) ||
+        t.difficulty < 1 ||
+        t.difficulty > 5)
+    ) {
+      errors.push({ index: i, reason: `difficulty ${t.difficulty} outside [1,5]` });
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, tasks: [], errors, nextCounter: options.counter };
+  }
+
+  let counter = options.counter;
+  const tasks: TaskCardData[] = [];
+  const stamp = options.now().toISOString();
+  for (const t of inputs) {
+    counter++;
+    const id = `task_${counter}_${options.idToken()}`;
+    tasks.push({
+      id,
+      title: t.title,
+      description: t.description ?? "",
+      column: (t.column ?? "backlog") as TaskColumnKey,
+      priority: (t.priority ?? "normal") as TaskCardData["priority"],
+      color: (t.color ?? "yellow") as TaskCardData["color"],
+      assignedAgents: t.assignedAgents ?? [],
+      createdAt: stamp,
+      updatedAt: stamp,
+      difficulty: t.difficulty,
+      allowedRoles: t.allowedRoles,
+      // Stamp the source via taskType when caller didn't set one — this
+      // gives the auto-dispatcher in WP3 a hook to recognise facilitator
+      // seeds without yet introducing a separate `source` field.
+      taskType: t.taskType ?? options.sourceTag,
+      attachments: [],
+    });
+  }
+  return { ok: true, tasks, errors: [], nextCounter: counter };
+}
+
 export interface BoardSnapshot {
   version: number;
   tasks: TaskCardData[];

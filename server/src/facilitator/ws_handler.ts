@@ -84,9 +84,16 @@ export function parseStartRequest(raw: unknown): StartRequestParse {
 
 // ─── Handler (impure, but only via the injected runner) ────────────────────
 
+import { LLMGenerationError, type LLMErrorKind } from "./llm_runner.js";
+
 export type StartHandlerResult =
   | { ok: true; state: RunnerState; seed: SeedResult }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** Typed code so the WS layer can ship a structured `facilitator_error.code`. */
+      code: LLMErrorKind;
+    };
 
 /**
  * Builds a fresh `RunnerState` for the project + style and seeds it via
@@ -108,9 +115,12 @@ export async function handleStartRequest(
     );
     return { ok: true, state, seed };
   } catch (err) {
+    const code: LLMErrorKind =
+      err instanceof LLMGenerationError ? err.kind : "unknown";
     return {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      code,
     };
   }
 }

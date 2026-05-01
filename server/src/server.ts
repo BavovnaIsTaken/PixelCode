@@ -37,7 +37,7 @@ import {
   type GameStateData,
   type HiredAgentInfo,
 } from "./agents.js";
-import { BoardWriter, isValidBoardColumn, loadBoard } from "./board_persistence.js";
+import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./board_persistence.js";
 import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
@@ -2304,6 +2304,52 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
       }
       break;
     }
+
+    case "board_seed_batch": {
+      // Atomic insert. planSeedBatch is pure: it validates every entry
+      // first; if any fail, no state mutates. This protects the kanban
+      // from the partial-seed failure mode where the facilitator
+      // pipeline could leave 4 of 10 expected tasks before erroring.
+      const plan = planSeedBatch(msg.tasks ?? [], {
+        counter: boardTaskCounter,
+        now: () => new Date(),
+        idToken: () => Date.now(),
+        sourceTag: msg.source,
+      });
+      if (!plan.ok) {
+        dbg(
+          "warn",
+          "board",
+          `Rejected board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.errors.length} validation error(s)`,
+        );
+        send(ws, {
+          type: "board_seed_batch_result",
+          batchId: msg.batchId,
+          ok: false,
+          committedIds: [],
+          errors: plan.errors,
+        });
+        break;
+      }
+      // Commit. Single persist + single broadcast for the whole batch.
+      for (const t of plan.tasks) boardTasks.set(t.id, t);
+      boardTaskCounter = plan.nextCounter;
+      dbg(
+        "info",
+        "board",
+        `Committed board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.tasks.length} task(s)`,
+      );
+      commitBoardChange();
+      broadcastBoardState();
+      send(ws, {
+        type: "board_seed_batch_result",
+        batchId: msg.batchId,
+        ok: true,
+        committedIds: plan.tasks.map((t) => t.id),
+        errors: [],
+      });
+      break;
+    }
   }
 }
 
@@ -3909,7 +3955,11 @@ wss.on("connection", (ws, request) => {
           const parsed = parseFacilitatorStart(msg);
           if (!parsed.ok) {
             sendDebug(ws, "warn", "facilitator", `Bad start payload: ${parsed.error}`);
-            send(ws, { type: "facilitator_error", error: parsed.error } as any);
+            send(ws, {
+              type: "facilitator_error",
+              error: parsed.error,
+              code: "unknown",
+            } as any);
             break;
           }
           const result = await handleFacilitatorStart(
@@ -3918,8 +3968,12 @@ wss.on("connection", (ws, request) => {
             parsed.value,
           );
           if (!result.ok) {
-            sendDebug(ws, "error", "facilitator", `Seed failed: ${result.error}`);
-            send(ws, { type: "facilitator_error", error: result.error } as any);
+            sendDebug(ws, "error", "facilitator", `Seed failed (${result.code}): ${result.error}`);
+            send(ws, {
+              type: "facilitator_error",
+              error: result.error,
+              code: result.code,
+            } as any);
             break;
           }
           clientFacilitatorState.set(ws, result.state);

@@ -63,6 +63,36 @@ export type ClientMessage =
       dataBase64: string;
     }
   | { type: "board_remove_attachment"; taskId: string; attachmentId: string }
+  /**
+   * Atomically seed multiple board tasks in a single transaction.
+   *
+   * Used by the facilitator pipeline so a partial-seed failure cannot
+   * leave the board half-populated: either every task is committed or
+   * none are. Validation (non-empty title, valid column) runs on every
+   * task before any state mutates; the first invalid task aborts the
+   * whole batch with a `board_seed_batch_result` describing the
+   * failure.
+   */
+  | {
+      type: "board_seed_batch";
+      /** Optional client-supplied id so the response can be correlated. */
+      batchId?: string;
+      /** A `source` string the server stamps onto every task. The
+       *  facilitator pipeline passes "facilitator" so downstream
+       *  auto-dispatch can recognise these. */
+      source?: string;
+      tasks: Array<{
+        title: string;
+        description?: string;
+        color?: string;
+        priority?: string;
+        column?: string;
+        difficulty?: number;
+        allowedRoles?: string[];
+        taskType?: string;
+        assignedAgents?: string[];
+      }>;
+    }
   // Project management
   | { type: "set_project"; path: string }
   | { type: "set_project_context"; memories: string }
@@ -325,6 +355,19 @@ export type ServerMessage =
       type: "board_state_unchanged";
       revision: number;
     }
+  /**
+   * Acknowledgement for `board_seed_batch`. Always emitted, success or
+   * failure. On `ok=true`, every task in the batch was committed and
+   * the freshly-created ids are listed; on `ok=false`, no state changed
+   * and `errors` describes the first invalid task.
+   */
+  | {
+      type: "board_seed_batch_result";
+      batchId?: string;
+      ok: boolean;
+      committedIds: string[];
+      errors: Array<{ index: number; reason: string }>;
+    }
   // Project memory
   | {
       type: "summary_result";
@@ -522,7 +565,21 @@ export type ServerMessage =
       outputFormat: OutputFormatKey;
       outputJson: string;
     }
-  | { type: "facilitator_error"; error: string }
+  | {
+      type: "facilitator_error";
+      /** Human-readable message; kept for backward compat. */
+      error: string;
+      /**
+       * Typed failure code so the client can surface a specific UX:
+       *   - "timeout"     — LLM call exceeded its time budget; retry
+       *   - "parse"       — LLM returned no/invalid JSON; report style
+       *   - "rate_limit"  — provider rate-limited; retry later
+       *   - "auth"        — API key missing/invalid; settings prompt
+       *   - "unknown"     — anything else (default)
+       * Optional for forward compatibility with older clients.
+       */
+      code?: "timeout" | "parse" | "rate_limit" | "auth" | "unknown";
+    }
   // Cross-device sync — sent to new clients on connect and broadcast to all
   // other clients when a new facilitator output is seeded. Same payload as
   // `facilitator_seeded` so clients can reuse the same decode path.

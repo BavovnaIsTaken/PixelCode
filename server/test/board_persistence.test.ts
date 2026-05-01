@@ -11,6 +11,7 @@ import {
   isValidBoardColumn,
   loadBoard,
   planBoardGetState,
+  planSeedBatch,
   projectKey,
   writeBoardSync,
 } from "../src/board_persistence.ts";
@@ -353,4 +354,119 @@ test("planBoardGetState 'unchanged' reply does not depend on tasks list", () => 
   // Verify by passing an obviously stale list.
   const reply = planBoardGetState(0, 0, []);
   assert.equal(reply.kind, "unchanged");
+});
+
+// ─── planSeedBatch (WP4) ──────────────────────────────────────────────
+
+const planOpts = (counter = 0) => ({
+  counter,
+  now: () => new Date("2026-05-02T10:00:00.000Z"),
+  idToken: () => 99999,
+});
+
+test("planSeedBatch builds tasks for a fully valid input", () => {
+  const r = planSeedBatch(
+    [
+      { title: "First", description: "do this" },
+      { title: "Second", column: "in_progress", priority: "high" },
+    ],
+    planOpts(10),
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.tasks.length, 2);
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.nextCounter, 12);
+  assert.equal(r.tasks[0].id, "task_11_99999");
+  assert.equal(r.tasks[1].id, "task_12_99999");
+  assert.equal(r.tasks[0].column, "backlog"); // default
+  assert.equal(r.tasks[1].column, "in_progress");
+  assert.equal(r.tasks[1].priority, "high");
+});
+
+test("planSeedBatch rejects the whole batch when any title is empty", () => {
+  const r = planSeedBatch(
+    [
+      { title: "Valid one" },
+      { title: "  " }, // whitespace-only
+      { title: "Also valid" },
+    ],
+    planOpts(0),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.tasks.length, 0, "no partial commit");
+  assert.equal(r.errors.length, 1);
+  assert.equal(r.errors[0].index, 1);
+  assert.match(r.errors[0].reason, /title/);
+  assert.equal(r.nextCounter, 0, "counter unchanged on failure");
+});
+
+test("planSeedBatch rejects unknown columns atomically", () => {
+  const r = planSeedBatch(
+    [
+      { title: "Ok" },
+      { title: "Bad column", column: "review" },
+    ],
+    planOpts(0),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.tasks.length, 0);
+  assert.equal(r.errors[0].index, 1);
+  assert.match(r.errors[0].reason, /column/);
+});
+
+test("planSeedBatch collects every error on the first pass", () => {
+  const r = planSeedBatch(
+    [
+      { title: "" },
+      { title: "ok" },
+      { title: "ok2", column: "made-up" },
+      { title: "ok3", difficulty: 99 },
+    ],
+    planOpts(0),
+  );
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.length, 3);
+  const indices = r.errors.map((e) => e.index).sort();
+  assert.deepEqual(indices, [0, 2, 3]);
+});
+
+test("planSeedBatch accepts an empty array as a no-op success", () => {
+  const r = planSeedBatch([], planOpts(5));
+  assert.equal(r.ok, true);
+  assert.equal(r.tasks.length, 0);
+  assert.equal(r.nextCounter, 5);
+});
+
+test("planSeedBatch defends against non-array input", () => {
+  // A bug in a future client could send `tasks: null`; we don't want a
+  // TypeError to fall out of the handler.
+  const r = planSeedBatch(null as unknown as Parameters<typeof planSeedBatch>[0], planOpts(0));
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].index, -1);
+});
+
+test("planSeedBatch stamps sourceTag onto taskType when caller didn't set one", () => {
+  const r = planSeedBatch(
+    [
+      { title: "untagged" },
+      { title: "preset", taskType: "review" },
+    ],
+    { ...planOpts(0), sourceTag: "facilitator" },
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.tasks[0].taskType, "facilitator");
+  assert.equal(r.tasks[1].taskType, "review", "explicit taskType wins");
+});
+
+test("planSeedBatch validates difficulty range", () => {
+  for (const bad of [0, 6, NaN, Infinity, -1]) {
+    const r = planSeedBatch(
+      [{ title: "T", difficulty: bad as number }],
+      planOpts(0),
+    );
+    assert.equal(r.ok, false, `expected reject difficulty=${bad}`);
+  }
+  // Valid range
+  const ok = planSeedBatch([{ title: "T", difficulty: 3 }], planOpts(0));
+  assert.equal(ok.ok, true);
 });
