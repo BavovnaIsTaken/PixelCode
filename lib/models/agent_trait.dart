@@ -4,6 +4,40 @@
 /// the stronger the memory becomes, influencing agent behavior.
 library;
 
+enum LessonCategory {
+  codeQuality,
+  architecture,
+  testing,
+  security,
+  communication,
+  delegation,
+  problemSolving,
+  toolsUsage;
+
+  static LessonCategory? fromString(String value) => switch (value) {
+    'code_quality' => codeQuality,
+    'architecture' => architecture,
+    'testing' => testing,
+    'security' => security,
+    'communication' => communication,
+    'delegation' => delegation,
+    'problem_solving' => problemSolving,
+    'tools_usage' => toolsUsage,
+    _ => null,
+  };
+
+  String get displayName => switch (this) {
+    codeQuality => 'Code Quality',
+    architecture => 'Architecture',
+    testing => 'Testing',
+    security => 'Security',
+    communication => 'Communication',
+    delegation => 'Delegation',
+    problemSolving => 'Problem Solving',
+    toolsUsage => 'Tools & Usage',
+  };
+}
+
 class AgentTrait {
   final String id;
   final String agentId;
@@ -26,6 +60,8 @@ class AgentTrait {
     required this.firstSeen,
     required this.lastSeen,
   });
+
+  LessonCategory? get parsedCategory => LessonCategory.fromString(category);
 
   /// Emphasis level based on observation frequency.
   TraitEmphasis get emphasis {

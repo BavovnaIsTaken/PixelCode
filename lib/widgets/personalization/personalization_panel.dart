@@ -93,6 +93,7 @@ class PersonalizationPanel extends ConsumerWidget {
                             onDelete: () => notifier.removeLesson(t.id),
                           ),
                       ],
+                      _TopicAffinitiesSection(agentId: agentId),
                       if (totalCount > 0) ...[
                         const SizedBox(height: 20),
                         _ClearAllButton(
@@ -403,6 +404,110 @@ class _EmptyState extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ─── Topic affinities section ──────────────────────────────────────────────────
+
+class _TopicAffinitiesSection extends ConsumerWidget {
+  final String agentId;
+
+  const _TopicAffinitiesSection({required this.agentId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final affinities = ref.watch(agentTopicAffinitiesProvider(agentId));
+    if (affinities.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 14),
+        _SectionTitle(
+          label: 'Теми',
+          count: affinities.length,
+          color: _accent,
+          icon: Icons.auto_graph_outlined,
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [for (final entry in affinities) _TopicChip(entry: entry)],
+        ),
+      ],
+    );
+  }
+}
+
+class _TopicChip extends StatelessWidget {
+  final TopicAffinityEntry entry;
+
+  const _TopicChip({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _accentColorForAffinity(
+      strengthCount: entry.strengthCount,
+      weaknessCount: entry.weaknessCount,
+    );
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            entry.category.displayName,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 4),
+          if (entry.strengthCount > 0) ...[
+            Icon(Icons.bolt, size: 9, color: _green),
+            const SizedBox(width: 2),
+            Text(
+              entry.strengthCount.toString(),
+              style: const TextStyle(
+                color: _green,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+          if (entry.weaknessCount > 0) ...[
+            const SizedBox(width: 4),
+            Icon(Icons.warning, size: 9, color: _red),
+            const SizedBox(width: 2),
+            Text(
+              entry.weaknessCount.toString(),
+              style: const TextStyle(
+                color: _red,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static Color _accentColorForAffinity({
+    required int strengthCount,
+    required int weaknessCount,
+  }) {
+    if (strengthCount > weaknessCount) return _green;
+    if (weaknessCount > strengthCount) return _red;
+    return _gold;
   }
 }
 
