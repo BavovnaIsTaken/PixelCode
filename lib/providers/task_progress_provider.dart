@@ -221,6 +221,9 @@ class TaskProgressNotifier extends Notifier<void> {
     final lessonCount =
         ref.read(agentTraitsProvider(agent.instanceId)).length;
 
+    final totalTasksCompleted =
+        agent.taskCompletionsByType.values.fold(0, (sum, count) => sum + count);
+
     final outcome = rollOutcome(
       rng: _rng,
       precisionSkill: agent.skills[SkillType.precision] ?? 1,
@@ -230,6 +233,7 @@ class TaskProgressNotifier extends Notifier<void> {
       taskType: task.taskType,
       specializationCritBonus: specBonus,
       lessonBonus: lessonSuccessBonus(lessonCount: lessonCount),
+      projectMemoryBonus: projectMemoryDepthBonus(totalTasksCompleted: totalTasksCompleted),
     );
 
     final (TaskColumn next, double quality) = switch (outcome) {

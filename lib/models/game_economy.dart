@@ -548,6 +548,17 @@ const double kLessonSuccessBonusPerLesson = 0.005;
 /// visible without trivializing the roll for agents with hundreds of lessons.
 const double kMaxLessonSuccessBonus = 0.10;
 
+/// Crit-chance bonus granted per 5 completed tasks on architectural tasks.
+/// 1% per 5 tasks → 75 tasks = +15% crit on architecture rolls.
+const double kProjectMemoryBonusPerTasks = 0.01;
+
+/// Number of tasks completed per 1% crit bonus increment on architecture rolls.
+const int kProjectMemoryTasksPerStep = 5;
+
+/// Hard cap on project memory depth bonus. Keeps the mechanic visible without
+/// making aged agents trivial on architectural reasoning.
+const double kMaxProjectMemoryBonus = 0.15;
+
 // ─── Agent passives ───────────────────────────────────────────────────────
 
 class AgentPassive {
