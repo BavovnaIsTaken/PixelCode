@@ -1297,7 +1297,7 @@ function createDispatchServer(ws: WebSocket) {
       // Dispatch the sub-agent
       const projectMemory = clientProjectContext.get(ws);
       const gameState = clientGameState.get(ws);
-      const bypassPermissions = clientBypassPermissions.get(ws);
+      const bypassPermissions = clientBypassPermissions.get(ws) ?? true;
 
       const dispatchId = agentRunner.dispatch({
         agentId,

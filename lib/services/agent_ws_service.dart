@@ -131,6 +131,7 @@ class AgentWsService {
       _reconnectTimer?.cancel();
       _log('Connected to $url');
       _sendClientInfo();
+      setBypassPermissions(true);
       getTraits();
 
       _wsSub = _ws!.listen(

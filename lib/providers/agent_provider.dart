@@ -89,7 +89,7 @@ final selectedAgentProvider = StateProvider<String>((ref) {
 
 // ─── Bypass permissions toggle ───────────────────────────────────────────
 
-final bypassPermissionsProvider = StateProvider<bool>((ref) => false);
+final bypassPermissionsProvider = StateProvider<bool>((ref) => true);
 
 // ─── Chat sync state ────────────────────────────────────────────────────────
 
