@@ -33,8 +33,11 @@
 | Real-time mirroring між пристроями | `[DONE]` | — |
 | Shared SDK session між реконнектами | `[DONE]` | — |
 | PixelDock admin app | `[DONE]` | [server_admin/](../server_admin/) |
+| **Kanban board persistence (per-project, atomic, debounced)** | `[DONE]` | 2026-05-02 — `~/.pixelcode/projects/{key}/board.json`, schema-versioned (v1 + v0 migration), atomic write (tmp+rename), debounced (250ms), tolerant loader з quarantine на corruption. Закриває P0 показстопер (раніше рестарт сервера витирав дошку). [server/src/board_persistence.ts](../server/src/board_persistence.ts), 14 unit-тестів |
+| **Board sync — revision tracking + reconnect resync** | `[DONE]` | 2026-05-02 — monotonic `boardRevision` на кожній мутації; `board_get_state{since}` шле `board_state_unchanged` якщо клієнт current; tolerant payload validation (try/catch + isValidBoardColumn); client-side optimistic moves з auto-reconciliation. [server/src/server.ts](../server/src/server.ts), [lib/providers/task_board_provider.dart](../lib/providers/task_board_provider.dart). 7+11 нових тестів |
+| **Roster validation + fire-mid-task cleanup + corrupt-state quarantine** | `[DONE]` | 2026-05-02 — `validateGameState` (unknown_role / manager_singleton / hardware/skill bounds / missing_api_key); `firedInstanceIds` для cleanup activeAgentTasks + `agent_fired` event; `classifyPersistedGameState` quarantines corrupt envelope замість silent re-broadcast garbage. [server/src/roster_validation.ts](../server/src/roster_validation.ts), 27 нових тестів |
 
-**Що залишилось у цьому напрямку:** нічого критичного. Можна розглянути в майбутньому: cross-machine remote orchestration (WS-шар готовий, але UX-flow попереду).
+**Що залишилось у цьому напрямку:** нічого критичного. Можна розглянути в майбутньому: cross-machine remote orchestration (WS-шар готовий, але UX-flow попереду); per-project broadcast scoping (наразі hypothetical — server один-на-PROJECT_CWD).
 
 ---
 
@@ -71,6 +74,7 @@
 | **Break Room morale system** (+20% при відпочинку) | `[DONE]` | `seatRestMultiplier` — вбудовано у `_buildRoomEffects()`; breakRoom↔lounge synergy doubles multiplier |
 | **Server Room cable proximity penalty** | `[DONE]` | `−5%` speed when serverRoom placed >8 tiles від всіх workstations — `_buildRoomEffects()` |
 | **Manager Meeting Room dispatch boost** | `[TODO]` | Q2–Q3 2026 — adjacency pair обчислюється (`meetingRoom↔workstation → +5%`), hook до task-dispatch latency ще не зроблено |
+| **Manager auto-dispatch MVP** (facilitator-tasks → агенти автоматично) | `[DONE]` | 2026-05-02 — `pickAssignee` deterministic: role match → load cap (MAX_AGENT_LOAD=2) → lowest load → highest skill → stable id tiebreak. Triggered after `board_seed_batch` для tasks з `taskType="facilitator"`. [server/src/auto_dispatcher.ts](../server/src/auto_dispatcher.ts), 17 нових тестів. **MVP без LLM** — smart LLM-routing залишається follow-up |
 | **Agent workplace status** (`WorkplaceStatus.unassigned/assigned`; нові наймані агенти чекають у lobby-зоні без столу; `CharState.waiting`; `coding/testing/debugging` отримують `−0.25` success rate; Foreman показує desk-bubble; badge "Потрібен стіл" у Roster) | `[DONE]` | Q2 2026 — prerequisite для B.1 → D.1 integration; [lib/models/game_economy.dart](../lib/models/game_economy.dart), [lib/widgets/canvas/office_game_state.dart](../lib/widgets/canvas/office_game_state.dart), [lib/services/task_outcome.dart](../lib/services/task_outcome.dart) |
 | **Diagnostics panel polish** | `[DONE]` | [lib/widgets/debug/](../lib/widgets/debug/) |
 | **Game Designer hireable role** (мета-роль для дизайну механік/економіки/F2P-петель) | `[DONE]` | [server/src/agents.ts](../server/src/agents.ts), [lib/models/game_economy.dart](../lib/models/game_economy.dart). Поза-плановий додаток (рівень 2 за [STRATEGY §0](STRATEGY.md#0-реалістична-калібровка-станом-на-2026-04-26)); обґрунтування: meta-loop "гра дизайнить себе" + контент-хук. |
@@ -359,7 +363,7 @@ UX-rehearsal для Marketplace v1 — запечений roster named character
 | **Feature flags** | `[TODO]` | Q4 2026 |
 | **Rate limiting / abuse prevention** на marketplace | `[TODO]` | Q4 2026 |
 | **CI/CD pipeline** (build matrix для всіх платформ) | `[PARTIAL]` | Поточний стан — `flutter build` локально; потрібен GitHub Actions |
-| **Automated test suite** (Flutter widget tests + server unit tests) | `[PARTIAL]` | Є щось у [test/](../test/), треба розширити |
+| **Automated test suite** (Flutter widget tests + server unit tests) | `[PARTIAL]` | Розширено 2026-05-02 — Production-ready core loop (8 work-packages) додав ~150 unit + 18 integration тестів: board persistence/sync/seed-batch, roster validation/cleanup/quarantine, LLM runner (timeout/retry/typed errors), auto-dispatcher, optimistic client board, facilitator UX. Integration tests у [server/test/integration/](../server/test/integration/) і [test/integration/](../test/integration/) ловлять регресії на стиках модулів. Залишається: widget-tests на drag-and-drop, повний end-to-end через справжній in-process WS server |
 
 ---
 
@@ -380,6 +384,8 @@ Facilitator — модальність взаємодії manager-агента, 
 | **Client integration** (picker → intake → WS `facilitator_start` → kanban seed) | `[DONE]` | [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart) + [lib/services/facilitator_onboarding.dart](../lib/services/facilitator_onboarding.dart) + [lib/widgets/facilitator/launch_facilitator_onboarding.dart](../lib/widgets/facilitator/launch_facilitator_onboarding.dart) — v0.4.0 додав localization bindings |
 | **i18n integration** (English + Ukrainian across all facilitators) | `[DONE]` | v0.4.0 — see [lib/services/localization_service.dart](../lib/services/localization_service.dart) |
 | **LLM-backed output generators** (заміна stub-ів через Anthropic SDK) | `[DONE]` | 2026-04-28 — `ClaudeQuestLineGenerator` / `ClaudeMissionBriefingGenerator` / `ClaudeMilestoneTreeGenerator` у [server/src/facilitator/llm_generators.ts](../server/src/facilitator/llm_generators.ts); CallerFn injectable для тестів; haiku (micro/small) + sonnet (medium/large); зареєстровано у server.ts при старті; 21 новий тест |
+| **LLM pipeline robustness** (typed errors, timeout, retry, atomic seed) | `[DONE]` | 2026-05-02 — [server/src/facilitator/llm_runner.ts](../server/src/facilitator/llm_runner.ts) з `LLMGenerationError {kind: timeout/parse/rate_limit/auth/unknown}`, per-attempt 60s hard timeout, 1 retry на transient (5xx/429/ECONNRESET), parse/auth no-retry. `extractJson` повертає null замість silent fallthrough. `facilitator_error.code` typed на wire. Atomic `board_seed_batch` — none-or-all семантика, замінює N×board_create_task. 20+8+3 нових тестів |
+| **Facilitator client UX polish** (typed-code aware UI + lost-style + 90s timeout) | `[DONE]` | 2026-05-02 — `FacilitatorErrorCode` enum + `FacilitatorSeedFailure.isRetryable`; default timeout 30s→90s (server WP4 has own retry); production шле `board_seed_batch` через `bindToWsService`; новий `lostFacilitatorStyleIdProvider` для prompt "стиль видалено" замість silent fallback. [lib/services/facilitator_session_service.dart](../lib/services/facilitator_session_service.dart), [lib/providers/active_facilitator_style_provider.dart](../lib/providers/active_facilitator_style_provider.dart). 18 нових тестів |
 | **Hierarchical prompt safety** (style ≠ tech decisions; tech-lead veto) | `[TODO]` | Q3 2026 |
 | **Default styles v2**: Scrum Master, Stoic Mentor | `[TODO]` | Q4 2026 |
 | **`SprintBacklog` output format** (Scrum Master) | `[TODO]` | Q4 2026 |
