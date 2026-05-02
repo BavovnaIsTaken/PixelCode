@@ -17,12 +17,14 @@ import UIKit
       )
       clipboardChannel.setMethodCallHandler { (call, result) in
         if call.method == "getImageFromClipboard" {
-          if UIPasteboard.general.hasImages,
-             let image = UIPasteboard.general.image,
-             let pngData = image.pngData() {
-            result(FlutterStandardTypedData(bytes: pngData))
-          } else {
-            result(nil)
+          DispatchQueue.main.async {
+            if UIPasteboard.general.hasImages,
+               let image = UIPasteboard.general.image,
+               let pngData = image.pngData() {
+              result(FlutterStandardTypedData(bytes: pngData))
+            } else {
+              result(nil)
+            }
           }
         } else {
           result(FlutterMethodNotImplemented)
