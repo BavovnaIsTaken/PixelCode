@@ -21,6 +21,11 @@ enum SendButtonVariant {
   /// 8-bit arcade-style hard drop shadow; depresses into the shadow on
   /// tap like a physical button. Premium.
   pixelArcade,
+
+  /// Apple Liquid Glass — translucent surface with backdrop blur, specular
+  /// highlight and an engraved pixel arrow. Auto-substituted for
+  /// [pixelArcade] on iOS and macOS; not exposed in the cosmetic catalog.
+  liquidGlass,
 }
 
 /// Resolve a cosmetic ID to its [SendButtonVariant].

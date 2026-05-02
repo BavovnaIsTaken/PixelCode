@@ -29,10 +29,31 @@ final activeThemeColorsProvider = Provider<ThemeColors>((ref) {
 
 /// The currently equipped send-button cosmetic variant (falls back to
 /// [SendButtonVariant.classic] when nothing is equipped).
+///
+/// On Apple platforms, [SendButtonVariant.pixelArcade] is automatically
+/// substituted with [SendButtonVariant.liquidGlass] so the chat send button
+/// follows the iOS 26 / macOS Tahoe Liquid Glass design language without
+/// breaking pixel-art identity on other platforms.
 final activeSendButtonVariantProvider = Provider<SendButtonVariant>((ref) {
   final equipped = ref.watch(gameEconomyProvider).equippedCosmetics;
-  return sendButtonVariantForId(equipped[CosmeticType.sendButtonStyle.index]);
+  final variant =
+      sendButtonVariantForId(equipped[CosmeticType.sendButtonStyle.index]);
+  return resolveSendButtonVariantForPlatform(variant);
 });
+
+/// Visible for testing. Returns the variant that should actually render on
+/// the current platform — Apple platforms swap pixel-arcade for liquid-glass.
+SendButtonVariant resolveSendButtonVariantForPlatform(
+  SendButtonVariant variant, {
+  bool? isApplePlatformOverride,
+}) {
+  final isApple = isApplePlatformOverride ??
+      (!kIsWeb && (Platform.isIOS || Platform.isMacOS));
+  if (isApple && variant == SendButtonVariant.pixelArcade) {
+    return SendButtonVariant.liquidGlass;
+  }
+  return variant;
+}
 
 /// A complete [ThemeData] built from the active theme, ready for MaterialApp.
 final appThemeDataProvider = Provider<ThemeData>((ref) {
@@ -56,7 +77,7 @@ ThemeData _buildThemeData(ThemeColors c) {
     ),
     tooltipTheme: isMacOS
         ? const TooltipThemeData(
-            waitDuration: Duration(milliseconds: 2000),
+            waitDuration: Duration(milliseconds: 1500),
             showDuration: Duration(seconds: 10),
           )
         : null,

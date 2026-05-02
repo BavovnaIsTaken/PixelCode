@@ -9,6 +9,7 @@
 library;
 
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -173,6 +174,13 @@ class _SendButtonBodyState extends State<_SendButtonBody>
                     size: widget.size,
                   ),
                 SendButtonVariant.pixelArcade => _PixelArcadePaint(
+                    press: press,
+                    hover: hover,
+                    burst: burst,
+                    accent: widget.accent,
+                    size: widget.size,
+                  ),
+                SendButtonVariant.liquidGlass => _LiquidGlassPaint(
                     press: press,
                     hover: hover,
                     burst: burst,
@@ -673,7 +681,7 @@ class _PixelArcadePaint extends StatelessWidget {
                 // Pixel arrow
                 Center(
                   child: CustomPaint(
-                    size: Size.square(size * 0.55),
+                    size: Size.square(size * 0.66),
                     painter: _PixelArrowPainter(
                       color: Colors.black.withValues(alpha: 0.82),
                     ),
@@ -712,14 +720,17 @@ class _PixelArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // Pixel grid: 7x7 cells, draw a right-pointing arrow.
+    // Triangle fills the full grid width with the tip at the right edge so
+    // the symbol reads as a balanced, centered play glyph rather than a
+    // sliver pinned to the left.
     // 1 = filled, 0 = empty.
     const grid = <List<int>>[
       [0, 1, 0, 0, 0, 0, 0],
-      [0, 1, 1, 0, 0, 0, 0],
       [0, 1, 1, 1, 0, 0, 0],
-      [0, 1, 1, 1, 1, 0, 0],
+      [0, 1, 1, 1, 1, 1, 0],
+      [0, 1, 1, 1, 1, 1, 1],
+      [0, 1, 1, 1, 1, 1, 0],
       [0, 1, 1, 1, 0, 0, 0],
-      [0, 1, 1, 0, 0, 0, 0],
       [0, 1, 0, 0, 0, 0, 0],
     ];
     final cell = size.width / 7;
@@ -741,4 +752,186 @@ class _PixelArrowPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _PixelArrowPainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+// ─── Variant 5: Liquid Glass ──────────────────────────────────────────────
+// Apple iOS 26 / macOS Tahoe design language. Translucent glass surface
+// with backdrop blur, rim highlight and a subtle accent tint. The
+// pixel-art arrow is engraved (deboss + emboss layers, no fill) so the
+// PixelCode identity reads through as etched glass instead of a sticker.
+// Auto-substituted for [pixelArcade] on Apple platforms.
+
+class _LiquidGlassPaint extends StatelessWidget {
+  const _LiquidGlassPaint({
+    required this.press,
+    required this.hover,
+    required this.burst,
+    required this.accent,
+    required this.size,
+  });
+
+  final double press;
+  final double hover;
+  final double burst;
+  final Color accent;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = 1.0 + hover * 0.04 - press * 0.06;
+    final tintAlpha = 0.08 + hover * 0.05 + press * 0.10;
+    final specularAlpha = 0.30 - press * 0.18;
+    final rimAlpha = 0.28 + hover * 0.04;
+    final borderRadius = BorderRadius.circular(12);
+
+    final rimColor = Color.lerp(Colors.white, accent, 0.4)!
+        .withValues(alpha: rimAlpha);
+    final tintColor = accent.withValues(alpha: tintAlpha);
+
+    final shadowOffset = Offset(0, 4 - press * 3);
+    final shadowBlur = 16.0 - press * 10;
+
+    final specularBegin = Alignment(-0.3 + hover * 0.6, -1.0);
+
+    final arrowDim = size * 0.594;
+
+    return Transform.scale(
+      scale: scale,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: borderRadius,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: shadowBlur,
+              offset: shadowOffset,
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 4,
+              spreadRadius: -2,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: borderRadius,
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Stack(
+              children: [
+                // Pixel arrow — sits underneath the glass layers so the tint
+                // and specular wash over it like a refracted shape beneath
+                // the surface. Wrapped in ImageFiltered so the pixel edges
+                // soften, reading as a refracted shape under glass rather
+                // than a crisp sticker.
+                Center(
+                  child: SizedBox.square(
+                    dimension: arrowDim,
+                    child: ImageFiltered(
+                      imageFilter:
+                          ui.ImageFilter.blur(sigmaX: 3.6, sigmaY: 3.6),
+                      child: CustomPaint(
+                        size: Size.square(arrowDim),
+                        painter: _PixelArrowPainter(
+                          color: Color.lerp(Colors.white, accent, 0.20)!
+                              .withValues(alpha: 0.92),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // Glass tint — rosy wash over the arrow + blurred backdrop.
+                Positioned.fill(
+                  child: ColoredBox(color: tintColor),
+                ),
+                // Specular highlight (top slab of light, slides on hover)
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: specularBegin,
+                        end: Alignment.bottomCenter,
+                        stops: const [0.0, 0.35, 1.0],
+                        colors: [
+                          Colors.white.withValues(alpha: specularAlpha),
+                          Colors.white.withValues(alpha: specularAlpha * 0.2),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Engraved pixel arrow on the glass surface — deboss shadow
+                // + emboss highlight, layered on top of the wash so the same
+                // shape reads twice: once as a refracted form beneath the
+                // surface, once as an etched glyph on it.
+                Center(
+                  child: SizedBox.square(
+                    dimension: arrowDim,
+                    child: ImageFiltered(
+                      imageFilter:
+                          ui.ImageFilter.blur(sigmaX: 1.12, sigmaY: 1.12),
+                      child: Stack(
+                        children: [
+                          Transform.translate(
+                            offset: const Offset(0.5, 1.0),
+                            child: CustomPaint(
+                              size: Size.square(arrowDim),
+                              painter: _PixelArrowPainter(
+                                color: Colors.black.withValues(alpha: 0.25),
+                              ),
+                            ),
+                          ),
+                          Transform.translate(
+                            offset: const Offset(-0.5, -0.5),
+                            child: CustomPaint(
+                              size: Size.square(arrowDim),
+                              painter: _PixelArrowPainter(
+                                color: Color.lerp(Colors.white, accent, 0.15)!
+                                    .withValues(alpha: 0.75),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Inner rim border — last so it stays crisp on top of the
+                // glass wash.
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: borderRadius,
+                      border: Border.all(color: rimColor, width: 1.0),
+                    ),
+                  ),
+                ),
+                // Tap ripple — radial expansion from center
+                if (burst > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            radius: 0.5 + burst * 1.2,
+                            colors: [
+                              Colors.white.withValues(
+                                alpha: (1.0 - burst).clamp(0.0, 1.0) * 0.35,
+                              ),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
