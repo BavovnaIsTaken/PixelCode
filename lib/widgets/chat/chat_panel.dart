@@ -1021,7 +1021,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                             child: ListView.builder(
                             reverse: true,
                             controller: _scrollController,
-                            padding: const EdgeInsets.all(16),
+                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                             itemCount: groupedItems.length + (showThinking ? 1 : 0),
                             itemBuilder: (context, index) {
                               if (showThinking && index == 0) {
@@ -1046,18 +1046,30 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                     key: ValueKey('sg_${messages.first.timestamp.millisecondsSinceEpoch}'),
                                     messages: messages,
                                   ),
+                                // RepaintBoundary isolates Liquid Glass tiles
+                                // so the iOS Metal shader can't sample
+                                // adjacent tiles' backdrop pixels mid-scroll.
                                 ThreadGroup(:final id, :final messages) =>
-                                  ThreadTile(
-                                    key: ValueKey('t_$id'),
-                                    threadId: id,
-                                    messages: messages,
-                                    messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
+                                  RepaintBoundary(
+                                    child: ThreadTile(
+                                      key: ValueKey('t_$id'),
+                                      threadId: id,
+                                      messages: messages,
+                                      messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
+                                    ),
                                   ),
                                 MessagePack(:final packId, messages: _) =>
-                                  PackTile(
-                                    key: ValueKey('pack_$packId'),
-                                    pack: item,
-                                    messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
+                                  RepaintBoundary(
+                                    child: PackTile(
+                                      key: ValueKey('pack_$packId'),
+                                      pack: item,
+                                      messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
+                                      previewMessageBuilder: (msg) => _ChatBubble(
+                                        message: msg,
+                                        roundedBottom: true,
+                                        compact: true,
+                                      ),
+                                    ),
                                   ),
                               };
                             },
@@ -1503,10 +1515,15 @@ class _ChatBubble extends ConsumerWidget {
   final bool tightBottom;
   final bool roundedBottom;
 
+  /// Preview mode for collapsed PackTile: clamp text to 3 lines with ellipsis,
+  /// drop choice buttons. Tap target stays the same (parent handles expand).
+  final bool compact;
+
   const _ChatBubble({
     required this.message,
     this.tightBottom = false,
     this.roundedBottom = false,
+    this.compact = false,
   });
 
   @override
@@ -1518,8 +1535,9 @@ class _ChatBubble extends ConsumerWidget {
       return BoardAddedBubble(title: message.text);
     }
 
-    final choices =
-        (!isUser && !message.isStreaming) ? _extractChoices(message.text) : null;
+    final choices = (!isUser && !message.isStreaming && !compact)
+        ? _extractChoices(message.text)
+        : null;
 
     // When `roundedBottom` is true, this bubble sits inside a LiquidGlass shell
     // (ThreadTile / PackTile), so any opaque background or border here would
@@ -1573,15 +1591,27 @@ class _ChatBubble extends ConsumerWidget {
               ),
             ),
           if (message.text.isNotEmpty)
-            SelectableText(
-              message.text,
-              style: catTextStyle ??
-                  TextStyle(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    fontSize: 13,
-                    height: 1.5,
+            compact
+                ? Text(
+                    message.text,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: catTextStyle ??
+                        TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 13,
+                          height: 1.5,
+                        ),
+                  )
+                : SelectableText(
+                    message.text,
+                    style: catTextStyle ??
+                        TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 13,
+                          height: 1.5,
+                        ),
                   ),
-            ),
           if (message.isStreaming)
             Padding(
               padding: const EdgeInsets.only(top: 4),
