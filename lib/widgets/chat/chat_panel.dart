@@ -1035,15 +1035,13 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                               final msgIndex = showThinking ? index - 1 : index;
                               final gi = groupedItems.length - 1 - msgIndex;
                               final item = groupedItems[gi];
-                              final aboveItem = gi - 1 >= 0 ? groupedItems[gi - 1] : null;
                               final belowItem = gi + 1 < groupedItems.length ? groupedItems[gi + 1] : null;
                               final sender = itemSender(item);
-                              final hideAvatar = sender != null && aboveItem != null && itemSender(aboveItem) == sender;
                               final tightBottom = sender != null && belowItem != null && itemSender(belowItem) == sender;
 
                               return switch (item) {
                                 SingleMessage(:final message) =>
-                                  _ChatBubble(message: message, hideAvatar: hideAvatar, tightBottom: tightBottom),
+                                  _ChatBubble(message: message, tightBottom: tightBottom),
                                 StatusGroup(:final messages) =>
                                   StatusGroupWidget(
                                     key: ValueKey('sg_${messages.first.timestamp.millisecondsSinceEpoch}'),
@@ -1054,13 +1052,13 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                     key: ValueKey('t_$id'),
                                     threadId: id,
                                     messages: messages,
-                                    messageBuilder: (msg) => _ChatBubble(message: msg),
+                                    messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
                                   ),
                                 MessagePack(:final packId, messages: _) =>
                                   PackTile(
                                     key: ValueKey('pack_$packId'),
                                     pack: item,
-                                    messageBuilder: (msg) => _ChatBubble(message: msg),
+                                    messageBuilder: (msg) => _ChatBubble(message: msg, roundedBottom: true),
                                   ),
                               };
                             },
@@ -1503,13 +1501,13 @@ class _InputIconButton extends StatelessWidget {
 
 class _ChatBubble extends ConsumerWidget {
   final ChatMessage message;
-  final bool hideAvatar;
   final bool tightBottom;
+  final bool roundedBottom;
 
   const _ChatBubble({
     required this.message,
-    this.hideAvatar = false,
     this.tightBottom = false,
+    this.roundedBottom = false,
   });
 
   @override
@@ -1524,8 +1522,82 @@ class _ChatBubble extends ConsumerWidget {
     final choices =
         (!isUser && !message.isStreaming) ? _extractChoices(message.text) : null;
 
-    final catDecoration = !isUser ? categoryBubbleDecoration(message.category) : null;
+    // When `roundedBottom` is true, this bubble sits inside a LiquidGlass shell
+    // (ThreadTile / PackTile), so any opaque background or border here would
+    // hide the glass refraction. Drop bubble decoration entirely in that case.
+    final catDecoration = (!isUser && !roundedBottom)
+        ? categoryBubbleDecoration(message.category)
+        : null;
     final catTextStyle = !isUser ? categoryTextStyle(message.category) : null;
+
+    final BoxDecoration? bubbleDecoration = roundedBottom
+        ? null
+        : catDecoration ??
+            BoxDecoration(
+              color: isUser
+                  ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
+                  : const Color(0xFF1E1F27),
+              borderRadius: BorderRadius.circular(12).copyWith(
+                bottomRight: isUser ? const Radius.circular(4) : null,
+                bottomLeft: !isUser ? const Radius.circular(4) : null,
+              ),
+              border: Border.all(
+                color: isUser
+                    ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
+                    : Colors.white.withValues(alpha: 0.06),
+              ),
+            );
+
+    final Widget bubbleContainer = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: bubbleDecoration,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (message.imageBase64s.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: message.imageBase64s.map((b64) {
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      base64Decode(b64),
+                      width: 180,
+                      height: 130,
+                      fit: BoxFit.cover,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          if (message.text.isNotEmpty)
+            SelectableText(
+              message.text,
+              style: catTextStyle ??
+                  TextStyle(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+            ),
+          if (message.isStreaming)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: _TypingDots(),
+            ),
+        ],
+      ),
+    );
+
+    final Widget bubble = roundedBottom
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: bubbleContainer,
+          )
+        : bubbleContainer;
 
     return Padding(
       padding: EdgeInsets.only(bottom: tightBottom ? 3 : 12),
@@ -1534,86 +1606,11 @@ class _ChatBubble extends ConsumerWidget {
         mainAxisAlignment:
             isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
-          if (!isUser) ...[
-            if (hideAvatar)
-              const SizedBox(width: 36) // same width as avatar + gap
-            else ...[
-              Container(
-                width: 28,
-                height: 28,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
-                  ),
-                ),
-                child: const Icon(Icons.psychology, size: 16, color: Colors.white),
-              ),
-              const SizedBox(width: 8),
-            ],
-          ],
           Flexible(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  decoration: catDecoration ??
-                      BoxDecoration(
-                        color: isUser
-                            ? const Color(0xFF00C0D1).withValues(alpha: 0.15)
-                            : const Color(0xFF1E1F27),
-                        borderRadius: BorderRadius.circular(12).copyWith(
-                          bottomRight: isUser ? const Radius.circular(4) : null,
-                          bottomLeft: !isUser ? const Radius.circular(4) : null,
-                        ),
-                        border: Border.all(
-                          color: isUser
-                              ? const Color(0xFF00C0D1).withValues(alpha: 0.2)
-                              : Colors.white.withValues(alpha: 0.06),
-                        ),
-                      ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (message.imageBase64s.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Wrap(
-                            spacing: 6,
-                            runSpacing: 6,
-                            children: message.imageBase64s.map((b64) {
-                              return ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.memory(
-                                  base64Decode(b64),
-                                  width: 180,
-                                  height: 130,
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      if (message.text.isNotEmpty)
-                        SelectableText(
-                          message.text,
-                          style: catTextStyle ??
-                              TextStyle(
-                                color: Colors.white.withValues(alpha: 0.9),
-                                fontSize: 13,
-                                height: 1.5,
-                              ),
-                        ),
-                      if (message.isStreaming)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 4),
-                          child: _TypingDots(),
-                        ),
-                    ],
-                  ),
-                ),
+                bubble,
                 // Choice buttons below the bubble
                 if (choices != null) ...[
                   const SizedBox(height: 8),
@@ -1635,7 +1632,6 @@ class _ChatBubble extends ConsumerWidget {
               ],
             ),
           ),
-          if (isUser) const SizedBox(width: 36),
         ],
       ),
     );
@@ -1943,23 +1939,6 @@ class _PixelChatSkeleton extends StatelessWidget {
           isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (!isUser) ...[
-          ClipOval(
-            child: Stack(
-              children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  color: Colors.white.withValues(alpha: _pulse),
-                ),
-                const Positioned.fill(
-                  child: IgnorePointer(child: _PixelGarland(sparkCount: 3)),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-        ],
         ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: Stack(
@@ -1996,7 +1975,6 @@ class _PixelChatSkeleton extends StatelessWidget {
             ],
           ),
         ),
-        if (isUser) const SizedBox(width: 36),
       ],
     );
   }
@@ -2159,18 +2137,6 @@ class _ThinkingBubble extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: LinearGradient(
-                colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
-              ),
-            ),
-            child: const Icon(Icons.psychology, size: 16, color: Colors.white),
-          ),
-          const SizedBox(width: 8),
           Flexible(
             child: Container(
               padding:

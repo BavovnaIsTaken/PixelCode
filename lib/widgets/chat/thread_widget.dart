@@ -1,7 +1,25 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
+import 'package:liquid_glass_renderer/liquid_glass_renderer.dart';
 
 import '../../models/agent_message.dart';
 import 'chat_grouping.dart';
+
+const double _kGlassSigma = 18.0;
+
+const _kThreadGlassSettings = LiquidGlassSettings(
+  thickness: 24,
+  blur: 12,
+  glassColor: Color(0x33FFFFFF),
+  lightIntensity: 1.4,
+  ambientStrength: 0.6,
+  saturation: 1.2,
+  refractiveIndex: 1.35,
+  chromaticAberration: 0.02,
+);
+
+const double _kThreadBlend = 30.0;
 
 // ─── ThreadSkeleton ──────────────────────────────────────────────────────────
 
@@ -16,16 +34,18 @@ class ThreadSkeleton extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(6),
-        child: SizedBox(
-          height: 48,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(width: 3, color: Colors.white.withValues(alpha: 0.12)),
-              Expanded(
-                child: Container(
-                  color: Colors.white.withValues(alpha: 0.02),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: _kGlassSigma, sigmaY: _kGlassSigma),
+          child: SizedBox(
+            height: 48,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(width: 3, color: Colors.white.withValues(alpha: 0.12)),
+                Expanded(
+                  child: Container(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Row(
                     children: [
                       Container(
@@ -51,6 +71,7 @@ class ThreadSkeleton extends StatelessWidget {
               ),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -163,13 +184,55 @@ class ThreadTile extends StatefulWidget {
   State<ThreadTile> createState() => _ThreadTileState();
 }
 
-class _ThreadTileState extends State<ThreadTile> {
-  late bool _collapsed;
+class _ThreadTileState extends State<ThreadTile> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _t;
+  final _tileKey = GlobalKey();
+
+  bool get _collapsed =>
+      _ctrl.status == AnimationStatus.dismissed ||
+      _ctrl.status == AnimationStatus.reverse;
 
   @override
   void initState() {
     super.initState();
-    _collapsed = !widget.messages.any((m) => m.category == MessageCategory.awaitingReply);
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    );
+    _t = CurvedAnimation(
+      parent: _ctrl,
+      curve: Curves.easeOutCubic,
+      reverseCurve: Curves.easeInCubic,
+    );
+    final hasAwaiting =
+        widget.messages.any((m) => m.category == MessageCategory.awaitingReply);
+    if (hasAwaiting) _ctrl.value = 1.0;
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _expand() {
+    _ctrl.forward();
+  }
+
+  void _collapseAndAnchor() {
+    _ctrl.reverse();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _tileKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          alignment: 0.0,
+        );
+      }
+    });
   }
 
   Color get _accent {
@@ -211,153 +274,213 @@ class _ThreadTileState extends State<ThreadTile> {
   @override
   Widget build(BuildContext context) {
     final accent = _accent;
+    final messages = widget.messages;
+    final peekCount = (messages.length - 1).clamp(0, 3);
+
     return Padding(
+      key: _tileKey,
       padding: const EdgeInsets.only(bottom: 8),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        // Non-uniform border is valid here because borderRadius lives on
-        // ClipRRect, not on the BoxDecoration below.
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.02),
-            border: Border(
-              left: BorderSide(color: accent, width: 3),
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-              right: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 48px header
-              GestureDetector(
-                onTap: () => setState(() => _collapsed = !_collapsed),
-                behavior: HitTestBehavior.opaque,
-                child: SizedBox(
-                  height: 48,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.account_tree_outlined,
-                          size: 12,
-                          color: accent.withValues(alpha: 0.7),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            _title,
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.75),
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ..._typeDots.map(
-                          (c) => Container(
-                            width: 6,
-                            height: 6,
-                            margin: const EdgeInsets.only(left: 3),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: c,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.06),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            _collapsed
-                                ? '${widget.messages.length} ↓'
-                                : '▲',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.45),
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              // Expandable content
-              AnimatedSize(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                child: _collapsed
-                    ? const SizedBox.shrink()
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Divider(
-                            height: 1,
-                            thickness: 1,
-                            color: Colors.white.withValues(alpha: 0.05),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                            child: Column(
-                              children: widget.messages
-                                  .map(widget.messageBuilder)
-                                  .toList(),
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: () => setState(() => _collapsed = true),
-                            behavior: HitTestBehavior.opaque,
-                            child: Container(
-                              height: 28,
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.02),
-                                border: Border(
-                                  top: BorderSide(
-                                    color: Colors.white.withValues(alpha: 0.04),
+      child: LiquidGlassLayer(
+        settings: _kThreadGlassSettings,
+        child: AnimatedBuilder(
+          animation: _t,
+          builder: (context, _) {
+            final t = _t.value;
+            // Peek strips visible only at start of expansion; fade out as t→0.4.
+            final peekOpacity = (1.0 - (t / 0.4)).clamp(0.0, 1.0);
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // ─── Peek strips below header (Stack-positioned, blend-grouped) ───
+                if (peekCount > 0 && peekOpacity > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Opacity(
+                        opacity: peekOpacity,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: List.generate(peekCount, (pi) {
+                            final idx = pi + 1;
+                            return Positioned(
+                              top: 48.0 - 6.0 + (idx - 1) * 6.0,
+                              left: idx * 4.0,
+                              right: idx * 4.0,
+                              height: 14,
+                              child: LiquidGlassBlendGroup(
+                                child: LiquidGlass.grouped(
+                                  shape: const LiquidRoundedSuperellipse(
+                                    borderRadius: 8,
                                   ),
+                                  child: const SizedBox.expand(),
                                 ),
                               ),
+                            );
+                          }).reversed.toList(),
+                        ),
+                      ),
+                    ),
+                  ),
+                // ─── Main blend group: header + expanding message column ───
+                LiquidGlassBlendGroup(
+                  blend: _kThreadBlend,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header card (always visible).
+                      LiquidGlass.grouped(
+                        shape: const LiquidRoundedSuperellipse(
+                          borderRadius: 8,
+                        ),
+                        child: GestureDetector(
+                          onTap: _collapsed ? _expand : _collapseAndAnchor,
+                          behavior: HitTestBehavior.opaque,
+                          child: SizedBox(
+                            height: 48,
+                            child: Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 12),
                               child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(
-                                    Icons.expand_less,
-                                    size: 13,
-                                    color: Colors.white.withValues(alpha: 0.28),
+                                  Container(
+                                    width: 3,
+                                    height: 24,
+                                    decoration: BoxDecoration(
+                                      color: accent,
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
                                   ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'Згорнути',
-                                    style: TextStyle(
-                                      color: Colors.white.withValues(alpha: 0.28),
-                                      fontSize: 10,
+                                  const SizedBox(width: 8),
+                                  Icon(
+                                    Icons.account_tree_outlined,
+                                    size: 12,
+                                    color: accent.withValues(alpha: 0.7),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      _title,
+                                      style: TextStyle(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.85),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ..._typeDots.map(
+                                    (c) => Container(
+                                      width: 6,
+                                      height: 6,
+                                      margin: const EdgeInsets.only(left: 3),
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: c,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 6,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      _collapsed
+                                          ? '${messages.length} ↓'
+                                          : '▲',
+                                      style: TextStyle(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.55),
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
                             ),
                           ),
-                        ],
+                        ),
                       ),
-              ),
-            ],
-          ),
+                      // Expanding message column. Each message is its own glass
+                      // shape inside the same blend group — when collapsed they
+                      // collapse into the header (metaball merge); as height
+                      // grows they "drip" out one by one.
+                      ClipRect(
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          heightFactor: t,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (var i = 0; i < messages.length; i++) ...[
+                                  if (i > 0) const SizedBox(height: 4),
+                                  LiquidGlass.grouped(
+                                    shape: const LiquidRoundedSuperellipse(
+                                      borderRadius: 8,
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 2,
+                                      ),
+                                      child: widget
+                                          .messageBuilder(messages[i]),
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 4),
+                                GestureDetector(
+                                  onTap: _collapseAndAnchor,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: SizedBox(
+                                    height: 24,
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.expand_less,
+                                          size: 13,
+                                          color: Colors.white
+                                              .withValues(alpha: 0.40),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Згорнути',
+                                          style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.40),
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -388,18 +511,21 @@ class PackTile extends StatefulWidget {
 }
 
 class _PackTileState extends State<PackTile> with SingleTickerProviderStateMixin {
-  bool _expanded = false;
   late final AnimationController _ctrl;
-  late final Animation<double> _sizeFactor;
+  late final Animation<double> _t;
+
+  bool get _collapsed =>
+      _ctrl.status == AnimationStatus.dismissed ||
+      _ctrl.status == AnimationStatus.reverse;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 360),
     );
-    _sizeFactor = CurvedAnimation(
+    _t = CurvedAnimation(
       parent: _ctrl,
       curve: Curves.easeOutCubic,
       reverseCurve: Curves.easeInCubic,
@@ -418,7 +544,6 @@ class _PackTileState extends State<PackTile> with SingleTickerProviderStateMixin
   }
 
   void _expand() {
-    setState(() => _expanded = true);
     _ctrl.forward();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -432,9 +557,7 @@ class _PackTileState extends State<PackTile> with SingleTickerProviderStateMixin
   }
 
   void _collapse() {
-    _ctrl.reverse().then((_) {
-      if (mounted) setState(() => _expanded = false);
-    });
+    _ctrl.reverse();
   }
 
   @override
@@ -444,215 +567,187 @@ class _PackTileState extends State<PackTile> with SingleTickerProviderStateMixin
     final peekCount = (messages.length - 1).clamp(0, 3);
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!_expanded)
-            _CollapsedDeck(
-              messages: messages,
-              accent: accent,
-              peekCount: peekCount,
-              messageBuilder: widget.messageBuilder,
-              onTap: _expand,
-            )
-          else
-            _CollapseHandle(accent: accent, count: messages.length, onTap: _collapse),
-          SizeTransition(
-            sizeFactor: _sizeFactor,
-            axisAlignment: -1,
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(color: accent, width: 3),
-                  right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                  bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                ),
-                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(8)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.only(top: 4, bottom: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: messages.map(widget.messageBuilder).toList(),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+      padding: EdgeInsets.only(bottom: 8 + (peekCount * 8.0)),
+      child: LiquidGlassLayer(
+        settings: _kThreadGlassSettings,
+        child: AnimatedBuilder(
+          animation: _t,
+          builder: (context, _) {
+            final t = _t.value;
+            final peekOpacity = (1.0 - (t / 0.4)).clamp(0.0, 1.0);
 
-class _CollapsedDeck extends StatelessWidget {
-  final List<ChatMessage> messages;
-  final Color accent;
-  final int peekCount;
-  final Widget Function(ChatMessage) messageBuilder;
-  final VoidCallback onTap;
-
-  const _CollapsedDeck({
-    required this.messages,
-    required this.accent,
-    required this.peekCount,
-    required this.messageBuilder,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        // Reserve space below the top card for peeking strips.
-        padding: EdgeInsets.only(bottom: peekCount * 8.0),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            // Peek cards (deepest first in Z-order so top card renders on top).
-            ...List.generate(peekCount, (pi) {
-              final idx = pi + 1;
-              return Positioned(
-                bottom: -(idx * 8.0),
-                left: idx * 3.0,
-                right: idx * 3.0,
-                height: 16,
-                child: Opacity(
-                  opacity: (1.0 - idx * 0.25).clamp(0.0, 1.0),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.03),
-                      borderRadius: const BorderRadius.only(
-                        bottomLeft: Radius.circular(8),
-                        bottomRight: Radius.circular(8),
-                      ),
-                      border: Border(
-                        left: BorderSide(
-                          color: accent.withValues(alpha: 0.55),
-                          width: 3,
-                        ),
-                        bottom: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.06),
-                        ),
-                        right: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.06),
+            return Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Peek strips behind top card — solid tinted layers giving the
+                // bubble a "stack of cards" depth. Visible only when collapsed.
+                if (peekCount > 0 && peekOpacity > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Opacity(
+                        opacity: peekOpacity,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: List.generate(peekCount, (pi) {
+                            final idx = pi + 1;
+                            return Positioned(
+                              bottom: -(idx * 8.0),
+                              left: idx * 6.0,
+                              right: idx * 6.0,
+                              height: 20,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: accent
+                                      .withValues(alpha: 0.10 + idx * 0.03),
+                                  borderRadius: BorderRadius.circular(10),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.18),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).reversed.toList(),
                         ),
                       ),
                     ),
                   ),
-                ),
-              );
-            }).reversed,
-            // Top card (newest message).
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.02),
-                  border: Border(
-                    left: BorderSide(color: accent, width: 3),
-                    top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                    right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                    bottom: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (messages.length >= 2)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 5,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: accent.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                '×${messages.length}',
-                                style: TextStyle(
-                                  color: accent,
-                                  fontSize: 10,
-                                  fontFeatures: const [FontFeature.tabularFigures()],
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
+                // Main blend group: top card + expanding column of older messages.
+                LiquidGlassBlendGroup(
+                  blend: _kThreadBlend,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Top card (newest message). Always visible.
+                      LiquidGlass.grouped(
+                        shape: const LiquidRoundedSuperellipse(borderRadius: 12),
+                        child: GestureDetector(
+                          onTap: _collapsed ? _expand : _collapse,
+                          behavior: HitTestBehavior.opaque,
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 0, 4, 0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                widget.messageBuilder(messages.last),
+                                if (messages.length >= 2)
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                        8, 0, 10, 8),
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.end,
+                                      children: [
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: accent
+                                                .withValues(alpha: 0.28),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            '×${messages.length}',
+                                            style: TextStyle(
+                                              color: accent,
+                                              fontSize: 11,
+                                              fontFeatures: const [
+                                                FontFeature.tabularFigures(),
+                                              ],
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Icon(
+                                          _collapsed
+                                              ? Icons.keyboard_arrow_down
+                                              : Icons.keyboard_arrow_up,
+                                          size: 14,
+                                          color: accent
+                                              .withValues(alpha: 0.55),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
                       ),
-                    messageBuilder(messages.last),
-                  ],
+                      // Older messages spill out of the top card as t→1.
+                      ClipRect(
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          heightFactor: t,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (var i = 0; i < messages.length - 1; i++) ...[
+                                  if (i > 0) const SizedBox(height: 4),
+                                  LiquidGlass.grouped(
+                                    shape: const LiquidRoundedSuperellipse(
+                                      borderRadius: 12,
+                                    ),
+                                    child: Padding(
+                                      padding:
+                                          const EdgeInsets.symmetric(horizontal: 4),
+                                      child: widget
+                                          .messageBuilder(messages[i]),
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 4),
+                                GestureDetector(
+                                  onTap: _collapse,
+                                  behavior: HitTestBehavior.opaque,
+                                  child: SizedBox(
+                                    height: 24,
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.expand_less,
+                                          size: 13,
+                                          color: accent
+                                              .withValues(alpha: 0.7),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Згорнути',
+                                          style: TextStyle(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.45),
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CollapseHandle extends StatelessWidget {
-  final Color accent;
-  final int count;
-  final VoidCallback onTap;
-
-  const _CollapseHandle({
-    required this.accent,
-    required this.count,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        height: 32,
-        decoration: BoxDecoration(
-          color: accent.withValues(alpha: 0.06),
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-          border: Border(
-            left: BorderSide(color: accent, width: 3),
-            top: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-            right: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
-          ),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 12),
-            Icon(Icons.expand_less, size: 13, color: accent.withValues(alpha: 0.7)),
-            const SizedBox(width: 6),
-            Text(
-              'Згорнути',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
-                fontSize: 11,
-              ),
-            ),
-            const Spacer(),
-            Text(
-              '$count повідомлень',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.28),
-                fontSize: 10,
-              ),
-            ),
-            const SizedBox(width: 12),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
