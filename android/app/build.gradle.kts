@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.danylooliinyk.pixelcode"
-        minSdk = 24
+        minSdk = 31
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
