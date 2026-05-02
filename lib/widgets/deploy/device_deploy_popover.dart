@@ -63,8 +63,13 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
   }
 
   @override
-  void dispose() {
+  void deactivate() {
     ref.read(androidDeployProvider.notifier).stopWatchingDevices();
+    super.deactivate();
+  }
+
+  @override
+  void dispose() {
     _anim.dispose();
     super.dispose();
   }
@@ -140,6 +145,7 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
                   color: Colors.transparent,
                   child: Container(
                     width: _popoverWidth,
+                    clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: tc.surface,
                       borderRadius: BorderRadius.circular(8),
@@ -243,7 +249,10 @@ class _SideToolbar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tc = context.appColors;
     final shot = ref.watch(screenshotProvider);
-    final busy = shot.phase == ScreenshotPhase.capturing;
+    final androidDeploy = ref.watch(androidDeployProvider);
+    final shotBusy = shot.phase == ScreenshotPhase.capturing;
+    final isAndroid = platform == 'android';
+    final deployBusy = isAndroid && androidDeploy.isBusy;
 
     ref.listen<ScreenshotState>(screenshotProvider, (prev, next) {
       if (next.phase == ScreenshotPhase.ready && next.url != null) {
@@ -253,38 +262,44 @@ class _SideToolbar extends ConsumerWidget {
       }
     });
 
-    return SizedBox(
-      width: 36,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ToolbarButton(
-              icon: busy ? Icons.hourglass_top : Icons.photo_camera_outlined,
-              tooltip: 'Скріншот пристрою',
-              active: busy,
-              onTap: busy
-                  ? null
-                  : () => ref
-                      .read(screenshotProvider.notifier)
-                      .capture(platform: platform),
-            ),
-            if (shot.phase == ScreenshotPhase.error) ...[
-              const SizedBox(height: 6),
-              Tooltip(
-                message: shot.error ?? 'Помилка',
-                child: Icon(Icons.error_outline, size: 14, color: tc.error),
-              ),
-            ],
+    return Container(
+      width: 48,
+      color: tc.surfaceDim,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ToolbarButton(
+            icon: Icons.refresh,
+            tooltip: 'Оновити список пристроїв',
+            onTap: deployBusy || !isAndroid
+                ? null
+                : () => ref
+                    .read(androidDeployProvider.notifier)
+                    .startWatchingDevices(),
+          ),
+          const SizedBox(height: 4),
+          _ToolbarButton(
+            icon: shotBusy ? Icons.hourglass_top : Icons.photo_camera_outlined,
+            tooltip: 'Скріншот пристрою',
+            active: shotBusy,
+            onTap: shotBusy
+                ? null
+                : () => ref
+                    .read(screenshotProvider.notifier)
+                    .capture(platform: platform),
+          ),
+          if (shot.phase == ScreenshotPhase.error) ...[
+            const SizedBox(height: 6),
+            _ErrorHintIcon(message: shot.error ?? 'Помилка'),
           ],
-        ),
+        ],
       ),
     );
   }
 }
 
-class _ToolbarButton extends StatelessWidget {
+class _ToolbarButton extends StatefulWidget {
   const _ToolbarButton({
     required this.icon,
     required this.tooltip,
@@ -298,31 +313,101 @@ class _ToolbarButton extends StatelessWidget {
   final bool active;
 
   @override
+  State<_ToolbarButton> createState() => _ToolbarButtonState();
+}
+
+class _ToolbarButtonState extends State<_ToolbarButton> {
+  bool _hovering = false;
+
+  @override
   Widget build(BuildContext context) {
     final tc = context.appColors;
-    final enabled = onTap != null;
+    final enabled = widget.onTap != null;
+    final hot = _hovering && enabled;
+
+    final Color bg = widget.active
+        ? tc.accent.withValues(alpha: 0.18)
+        : hot
+            ? tc.surface
+            : Colors.transparent;
+    final Color iconColor = widget.active
+        ? tc.accent
+        : enabled
+            ? (hot ? tc.textHigh : tc.textMedium)
+            : tc.textLow.withValues(alpha: 0.4);
+
     return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            color: active
-                ? tc.accent.withValues(alpha: 0.18)
-                : Colors.white.withValues(alpha: enabled ? 0.04 : 0.0),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: active ? tc.accent : Colors.transparent,
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: widget.active ? tc.accent : Colors.transparent,
+              ),
             ),
+            alignment: Alignment.center,
+            child: Icon(widget.icon, size: 20, color: iconColor),
           ),
-          alignment: Alignment.center,
-          child: Icon(
-            icon,
-            size: 14,
-            color: enabled ? tc.textMedium : tc.textLow,
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorHintIcon extends StatefulWidget {
+  const _ErrorHintIcon({required this.message});
+
+  final String message;
+
+  @override
+  State<_ErrorHintIcon> createState() => _ErrorHintIconState();
+}
+
+class _ErrorHintIconState extends State<_ErrorHintIcon> {
+  final GlobalKey<TooltipState> _tooltipKey = GlobalKey<TooltipState>();
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.appColors;
+    final bg = _hovering
+        ? tc.error.withValues(alpha: 0.18)
+        : Colors.transparent;
+
+    return Tooltip(
+      key: _tooltipKey,
+      message: widget.message,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: GestureDetector(
+          onTap: () => _tooltipKey.currentState?.ensureTooltipVisible(),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Icon(
+              Icons.error_outline,
+              size: 14,
+              color: _hovering ? tc.error : tc.error.withValues(alpha: 0.85),
+            ),
           ),
         ),
       ),
