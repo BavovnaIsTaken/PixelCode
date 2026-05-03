@@ -69,7 +69,7 @@ const int kSnackTableRow = 1;
 // overhangs into the last floor row. Inline helpers so the painter, hit-
 // test, and blockedTiles all compute the same tile from current grid dims.
 int foremanColFor(int gridCols) => gridCols - 1;
-int foremanRowFor(int gridRows) => gridRows - 2;
+int foremanRowFor(int gridRows) => gridRows - 1;
 /// Extra downward shift applied to the foreman sprite and its hit-rect
 /// so he stands 1/3 tile lower within his anchor tile.
 const double kForemanVertOffset = kTileSize / 3;

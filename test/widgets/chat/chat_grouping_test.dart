@@ -67,10 +67,13 @@ void main() {
 
     test('preserves order across multiple regular messages', () {
       final items = buildChatItems([_msg('a'), _msg('b'), _msg('c')]);
-      expect(items, hasLength(3));
-      expect((items[0] as SingleMessage).message.text, 'a');
-      expect((items[1] as SingleMessage).message.text, 'b');
-      expect((items[2] as SingleMessage).message.text, 'c');
+      expect(items, hasLength(1));
+      expect(items.first, isA<MessagePack>());
+      final pack = items.first as MessagePack;
+      expect(pack.messages, hasLength(3));
+      expect(pack.messages[0].text, 'a');
+      expect(pack.messages[1].text, 'b');
+      expect(pack.messages[2].text, 'c');
     });
 
     test('single status message (run of 1) becomes SingleMessage, not StatusGroup', () {
@@ -170,8 +173,11 @@ void main() {
         _msg('first', agentId: 'coder#1'),
         _msg('second', agentId: 'coder#1'),
       ]);
-      expect(items, hasLength(2));
-      expect(itemSender(items[0]), equals(itemSender(items[1])));
+      expect(items, hasLength(1));
+      expect(items.first, isA<MessagePack>());
+      final pack = items.first as MessagePack;
+      expect(pack.senderId, equals('assistant:coder#1'));
+      expect(pack.messages, hasLength(2));
     });
 
     test('messages from different agents have distinct sender keys', () {
