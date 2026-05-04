@@ -407,4 +407,151 @@ void main() {
     expect((msg as FacilitatorErrorMessage).error,
         'projectDescription must not be empty');
   });
+
+  // ─── Capitan breakdown flow — additional negative + delegation tests ─────
+
+  test('start — output with zero kanban tasks is a success with no dispatches',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+
+    final emptyOutput = MissionBriefing(
+      id: 'mb-empty',
+      projectPath: '/tmp/proj',
+      objective: 'Trivial',
+      missions: const [],
+      scoreBreakdown: _score,
+      createdAt: DateTime.utc(2026, 4, 26, 10),
+    );
+
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      decodeOutput: (_) => emptyOutput,
+      persistOutput: (_, _) async {},
+    );
+
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'Trivial',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(emptyOutput));
+
+    final result = await future;
+    expect(result, isA<FacilitatorSeedSuccess>());
+    expect((result as FacilitatorSeedSuccess).kanbanTaskCount, 0);
+    expect(kanban.calls, isEmpty);
+
+    await messages.close();
+  });
+
+  test('start — forwards style, description and answers verbatim to sendStart',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+    final sender = _SendRecorder();
+    final style = _makeStyle(id: 'drill_sergeant');
+
+    final service = FacilitatorSessionService(
+      sendStart: sender.send,
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: style,
+      projectDescription: 'A team task tracker',
+      answers: const {'team_size': '4', 'deadline': 'Q3'},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(_seededOutput()));
+    await future;
+
+    expect(sender.sendCount, 1);
+    expect(sender.lastStyle?.id, 'drill_sergeant');
+    expect(sender.lastDescription, 'A team task tracker');
+    expect(sender.lastAnswers, {'team_size': '4', 'deadline': 'Q3'});
+
+    await messages.close();
+  });
+
+  test('start — forwards every kanban field from output (delegation contract)',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+    final output = _seededOutput();
+
+    final service = FacilitatorSessionService(
+      sendStart: ({required style, required projectDescription, required answers}) {},
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      decodeOutput: (_) => output,
+      persistOutput: (_, _) async {},
+    );
+
+    final future = service.start(
+      projectPath: '/tmp/proj',
+      style: _makeStyle(),
+      projectDescription: 'X',
+      answers: const {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    messages.add(_seededMessage(output));
+    await future;
+
+    // Every kanban call must carry all 7 fields the WS protocol expects.
+    for (final call in kanban.calls) {
+      expect(call['title'], isNotNull);
+      expect(call['allowedRoles'], isA<List<String>>());
+      expect(call['taskType'], isNotNull);
+      expect(call['difficulty'], isA<int>());
+      expect(call['priority'], isNotNull);
+      expect(call['color'], isNotNull);
+    }
+  });
+
+  test('start — service can be reused for multiple sequential sessions',
+      () async {
+    final messages = StreamController<ServerMessage>.broadcast();
+    final kanban = _FakeKanban();
+    final sender = _SendRecorder();
+
+    final service = FacilitatorSessionService(
+      sendStart: sender.send,
+      messages: messages.stream,
+      createKanbanTask: kanban.create,
+      decodeOutput: (_) => _seededOutput(),
+      persistOutput: (_, _) async {},
+    );
+
+    Future<FacilitatorSessionResult> runOnce(String description) async {
+      final f = service.start(
+        projectPath: '/tmp/proj',
+        style: _makeStyle(),
+        projectDescription: description,
+        answers: const {},
+      );
+      await Future<void>.delayed(Duration.zero);
+      messages.add(_seededMessage(_seededOutput()));
+      return f;
+    }
+
+    final r1 = await runOnce('first');
+    final r2 = await runOnce('second');
+
+    expect(r1, isA<FacilitatorSeedSuccess>());
+    expect(r2, isA<FacilitatorSeedSuccess>());
+    expect(sender.sendCount, 2);
+    // 2 sessions × 2 missions each.
+    expect(kanban.calls, hasLength(4));
+
+    await messages.close();
+  });
 }
