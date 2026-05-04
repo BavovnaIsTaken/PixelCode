@@ -58,7 +58,8 @@ import {
   parseStartRequest as parseFacilitatorStart,
   handleStartRequest as handleFacilitatorStart,
 } from "./facilitator/ws_handler.js";
-import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
+import type { ClientMessage, ServerMessage, TaskCardData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
+import { handleBoardMessage as handleBoardMessageImpl } from "./board_handler.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
   formatTraitsForPrompt, getAllTraits,
@@ -1999,146 +2000,20 @@ function sendBoardState(ws: WebSocket): void {
 }
 
 function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
-  switch (msg.type) {
-    case "board_get_state":
-      sendBoardState(ws);
-      break;
-
-    case "board_create_task": {
-      const id = `task_${++boardTaskCounter}_${Date.now()}`;
-      const now = new Date().toISOString();
-      const task: TaskCardData = {
-        id,
-        title: msg.title,
-        description: msg.description ?? "",
-        column: "backlog",
-        priority: (msg.priority as TaskPriorityKey) ?? "normal",
-        color: (msg.color as StickyColorKey) ?? "yellow",
-        assignedAgents: [],
-        createdAt: now,
-        updatedAt: now,
-        difficulty: msg.difficulty,
-        allowedRoles: msg.allowedRoles,
-        taskType: msg.taskType,
-        attachments: [],
-      };
-      boardTasks.set(id, task);
-      dbg("info", "board", `Created task: ${task.title} (${id})`);
-      broadcastBoardState();
-      break;
-    }
-
-    case "board_move_task": {
-      const task = boardTasks.get(msg.taskId);
-      if (task) {
-        const oldColumn = task.column;
-        task.column = msg.column as TaskColumnKey;
-        task.updatedAt = new Date().toISOString();
-        dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
-        broadcastBoardState();
-
-        // Auto-enqueue board tasks moved to in_progress for the manager
-        if (task.column === "in_progress") {
-          const assignees = task.assignedAgents.length > 0
-            ? `Assigned agents: ${task.assignedAgents.join(", ")}.`
-            : "No specific agents assigned — decide who should handle this.";
-          taskQueue.enqueue({
-            id: `board_${task.id}`,
-            priority: "normal",
-            type: "board",
-            boardTaskId: task.id,
-            boardTaskTitle: task.title,
-            boardTaskDescription: task.description,
-            targetAgentId: "manager",
-            userMessage: `Board task "${task.title}": ${task.description}. ${assignees} Please dispatch this work.`,
-            enqueuedAt: Date.now(),
-            ws,
-          });
-          dbg("info", "board", `Auto-enqueued board task "${task.title}" for manager dispatch`);
-          sendQueueStatus(ws);
-          processQueue(ws);
-        }
-      }
-      break;
-    }
-
-    case "board_update_task": {
-      const task = boardTasks.get(msg.taskId);
-      if (task) {
-        const updates = msg.updates;
-        if (updates.title !== undefined) task.title = updates.title;
-        if (updates.description !== undefined) task.description = updates.description;
-        if (updates.priority !== undefined) task.priority = updates.priority;
-        if (updates.color !== undefined) task.color = updates.color;
-        if (updates.column !== undefined) task.column = updates.column;
-        task.updatedAt = new Date().toISOString();
-        dbg("info", "board", `Updated task ${msg.taskId}`);
-        broadcastBoardState();
-      }
-      break;
-    }
-
-    case "board_delete_task": {
-      if (boardTasks.delete(msg.taskId)) {
-        dbg("info", "board", `Deleted task ${msg.taskId}`);
-        broadcastBoardState();
-      }
-      break;
-    }
-
-    case "board_assign_agent": {
-      const task = boardTasks.get(msg.taskId);
-      if (task) {
-        if (msg.assign) {
-          if (!task.assignedAgents.includes(msg.agentId)) {
-            task.assignedAgents.push(msg.agentId);
-          }
-        } else {
-          task.assignedAgents = task.assignedAgents.filter(a => a !== msg.agentId);
-        }
-        task.updatedAt = new Date().toISOString();
-        dbg("info", "board", `${msg.assign ? "Assigned" : "Unassigned"} ${msg.agentId} on task ${msg.taskId}`);
-        broadcastBoardState();
-      }
-      break;
-    }
-
-    case "board_add_attachment": {
-      const task = boardTasks.get(msg.taskId);
-      if (!task) break;
-      const MAX = 5 * 1024 * 1024; // mirror client cap
-      if (msg.sizeBytes > MAX) {
-        dbg("warn", "board", `Rejected attachment ${msg.name} on ${msg.taskId}: ${msg.sizeBytes} > ${MAX}`);
-        break;
-      }
-      const attachment: TaskAttachmentData = {
-        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        name: msg.name,
-        mimeType: msg.mimeType,
-        sizeBytes: msg.sizeBytes,
-        dataBase64: msg.dataBase64,
-        uploadedAt: new Date().toISOString(),
-      };
-      task.attachments = [...(task.attachments ?? []), attachment];
-      task.updatedAt = attachment.uploadedAt;
-      dbg("info", "board", `Added attachment "${msg.name}" (${msg.sizeBytes}B) to ${msg.taskId}`);
-      broadcastBoardState();
-      break;
-    }
-
-    case "board_remove_attachment": {
-      const task = boardTasks.get(msg.taskId);
-      if (!task || !task.attachments) break;
-      const before = task.attachments.length;
-      task.attachments = task.attachments.filter(a => a.id !== msg.attachmentId);
-      if (task.attachments.length !== before) {
-        task.updatedAt = new Date().toISOString();
-        dbg("info", "board", `Removed attachment ${msg.attachmentId} from ${msg.taskId}`);
-        broadcastBoardState();
-      }
-      break;
-    }
-  }
+  handleBoardMessageImpl(
+    {
+      boardTasks,
+      nextTaskId: () => `task_${++boardTaskCounter}_${Date.now()}`,
+      send,
+      broadcastBoardState,
+      taskQueue,
+      sendQueueStatus,
+      processQueue,
+      dbg,
+    },
+    ws,
+    msg,
+  );
 }
 
 // ─── Session summary generation ─────────────────────────────────────────────
