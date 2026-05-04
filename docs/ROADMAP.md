@@ -50,6 +50,7 @@
 | Меблі (столи, монітори, стільці, рослини) | `[DONE]` | [assets/furniture/](../assets/furniture/) |
 | Hire/fire агентів за ролями (10 ролей: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer, llm-specialist, game-designer, strategy-keeper) | `[DONE]` | [lib/widgets/](../lib/widgets/), [lib/models/game_economy.dart](../lib/models/game_economy.dart) |
 | Kanban task board з drag-and-drop | `[DONE]` | [lib/widgets/board/task_board_panel.dart](../lib/widgets/board/task_board_panel.dart) |
+| **Board handler refactor + team-collaboration test coverage** | `[DONE]` | 2026-05-02 — винесено `handleBoardMessage` з `server.ts` у [server/src/board_handler.ts](../server/src/board_handler.ts) (pure module з ін'єкцією залежностей); +59 тестів покривають board sync, multi-client broadcast, делегацію через assign_agent, manager auto-enqueue на in_progress, role/level gating boundary cases. Деталі в [TESTING_ROADMAP.md](TESTING_ROADMAP.md#team-collaboration-flows-board-sync--delegation) |
 | Real-time chat і activity feed | `[DONE]` | [lib/widgets/chat/](../lib/widgets/chat/) |
 | Agent-level XP + skillCap progression | `[DONE]` | [lib/models/agent_level.dart](../lib/models/agent_level.dart) |
 | 5-stat skill model (precision/insight/reliability/creativity/speed) | `[DONE]` | [lib/models/agent_level.dart](../lib/models/agent_level.dart) |

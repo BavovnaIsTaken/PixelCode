@@ -764,6 +764,47 @@ flutter test test/models/agent_message_test.dart \
 
 ---
 
+## Team Collaboration Flows (Board Sync + Delegation)
+
+**Target**: Capitain breakdown → board sync → multi-client broadcast → delegation → manager auto-dispatch.
+**Status**: ✅ **COMPLETE — 2026-05-02**
+
+Refactored `handleBoardMessage` from `server/src/server.ts` into a standalone pure module (`server/src/board_handler.ts`) with injected dependencies (`boardTasks` map, `taskQueue`, `broadcast`, `dbg`, `now`). The injection seam unlocked deterministic unit + multi-client integration tests without standing up an HTTP server.
+
+### Coverage
+
+| File | Tests | What's tested |
+|---|---|---|
+| `test/providers/task_board_provider_test.dart` | +15 | TaskBoardNotifier: build() requests state when connected / defers until connect, applies BoardStateMessage from server, snapshot overwrite (multi-client sync), createTask connected/disconnected, moveTask/updateTask/deleteTask delegate to ws, assignAgent forwards assign flag, attachment add/remove |
+| `test/providers/task_board_gating_test.dart` | +5 | Boundary level (==/-1), multiple allowedRoles rejection lists every label, empty allowedRoles rejects |
+| `test/services/facilitator_session_service_test.dart` | +4 | Empty kanban output is success/0, forwards style/answers/description, every kanban field carried, sequential sessions reusable |
+| `server/test/board_handler.test.ts` | 27 | Pure handler: create/move/update/delete/assign/attachments + broadcast invariant, manager auto-enqueue on in_progress (positive: assigned agents listed; negative: unknown id, non-in_progress columns, double-move dedup behaviour), attachment size cap |
+| `server/test/board_multi_client.test.ts` | 8 | Real `wss.clients` semantics with fake sockets: create/move/assign/delete from one client lands on every other; closed socket no longer receives; late joiner sees full state via `board_get_state` not broadcast; rapid sequence preserves order; in_progress enqueues exactly once regardless of client count |
+
+**Total: +59 tests** (15 + 5 + 4 + 27 + 8). All previous board_state/facilitator/provider tests still pass — the refactor preserved behaviour line-for-line.
+
+### Why this matters
+
+The original `handleBoardMessage` was a 142-line `switch` inside a 4000-line `server.ts`, untestable except through end-to-end harness. After extraction:
+
+- **Server-side flows** ("капітан розбиває задачі" → facilitator seeds board, "manager dispatch" → in_progress auto-enqueue, "delegation" → board_assign_agent) are now testable as pure mutations of an in-memory map.
+- **Multi-client sync** is verified against a fake `wss.clients` Set that mirrors production broadcast semantics. The integration test catches regressions like "broadcast skipped for closed sockets" or "broadcast happens twice per mutation."
+- **Negative paths** (unknown taskId, oversized attachment, idempotent assignment, columns that should NOT auto-enqueue) are explicit test cases — silence-on-no-op behaviour is now documented in tests rather than hoped-for in `if (task)` branches.
+
+### Run
+
+```bash
+# Dart side
+flutter test test/providers/task_board_provider_test.dart \
+              test/providers/task_board_gating_test.dart \
+              test/services/facilitator_session_service_test.dart
+
+# Server side
+cd server && npm test
+```
+
+---
+
 ## Summary Table
 
 | Phase | Component | Tests | Status | Duration | Blocker |
