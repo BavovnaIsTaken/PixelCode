@@ -301,9 +301,10 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       // Top-level assistant message — this is the addressed agent talking
       const text = extractText(asst);
       if (text) {
-        chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        const timestamp = new Date().toISOString();
+        chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp, id: asst.uuid });
         chatHistory.save(historyFilePath(PROJECT_CWD));
-        broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId });
+        broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId, timestamp });
         clientSentAssistantMessage.set(ws, true);
       }
 
@@ -448,10 +449,11 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       // Fallback: if the agent finished without sending a visible chat message
       // (e.g. the model ended silently after tool use), surface the SDK result text.
       if (resultText && !clientSentAssistantMessage.get(ws)) {
+        const timestamp = new Date().toISOString();
         const fallbackId = `fallback-${Date.now()}`;
-        chatHistory.add({ role: "assistant", text: resultText, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        chatHistory.add({ role: "assistant", text: resultText, agentId: targetAgentId, timestamp, id: fallbackId });
         chatHistory.save(historyFilePath(PROJECT_CWD));
-        broadcastAll({ type: "assistant_message_done", messageId: fallbackId, text: resultText, agentId: targetAgentId });
+        broadcastAll({ type: "assistant_message_done", messageId: fallbackId, text: resultText, agentId: targetAgentId, timestamp });
         dbg("info", "sdk", `Surfaced SDK result as fallback chat message (${resultText.length} chars)`);
       }
 
@@ -1587,9 +1589,10 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         // Forward text as chat messages from this agent
         const text = extractText(asst);
         if (text && !asst.parent_tool_use_id) {
-          chatHistory.add({ role: "assistant", text, agentId, timestamp: new Date().toISOString() });
+          const timestamp = new Date().toISOString();
+          chatHistory.add({ role: "assistant", text, agentId, timestamp, id: asst.uuid });
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId });
+          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId, timestamp });
           // Mirror result to manager's thread
           broadcastAll(subAgentMirrorMessage(managerAgentId, asst.uuid, text, dispatchId));
         }
@@ -3687,11 +3690,11 @@ wss.on("connection", (ws, request) => {
             ? `${msg.content}\n\n[System note: This task may exceed your current skill level. If you cannot complete it confidently, say so explicitly and describe what skill level would be needed.]`
             : msg.content;
 
-          // Store user message and broadcast snapshot to all other clients.
-          // (Sender already added the message optimistically in the UI.)
-          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), ...(images?.length ? { images } : {}) });
+          // Store user message and broadcast snapshot to all clients (including sender,
+          // so the sender receives the canonical server id to replace its optimistic message).
+          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), id: msg.localId, ...(images?.length ? { images } : {}) });
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          broadcastExcept(ws, chatHistory.snapshot());
+          broadcastAll(chatHistory.snapshot());
 
           // Enqueue instead of blocking — manager stays available for new messages
           taskQueue.enqueue({
