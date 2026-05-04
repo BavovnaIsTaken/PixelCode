@@ -62,6 +62,13 @@ class AgentWsService {
   /// between server connect and FacilitatorAutoOnboarder._maybeRun).
   FacilitatorOutputSyncMessage? lastFacilitatorOutputSync;
 
+  /// Last received init — buffered so late subscribers (notably
+  /// WorkingDirectoryNotifier on mobile cold-start) can read the working
+  /// directory even if their first `ref.read` happens after the InitMessage
+  /// already passed through the broadcast controller. Without this buffer
+  /// the value stays `null` until a reconnect.
+  InitMessage? lastInit;
+
   Stream<ServerMessage> get messages => _messageController.stream;
 
   /// In-app connection log — visible on device for debugging.
@@ -144,6 +151,8 @@ class AgentWsService {
             if (msg is ChatHistoryMessage) lastChatHistory = msg;
             // Buffer facilitator sync so onboarding skips before disk check
             if (msg is FacilitatorOutputSyncMessage) lastFacilitatorOutputSync = msg;
+            // Buffer init so WorkingDirectoryNotifier can seed from it
+            if (msg is InitMessage) lastInit = msg;
             if (!_messageController.isClosed) _messageController.add(msg);
           } catch (e) {
             if (!_messageController.isClosed) {
@@ -234,12 +243,14 @@ class AgentWsService {
     String content, {
     String agentId = 'manager',
     List<String>? images,
+    String? localId,
   }) {
     _send({
       'type': 'send_message',
       'content': content,
       'agentId': agentId,
       if (images != null && images.isNotEmpty) 'images': images,
+      if (localId != null) 'localId': localId,
     });
   }
 
