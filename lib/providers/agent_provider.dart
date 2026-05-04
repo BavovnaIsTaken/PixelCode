@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/agent_message.dart';
 import '../models/agent_trait.dart';
 import '../models/game_economy.dart';
+import '../services/chat_history_merge.dart';
 import '../services/chat_persistence_service.dart';
 import 'game_economy_provider.dart';
 import 'settings_provider.dart';
@@ -28,7 +30,9 @@ class WorkingDirectoryNotifier extends Notifier<String?> {
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() => _sub?.cancel());
-    return null;
+    // Seed from buffered init — covers the race where InitMessage was
+    // dispatched before this notifier subscribed (common on mobile cold-start).
+    return ws.lastInit?.workingDirectory;
   }
 
   void _onMessage(ServerMessage msg) {
@@ -91,6 +95,14 @@ final selectedAgentProvider = StateProvider<String>((ref) {
 
 final bypassPermissionsProvider = StateProvider<bool>((ref) => true);
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/// Generate a random UUID-like string (32 hex chars) for local message ids.
+String _generateId() {
+  final rng = Random.secure();
+  return List.generate(32, (_) => rng.nextInt(16).toRadixString(16)).join();
+}
+
 // ─── Chat sync state ────────────────────────────────────────────────────────
 
 enum ChatSyncState { syncing, ready }
@@ -132,7 +144,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // subscribed (race condition on localhost where response is instant).
     final buffered = ws.lastChatHistory;
     if (buffered != null) {
-      _allMessages = _mergeHistory(_allMessages, buffered.messages);
+      _allMessages = mergeChatHistory(_allMessages, buffered.messages);
       _scheduleSave();
       ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     }
@@ -157,40 +169,6 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     }
   }
 
-  /// Merge server-authoritative history with local per-agent messages.
-  ///
-  /// Preserves any local message that is either still streaming or has a
-  /// timestamp newer than the server's latest for that agent — otherwise a
-  /// `chat_history` snapshot taken before the current stream finalized would
-  /// wipe captain responses visible mid-flight.
-  static Map<String, List<ChatMessage>> _mergeHistory(
-    Map<String, List<ChatMessage>> local,
-    List<ChatMessage> serverMessages,
-  ) {
-    final serverGrouped = <String, List<ChatMessage>>{};
-    for (final m in serverMessages) {
-      (serverGrouped[m.agentId] ??= []).add(m);
-    }
-    final merged = <String, List<ChatMessage>>{};
-    final agentIds = {...local.keys, ...serverGrouped.keys};
-    for (final agentId in agentIds) {
-      final serverList = serverGrouped[agentId] ?? const <ChatMessage>[];
-      final localList = local[agentId] ?? const <ChatMessage>[];
-      if (serverList.isEmpty) {
-        merged[agentId] = List.of(localList);
-        continue;
-      }
-      final serverLatest = serverList
-          .map((m) => m.timestamp)
-          .reduce((a, b) => a.isAfter(b) ? a : b);
-      final tail = localList.where(
-        (m) => m.isStreaming || m.timestamp.isAfter(serverLatest),
-      );
-      merged[agentId] = [...serverList, ...tail];
-    }
-    return merged;
-  }
-
   void _scheduleSave() {
     final prefs = ref.read(sharedPrefsProvider);
     _saveTimer?.cancel();
@@ -208,7 +186,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
 
       case ChatHistoryMessage(:final messages):
-        _allMessages = _mergeHistory(_allMessages, messages);
+        _allMessages = mergeChatHistory(_allMessages, messages);
         state = _allMessages[_selectedAgent] ?? [];
         _scheduleSave();
         ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
@@ -233,21 +211,45 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
         _setAgentMessages(agentId, messages);
 
-      case AssistantDoneMessage(:final text, :final agentId, :final threadId):
+      case AssistantDoneMessage(
+          :final text,
+          :final agentId,
+          :final threadId,
+          :final messageId,
+          :final timestamp,
+        ):
         final messages = [..._agentMessages(agentId)];
+        final serverTimestamp = timestamp != null ? DateTime.parse(timestamp) : null;
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
             messages.last.isStreaming) {
           messages[messages.length - 1] = messages.last.copyWith(
             text: text,
             isStreaming: false,
+            id: messageId,
           );
+          // Stamp with server timestamp if available
+          if (serverTimestamp != null) {
+            final finalMsg = messages[messages.length - 1];
+            messages[messages.length - 1] = ChatMessage(
+              role: finalMsg.role,
+              text: finalMsg.text,
+              agentId: finalMsg.agentId,
+              timestamp: serverTimestamp,
+              imageBase64s: finalMsg.imageBase64s,
+              threadId: finalMsg.threadId,
+              category: finalMsg.category,
+              id: finalMsg.id,
+            );
+          }
         } else {
           messages.add(ChatMessage(
             role: ChatRole.assistant,
             text: text,
             agentId: agentId,
             threadId: threadId,
+            timestamp: serverTimestamp,
+            id: messageId,
           ));
         }
         _setAgentMessages(agentId, messages);
@@ -300,6 +302,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     final agentId = _selectedAgent;
     _activeStreamAgent = agentId;
     final imageBase64s = images.map((b) => base64Encode(b)).toList();
+    final localId = _generateId(); // client-generated id for deduplication
     _setAgentMessages(agentId, [
       ..._agentMessages(agentId),
       ChatMessage(
@@ -307,12 +310,14 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         text: text,
         agentId: agentId,
         imageBase64s: imageBase64s,
+        id: localId,
       ),
     ]);
     ref.read(wsServiceProvider).sendMessage(
           text,
           agentId: agentId,
           images: imageBase64s.isNotEmpty ? imageBase64s : null,
+          localId: localId,
         );
     _scheduleSave();
   }
