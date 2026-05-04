@@ -57,7 +57,6 @@ void main() {
   group('mergeChatHistory — clock-skew on optimistic user write (#1)', () {
     test(
       'macOS local-T > server-T must NOT duplicate the same message',
-      skip: 'divergence source — awaiting id+server-timestamp rework',
       () {
       // macOS optimistically appended the user's "Hello" at its local clock,
       // which happens to be 500ms ahead of the server's wall clock.
@@ -104,7 +103,6 @@ void main() {
       () {
     test(
       'finalised local stream with T_local > T_server must NOT duplicate',
-      skip: 'divergence source — awaiting id+server-timestamp rework',
       () {
       // After AssistantDoneMessage the local message is `isStreaming=false`
       // and carries the local DateTime.now() it was first instantiated with.
@@ -145,7 +143,6 @@ void main() {
 
     test(
       'optimistic-then-snapshot stays stable on a redelivery of the same snapshot',
-      skip: 'divergence source — awaiting id+server-timestamp rework',
       () {
       // First the sender's local optimistic write, then server snapshot,
       // then the same snapshot again (network retransmit). End state must
@@ -170,7 +167,6 @@ void main() {
   group('mergeChatHistory — out-of-order snapshot delivery (#4)', () {
     test(
       'older snapshot arriving after a newer one must not roll back',
-      skip: 'divergence source — awaiting id+server-timestamp rework',
       () {
       final ts1 = DateTime.utc(2026, 5, 3, 12, 0, 0);
       final ts2 = DateTime.utc(2026, 5, 3, 12, 0, 1);
@@ -205,7 +201,6 @@ void main() {
   group('mergeChatHistory — cross-device convergence (#5)', () {
     test(
       'two devices receiving the same wire trace converge to equal state',
-      skip: 'divergence source — awaiting id+server-timestamp rework',
       () {
       // Simulate macOS and iOS both seeing: optimistic user msg (sender
       // side only — receiver gets it via snapshot), assistant streamed
