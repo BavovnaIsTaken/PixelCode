@@ -10,6 +10,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { randomUUID } from "node:crypto";
 import type { ServerMessage } from "./protocol.js";
 
 export interface StoredChatMessage {
@@ -17,6 +18,7 @@ export interface StoredChatMessage {
   text: string;
   agentId: string;
   timestamp: string; // ISO 8601
+  id?: string; // stable identifier for cross-device sync; generated if not provided
   images?: string[]; // base64-encoded image data
 }
 
@@ -38,7 +40,8 @@ export class ChatHistory {
   private readonly _enrichedMetadata: Map<string, EnrichedChatMessage["metadata"]> = new Map();
 
   add(msg: StoredChatMessage): void {
-    this._messages.push(msg);
+    const withId = { ...msg, id: msg.id ?? randomUUID() };
+    this._messages.push(withId);
   }
 
   clear(): void {

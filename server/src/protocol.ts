@@ -20,6 +20,7 @@ export type ClientMessage =
       content: string;
       agentId: string;
       images?: string[];
+      localId?: string; // client-generated UUID, echoed in chat_history snapshot so client can match optimistic→canonical
       taskDifficulty?: number; // 1-5, optional; if set, server checks agent skill level
       forceSend?: boolean; // bypass skill-gate check
     }
@@ -261,6 +262,7 @@ export type ServerMessage =
       text: string;
       agentId: string;
       threadId?: string;
+      timestamp?: string; // server-canonical ISO8601 timestamp
     }
   | {
       type: "chat_history";
@@ -269,6 +271,7 @@ export type ServerMessage =
         text: string;
         agentId: string;
         timestamp: string;
+        id?: string; // stable message identifier — allows client-server deduplication across devices
         images?: string[];
       }>;
     }

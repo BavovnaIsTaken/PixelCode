@@ -189,13 +189,15 @@ class AssistantDoneMessage implements ServerMessage {
   final String text;
   final String agentId;
   final String? threadId;
-  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager', this.threadId});
+  final String? timestamp; // server-canonical ISO8601 timestamp
+  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager', this.threadId, this.timestamp});
   factory AssistantDoneMessage.fromJson(Map<String, dynamic> json) =>
       AssistantDoneMessage(
         messageId: json['messageId'] as String,
         text: json['text'] as String,
         agentId: json['agentId'] as String? ?? 'manager',
         threadId: json['threadId'] as String?,
+        timestamp: json['timestamp'] as String?,
       );
 }
 
@@ -1172,6 +1174,10 @@ class ChatMessage {
   /// Optional semantic category used to select visual treatment.
   final MessageCategory? category;
 
+  /// Stable message identifier — server-generated for canonical messages,
+  /// or client-generated locally. Used for deduplication across devices.
+  final String? id;
+
   ChatMessage({
     required this.role,
     required this.text,
@@ -1181,6 +1187,7 @@ class ChatMessage {
     this.imageBase64s = const [],
     this.threadId,
     this.category,
+    this.id,
   }) : timestamp = timestamp ?? DateTime.now();
 
   ChatMessage copyWith({
@@ -1188,6 +1195,7 @@ class ChatMessage {
     bool? isStreaming,
     String? threadId,
     MessageCategory? category,
+    String? id,
   }) =>
       ChatMessage(
         role: role,
@@ -1198,6 +1206,7 @@ class ChatMessage {
         imageBase64s: imageBase64s,
         threadId: threadId ?? this.threadId,
         category: category ?? this.category,
+        id: id ?? this.id,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1208,6 +1217,7 @@ class ChatMessage {
         if (imageBase64s.isNotEmpty) 'images': imageBase64s,
         if (threadId != null) 'threadId': threadId,
         if (category != null) 'category': category!.name,
+        if (id != null) 'id': id,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -1218,5 +1228,6 @@ class ChatMessage {
         imageBase64s: (json['images'] as List?)?.cast<String>() ?? const [],
         threadId: json['threadId'] as String?,
         category: _parseCategory(json['category'] as String?),
+        id: json['id'] as String?,
       );
 }

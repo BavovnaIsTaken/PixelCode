@@ -385,6 +385,26 @@ void main() {
       });
       expect(msg, isA<InitMessage>());
       expect((msg as InitMessage).sessionId, 'sess-1');
+      expect(msg.workingDirectory, isNull);
+    });
+
+    test('init parses workingDirectory when present', () {
+      final msg = parse({
+        'type': 'init',
+        'sessionId': 'sess-1',
+        'agents': [],
+        'workingDirectory': '/Users/dev/Projects/MyApp',
+      }) as InitMessage;
+      expect(msg.workingDirectory, '/Users/dev/Projects/MyApp');
+    });
+
+    test('init keeps workingDirectory null when field is missing', () {
+      final msg = parse({
+        'type': 'init',
+        'sessionId': 'sess-1',
+        'agents': [],
+      }) as InitMessage;
+      expect(msg.workingDirectory, isNull);
     });
 
     test('assistant_text routes to AssistantTextMessage', () {
