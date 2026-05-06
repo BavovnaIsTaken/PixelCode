@@ -28,8 +28,8 @@ const _paddleH = 11.0;
 const _ballR = 5.5;
 const _baseBallSpeed = 4.2;
 const _bottomPad = 28.0;
-const _puW = 34.0;
-const _puH = 13.0;
+const _puW = 38.0;
+const _puH = 18.0;
 const _puFallSpeed = 1.8;
 const _puChance = 0.20;
 const _laserSpeed = 9.0;
@@ -48,6 +48,104 @@ const _keyBricks = 'arkanoid_bricks';
 enum _Phase { waitingLaunch, running, paused, gameOver, won }
 
 enum _PUType { expand, multiball, sticky, laser, thru, life, slow, blast }
+
+// Powerup palette mirrors skinDefault.clothes so falling tiles, HUD chips
+// and the matching brick row-tints stay consistent across the office reskin.
+const Color _puColorExpand = Color(0xFF059669); // coder green
+const Color _puColorMulti = Color(0xFF7C3AED); // reviewer purple
+const Color _puColorSticky = Color(0xFFCA8A04); // game-designer gold
+const Color _puColorLaser = Color(0xFFDC2626); // security red
+const Color _puColorThru = Color(0xFF2563EB); // ui-ux blue
+const Color _puColorLife = Color(0xFFDB2777); // tester pink
+const Color _puColorSlow = Color(0xFF00949F); // tech-lead teal
+const Color _puColorBlast = Color(0xFFD97706); // manager orange
+
+Color _puColor(_PUType type) => switch (type) {
+      _PUType.expand => _puColorExpand,
+      _PUType.multiball => _puColorMulti,
+      _PUType.sticky => _puColorSticky,
+      _PUType.laser => _puColorLaser,
+      _PUType.thru => _puColorThru,
+      _PUType.life => _puColorLife,
+      _PUType.slow => _puColorSlow,
+      _PUType.blast => _puColorBlast,
+    };
+
+// Pixel-art glyphs for falling powerup capsules. Row-major bitmaps,
+// '#' = filled pixel, '.' = transparent. Centered in the pill body
+// and tinted with the powerup's accent color.
+const Map<_PUType, List<String>> _puGlyphs = {
+  // Two outward-pointing chevrons → paddle widening.
+  _PUType.expand: [
+    '..#......#..',
+    '.##......##.',
+    '###......###',
+    '.##......##.',
+    '..#......#..',
+  ],
+  // Three balls in a row.
+  _PUType.multiball: [
+    '............',
+    '.##..##..##.',
+    '.##..##..##.',
+    '............',
+  ],
+  // U-magnet (open top) → catch/sticky.
+  _PUType.sticky: [
+    '.##....##.',
+    '.##....##.',
+    '.##....##.',
+    '.########.',
+    '..######..',
+  ],
+  // Lightning bolt zigzag.
+  _PUType.laser: [
+    '..##.',
+    '.##..',
+    '##...',
+    '#####',
+    '...##',
+    '..##.',
+    '.##..',
+  ],
+  // Right-pointing arrow with dotted shaft → ball passes through.
+  _PUType.thru: [
+    '.....#......',
+    '....##......',
+    '##.##.##.##.',
+    '....##......',
+    '.....#......',
+  ],
+  // Heart.
+  _PUType.life: [
+    '.##..##.',
+    '########',
+    '########',
+    '.######.',
+    '..####..',
+    '...##...',
+  ],
+  // Hourglass.
+  _PUType.slow: [
+    '#######',
+    '.#####.',
+    '..###..',
+    '...#...',
+    '..###..',
+    '.#####.',
+    '#######',
+  ],
+  // 4-arm explosion star.
+  _PUType.blast: [
+    '...#...',
+    '.#.#.#.',
+    '..###..',
+    '#######',
+    '..###..',
+    '.#.#.#.',
+    '...#...',
+  ],
+};
 
 class _Ball {
   double x, y, dx, dy;
@@ -956,14 +1054,14 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ),
           ),
           const Spacer(),
-          if (_expandTicks > 0) _puChip('EXPAND', const Color(0xFF44CC44)),
-          if (_stickyTicks > 0) _puChip('CATCH', const Color(0xFFFFCC00)),
-          if (_laserTicks > 0) _puChip('LASER', const Color(0xFFFF4444)),
-          if (_thruTicks > 0) _puChip('THRU', const Color(0xFF00CCFF)),
-          if (_slowTicks > 0) _puChip('SLOW', const Color(0xFF4488FF)),
-          if (_blastTicks > 0) _puChip('BLAST', const Color(0xFFFF8800)),
+          if (_expandTicks > 0) _puChip('EXPAND', _puColorExpand),
+          if (_stickyTicks > 0) _puChip('CATCH', _puColorSticky),
+          if (_laserTicks > 0) _puChip('LASER', _puColorLaser),
+          if (_thruTicks > 0) _puChip('THRU', _puColorThru),
+          if (_slowTicks > 0) _puChip('SLOW', _puColorSlow),
+          if (_blastTicks > 0) _puChip('BLAST', _puColorBlast),
           if (_balls.length > 1)
-            _puChip('×${_balls.length}', const Color(0xFFAA44FF)),
+            _puChip('×${_balls.length}', _puColorMulti),
           const SizedBox(width: 4),
           for (var i = 0; i < _lives.clamp(0, 7); i++)
             Padding(
@@ -1465,12 +1563,12 @@ class _DxBallPainter extends CustomPainter {
     for (final b in bullets) {
       canvas.drawRect(
         Rect.fromCenter(center: Offset(b.x, b.y), width: 2.5, height: 9),
-        Paint()..color = const Color(0xFFFF5555),
+        Paint()..color = const Color(0xFF00C0D1),
       );
       canvas.drawRect(
         Rect.fromCenter(center: Offset(b.x, b.y), width: 5, height: 11),
         Paint()
-          ..color = const Color(0xFFFF4444).withValues(alpha: 0.25)
+          ..color = const Color(0xFF00C0D1).withValues(alpha: 0.25)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
       );
     }
@@ -1480,45 +1578,17 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawFallingPowerUps(Canvas canvas) {
     for (final pu in fallingPUs) {
-      final Color color;
-      final String label;
-      switch (pu.type) {
-        case _PUType.expand:
-          color = const Color(0xFF44CC44);
-          label = 'EXPAND';
-        case _PUType.multiball:
-          color = const Color(0xFFAA44FF);
-          label = 'MULTI';
-        case _PUType.sticky:
-          color = const Color(0xFFFFCC00);
-          label = 'CATCH';
-        case _PUType.laser:
-          color = const Color(0xFFFF4444);
-          label = 'LASER';
-        case _PUType.thru:
-          color = const Color(0xFF00CCFF);
-          label = 'THRU';
-        case _PUType.life:
-          color = const Color(0xFFFF88AA);
-          label = '+LIFE';
-        case _PUType.slow:
-          color = const Color(0xFF4488FF);
-          label = 'SLOW';
-        case _PUType.blast:
-          color = const Color(0xFFFF8800);
-          label = 'BLAST';
-      }
+      final color = _puColor(pu.type);
 
-      // Pill / capsule shape
       final rect = Rect.fromCenter(
           center: Offset(pu.x, pu.y), width: _puW, height: _puH);
       final rrect =
           RRect.fromRectAndRadius(rect, Radius.circular(_puH / 2));
 
-      // Dark pill body
+      // Dark pill body — same `#0A0A1A` matches office canvas back panels.
       canvas.drawRRect(rrect, Paint()..color = const Color(0xFF0A0A1A));
 
-      // Coloured border
+      // Type-tinted border
       canvas.drawRRect(
         rrect,
         Paint()
@@ -1527,29 +1597,31 @@ class _DxBallPainter extends CustomPainter {
           ..strokeWidth = 1.5,
       );
 
-      // Inner glow fill
+      // Subtle inner glow tint — replaces the DX-Ball pulse-blur.
       canvas.drawRRect(
         rrect,
-        Paint()
-          ..color = color.withValues(alpha: 0.12)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+        Paint()..color = color.withValues(alpha: 0.10),
       );
 
-      // Label text
-      final tp = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: TextStyle(
-            color: color,
-            fontSize: 7,
-            fontWeight: FontWeight.w800,
-            fontFamily: 'monospace',
-            letterSpacing: 0.5,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(pu.x - tp.width / 2, pu.y - tp.height / 2));
+      // Pixel-art glyph (replaces monospace text label).
+      _paintGlyph(canvas, _puGlyphs[pu.type]!, pu.x, pu.y, color);
+    }
+  }
+
+  void _paintGlyph(
+      Canvas canvas, List<String> glyph, double cx, double cy, Color color) {
+    final paint = Paint()..color = color;
+    final h = glyph.length;
+    final w = glyph[0].length;
+    final ox = cx - w / 2;
+    final oy = cy - h / 2;
+    for (var y = 0; y < h; y++) {
+      final row = glyph[y];
+      for (var x = 0; x < row.length; x++) {
+        if (row[x] == '#') {
+          canvas.drawRect(Rect.fromLTWH(ox + x, oy + y, 1, 1), paint);
+        }
+      }
     }
   }
 
