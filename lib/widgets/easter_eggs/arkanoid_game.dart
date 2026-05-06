@@ -72,78 +72,79 @@ Color _puColor(_PUType type) => switch (type) {
     };
 
 // Pixel-art glyphs for falling powerup capsules. Row-major bitmaps,
-// '#' = filled pixel, '.' = transparent. Centered in the pill body
-// and tinted with the powerup's accent color.
+// '#' = filled pixel, '.' = transparent. Each '#' renders as a 2×2 px
+// block (see _paintGlyph), so a 9×7 grid maps to an 18×14 px glyph —
+// roughly 70-80% of the pill's usable area, readable at 1.8 px/frame fall.
 const Map<_PUType, List<String>> _puGlyphs = {
   // Two outward-pointing chevrons → paddle widening.
   _PUType.expand: [
-    '..#......#..',
-    '.##......##.',
-    '###......###',
-    '.##......##.',
-    '..#......#..',
+    '..#...#..',
+    '.##...##.',
+    '###...###',
+    '.##...##.',
+    '..#...#..',
   ],
-  // Three balls in a row.
+  // Three spheres.
   _PUType.multiball: [
-    '............',
-    '.##..##..##.',
-    '.##..##..##.',
-    '............',
+    '.........',
+    '##.##.##.',
+    '##.##.##.',
+    '.........',
   ],
   // U-magnet (open top) → catch/sticky.
   _PUType.sticky: [
-    '.##....##.',
-    '.##....##.',
-    '.##....##.',
-    '.########.',
-    '..######..',
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '#########',
+    '.#######.',
   ],
   // Lightning bolt zigzag.
   _PUType.laser: [
-    '..##.',
-    '.##..',
-    '##...',
-    '#####',
-    '...##',
-    '..##.',
-    '.##..',
+    '..####...',
+    '.####....',
+    '####.....',
+    '#########',
+    '.....####',
+    '....####.',
+    '...####..',
   ],
   // Right-pointing arrow with dotted shaft → ball passes through.
   _PUType.thru: [
-    '.....#......',
-    '....##......',
-    '##.##.##.##.',
-    '....##......',
-    '.....#......',
+    '....#....',
+    '....##...',
+    '##.###.##',
+    '....##...',
+    '....#....',
   ],
   // Heart.
   _PUType.life: [
-    '.##..##.',
-    '########',
-    '########',
-    '.######.',
-    '..####..',
-    '...##...',
+    '.##..##..',
+    '#########',
+    '#########',
+    '.#######.',
+    '..#####..',
+    '...###...',
   ],
   // Hourglass.
   _PUType.slow: [
-    '#######',
-    '.#####.',
-    '..###..',
-    '...#...',
-    '..###..',
-    '.#####.',
-    '#######',
+    '#########',
+    '.#######.',
+    '..#####..',
+    '...###...',
+    '..#####..',
+    '.#######.',
+    '#########',
   ],
   // 4-arm explosion star.
   _PUType.blast: [
-    '...#...',
-    '.#.#.#.',
-    '..###..',
-    '#######',
-    '..###..',
-    '.#.#.#.',
-    '...#...',
+    '....#....',
+    '....#....',
+    '..#####..',
+    '#########',
+    '..#####..',
+    '....#....',
+    '....#....',
   ],
 };
 
@@ -1609,17 +1610,21 @@ class _DxBallPainter extends CustomPainter {
   }
 
   void _paintGlyph(
-      Canvas canvas, List<String> glyph, double cx, double cy, Color color) {
+      Canvas canvas, List<String> glyph, double cx, double cy, Color color,
+      {double scale = 2.0}) {
     final paint = Paint()..color = color;
     final h = glyph.length;
     final w = glyph[0].length;
-    final ox = cx - w / 2;
-    final oy = cy - h / 2;
+    final ox = cx - (w * scale) / 2;
+    final oy = cy - (h * scale) / 2;
     for (var y = 0; y < h; y++) {
       final row = glyph[y];
       for (var x = 0; x < row.length; x++) {
         if (row[x] == '#') {
-          canvas.drawRect(Rect.fromLTWH(ox + x, oy + y, 1, 1), paint);
+          canvas.drawRect(
+            Rect.fromLTWH(ox + x * scale, oy + y * scale, scale, scale),
+            paint,
+          );
         }
       }
     }
