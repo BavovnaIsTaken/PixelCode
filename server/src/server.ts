@@ -38,7 +38,7 @@ import {
   type HiredAgentInfo,
 } from "./agents.js";
 import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./board_persistence.js";
-import { pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
+import { MAX_AGENT_LOAD, pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
 import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
@@ -1355,28 +1355,43 @@ function createDispatchServer(ws: WebSocket) {
 
   const teamStatusTool = tool(
     "team_status",
-    "Check which agents are currently busy, idle, or queued. Use this before dispatching to balance workload.",
+    `Check which agents are currently busy, idle, or at capacity. Use this before dispatching to balance workload. Each agent has a board card limit of ${MAX_AGENT_LOAD} concurrent in-progress tasks — do NOT dispatch to agents marked AT CAPACITY.`,
     {},
     async () => {
       const running = agentRunner.getStatus();
       const queuedCount = taskQueue.size;
+
+      // Count in-progress board cards per agent.
+      const cardLoad = new Map<string, number>();
+      for (const task of boardTasks.values()) {
+        if (task.column === "in_progress" || task.column === "testing") {
+          for (const aid of task.assignedAgents) {
+            cardLoad.set(aid, (cardLoad.get(aid) ?? 0) + 1);
+          }
+        }
+      }
 
       const lines: string[] = [];
 
       for (const agent of agentInfoForClient(ws)) {
         if (agent.roleType === "manager") continue;
         const runEntry = running.find(r => r.agentId === agent.id);
-        if (runEntry) {
-          const elapsed = Math.round(runEntry.elapsedMs / 1000);
-          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): BUSY — "${runEntry.task.slice(0, 60)}" (${elapsed}s)`);
-        } else {
-          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): idle`);
-        }
+        const load = cardLoad.get(agent.id) ?? 0;
+        const atCap = load >= MAX_AGENT_LOAD;
+        const taskStatus = runEntry
+          ? `BUSY — "${runEntry.task.slice(0, 60)}" (${Math.round(runEntry.elapsedMs / 1000)}s)`
+          : "idle";
+        const loadStatus = atCap
+          ? `board: ${load}/${MAX_AGENT_LOAD} — ⛔ AT CAPACITY`
+          : `board: ${load}/${MAX_AGENT_LOAD}`;
+        lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): ${taskStatus} | ${loadStatus}`);
       }
 
       if (queuedCount > 0) {
         lines.push(`\n${queuedCount} task(s) in queue.`);
       }
+
+      lines.push(`\nRule: never assign to an agent with ${MAX_AGENT_LOAD}/${MAX_AGENT_LOAD} board cards.`);
 
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -1484,14 +1499,23 @@ function createDispatchServer(ws: WebSocket) {
     async (args) => {
       const task = boardTasks.get(args.taskId);
       if (!task) return { content: [{ type: "text" as const, text: `Unknown taskId: ${args.taskId}` }] };
+      let warning = "";
       if (args.assign) {
-        if (!task.assignedAgents.includes(args.agentId)) task.assignedAgents.push(args.agentId);
+        if (!task.assignedAgents.includes(args.agentId)) {
+          const currentLoad = [...boardTasks.values()].filter(
+            t => (t.column === "in_progress" || t.column === "testing") && t.assignedAgents.includes(args.agentId)
+          ).length;
+          if (currentLoad >= MAX_AGENT_LOAD) {
+            warning = ` ⚠️ WARNING: ${args.agentId} already has ${currentLoad}/${MAX_AGENT_LOAD} in-progress cards — they are AT CAPACITY. Assign to a free agent instead.`;
+          }
+          task.assignedAgents.push(args.agentId);
+        }
       } else {
         task.assignedAgents = task.assignedAgents.filter((a) => a !== args.agentId);
       }
       task.updatedAt = new Date().toISOString();
       broadcastBoardState();
-      return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.` }] };
+      return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.${warning}` }] };
     },
   );
 

@@ -652,7 +652,8 @@ ${isManager ? `- As **manager (Captain)**: ALWAYS dispatch work using the mcp__d
   to read current cards before creating duplicates.
 - When dispatching, pass the EXACT instanceId (e.g. "coder#2", not "coder") so the specific teammate gets the task.
 - Dispatched agents work INDEPENDENTLY — you do NOT wait for their results. Continue with other work immediately.
-- Use the mcp__dispatch__team_status tool to check who is busy before dispatching.
+- Use the mcp__dispatch__team_status tool to check who is busy BEFORE every dispatch. The status shows each agent's board card count vs the system limit. NEVER dispatch or assign to an agent marked "AT CAPACITY" — their board cards are full. Pick a free teammate instead. If everyone is at capacity, tell the user and wait.
+- Each agent can handle at most 2 in-progress board cards simultaneously. This is a hard system constraint — exceeding it creates overload and slows the whole team.
 - When agents finish their work, you will receive their results automatically and should briefly report to the user and move the corresponding board card.
 - PRIORITY SYSTEM: Always handle the user's chat messages FIRST, then board tasks. If the user writes something new while agents work — respond to them immediately.
 
