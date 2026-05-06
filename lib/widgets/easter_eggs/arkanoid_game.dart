@@ -152,6 +152,8 @@ class _Ball {
   double x, y, dx, dy;
   bool stuck;
   double stuckOffsetX = 0;
+  // Last 3 positions for fading motion trail (oldest → newest).
+  final List<Offset> trail = [];
   _Ball(this.x, this.y, this.dx, this.dy, {this.stuck = false});
 }
 
@@ -165,6 +167,34 @@ class _Bullet {
   double x, y;
   _Bullet(this.x, this.y);
 }
+
+class _Debris {
+  double x, y, dx, dy;
+  int life;
+  final Color color;
+  _Debris(this.x, this.y, this.dx, this.dy, this.life, this.color);
+}
+
+// Mirrors skinDefault `clothes` palette from character_skins.dart so brick
+// row-tints, powerup tiles and destruction debris all read as the same
+// office class. Module-level so both painter and game logic can use it.
+const _kAgentClothes = <Color>[
+  Color(0xFF00949F), // tech-lead
+  Color(0xFFD97706), // manager
+  Color(0xFF059669), // coder
+  Color(0xFF7C3AED), // reviewer
+  Color(0xFFDB2777), // tester
+  Color(0xFFDC2626), // security
+  Color(0xFF2563EB), // ui-ux
+  Color(0xFFCA8A04), // game-designer
+];
+
+Color _brickAccent(int type, int row) => switch (type) {
+      _bGlass || _bCracked => const Color(0xFFB0C4DE),
+      _bGold => const Color(0xFFFFD700),
+      _bBlast => const Color(0xFFD97706),
+      _ => _kAgentClothes[row % _kAgentClothes.length],
+    };
 
 // ─── Level patterns (13 × 8 = 104 elements each) ─────────────────────────────
 // 0=empty  1=normal  2=glass  4=gold  5=blast  9=steel
@@ -341,6 +371,12 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   var _balls = <_Ball>[];
   final _fallingPUs = <_FallingPU>[];
   final _bullets = <_Bullet>[];
+  final _debris = <_Debris>[];
+  // Paddle rim flash (5-tick) on bounce; sticky catch glow (6-tick) anchored
+  // at the catch x to show the player WHY the ball just stopped.
+  int _paddleFlash = 0;
+  int _stickyFlash = 0;
+  double _stickyFlashX = 0;
   double _paddleX = 0;
   int _level = 1;
   int _score = 0;
@@ -494,6 +530,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     ];
     _fallingPUs.clear();
     _bullets.clear();
+    _debris.clear();
+    _paddleFlash = 0;
+    _stickyFlash = 0;
     _expandTicks = 0;
     _stickyTicks = 0;
     _laserTicks = 0;
@@ -664,6 +703,16 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       for (var i = 0; i < _brickFlash.length; i++) {
         if (_brickFlash[i] > 0) _brickFlash[i]--;
       }
+      if (_paddleFlash > 0) _paddleFlash--;
+      if (_stickyFlash > 0) _stickyFlash--;
+
+      _debris.removeWhere((d) {
+        d.x += d.dx;
+        d.y += d.dy;
+        d.dy += 0.10;
+        d.life--;
+        return d.life <= 0;
+      });
 
       final speed = _effectiveSpeed;
       final pw = _effectivePaddleW;
@@ -718,6 +767,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.x = (_paddleX + pw / 2 + ball.stuckOffsetX)
               .clamp(_ballR, _gameW - _ballR);
           ball.y = paddleTop - _ballR;
+          ball.trail.clear();
           continue;
         }
 
@@ -727,6 +777,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.dx = ball.dx / mag * speed;
           ball.dy = ball.dy / mag * speed;
         }
+
+        ball.trail.add(Offset(ball.x, ball.y));
+        if (ball.trail.length > 3) ball.trail.removeAt(0);
 
         ball.x += ball.dx;
         ball.y += ball.dy;
@@ -762,6 +815,8 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ball.stuckOffsetX = (ball.x - (_paddleX + pw / 2))
                 .clamp(-pw / 2, pw / 2);
             ball.y = paddleTop - _ballR;
+            _stickyFlash = 6;
+            _stickyFlashX = ball.x;
             continue;
           }
           ball.y = paddleTop - _ballR;
@@ -770,6 +825,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.dx = speed * cos(angle);
           ball.dy = speed * sin(angle);
           if (ball.dy > -1.0) ball.dy = -1.0;
+          _paddleFlash = 5;
         }
 
         // Brick collisions
@@ -838,10 +894,27 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
 
     _bricks[idx] = _bEmpty;
     _score += _brickPoints(type);
+    _spawnDebris(idx, type);
     _maybeDropPowerUp(idx);
 
     if (type == _bBlast) {
       _explodeNeighbours(idx);
+    }
+  }
+
+  void _spawnDebris(int idx, int type) {
+    final col = idx % _brickCols;
+    final row = idx ~/ _brickCols;
+    final cx = _brickLeft + col * (_brickW + _brickGap) + _brickW / 2;
+    final cy = _brickTop + row * (_brickH + _brickGap) + _brickH / 2;
+    final color = _brickAccent(type, row);
+    final count = type == _bBlast ? 8 : 4;
+    final spread = type == _bBlast ? 2.4 : 1.7;
+    for (var i = 0; i < count; i++) {
+      final base = (i * 2 * pi / count);
+      final a = base + (_rng.nextDouble() - 0.5) * 0.5;
+      final s = spread * (0.7 + _rng.nextDouble() * 0.5);
+      _debris.add(_Debris(cx, cy, cos(a) * s, sin(a) * s, 7, color));
     }
   }
 
@@ -978,6 +1051,10 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                         balls: _balls,
                         fallingPUs: _fallingPUs,
                         bullets: _bullets,
+                        debris: _debris,
+                        paddleFlash: _paddleFlash,
+                        stickyFlash: _stickyFlash,
+                        stickyFlashX: _stickyFlashX,
                         phase: _phase,
                         isBlast: _isBlast,
                         isThru: _isThru,
@@ -1158,6 +1235,10 @@ class _DxBallPainter extends CustomPainter {
   final List<_Ball> balls;
   final List<_FallingPU> fallingPUs;
   final List<_Bullet> bullets;
+  final List<_Debris> debris;
+  final int paddleFlash;
+  final int stickyFlash;
+  final double stickyFlashX;
   final _Phase phase;
   final bool isBlast, isThru, isLaser, isExpand;
   final int score, highScore;
@@ -1175,6 +1256,10 @@ class _DxBallPainter extends CustomPainter {
     required this.balls,
     required this.fallingPUs,
     required this.bullets,
+    required this.debris,
+    required this.paddleFlash,
+    required this.stickyFlash,
+    required this.stickyFlashX,
     required this.phase,
     required this.isBlast,
     required this.isThru,
@@ -1188,11 +1273,24 @@ class _DxBallPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     _drawBackground(canvas, size);
     _drawBricks(canvas);
+    _drawDebris(canvas);
     _drawFallingPowerUps(canvas);
     _drawBullets(canvas);
     _drawPaddle(canvas, size);
     _drawBalls(canvas);
     _drawOverlay(canvas, size);
+  }
+
+  // ── Debris ───────────────────────────────────────────────────────────────
+
+  void _drawDebris(Canvas canvas) {
+    for (final d in debris) {
+      final alpha = (d.life / 7.0).clamp(0.0, 1.0);
+      canvas.drawRect(
+        Rect.fromLTWH(d.x - 1, d.y - 1, 2, 2),
+        Paint()..color = d.color.withValues(alpha: alpha),
+      );
+    }
   }
 
   // ── Background ───────────────────────────────────────────────────────────
@@ -1278,26 +1376,14 @@ class _DxBallPainter extends CustomPainter {
 
     // Hit-flash overlay — replaces the bevel-flash feedback we lose by
     // dropping the DX-Ball gloss. 6-tick decay → ~100ms at 60fps.
+    // Alpha 0.12/tick → max ~0.72 on impact, readable on dark bricks.
     if (flash > 0) {
       canvas.drawRect(
         rect,
-        Paint()..color = Colors.white.withValues(alpha: 0.05 * flash),
+        Paint()..color = Colors.white.withValues(alpha: 0.12 * flash),
       );
     }
   }
-
-  // skinDefault `clothes` palette mirrored from character_skins.dart so each
-  // brick row reads as one agent class.
-  static const _agentClothes = <Color>[
-    Color(0xFF00949F), // tech-lead
-    Color(0xFFD97706), // manager
-    Color(0xFF059669), // coder
-    Color(0xFF7C3AED), // reviewer
-    Color(0xFFDB2777), // tester
-    Color(0xFFDC2626), // security
-    Color(0xFF2563EB), // ui-ux
-    Color(0xFFCA8A04), // game-designer
-  ];
 
   void _paintDeskBrick(Canvas canvas, Rect r, int row) {
     canvas.drawRect(r, Paint()..color = const Color(0xFF6B4F2A));
@@ -1320,7 +1406,7 @@ class _DxBallPainter extends CustomPainter {
     );
     canvas.drawRect(
       Rect.fromLTWH(mx + 1, my + 1, mw - 2, mh - 2),
-      Paint()..color = _agentClothes[row % _agentClothes.length],
+      Paint()..color = _kAgentClothes[row % _kAgentClothes.length],
     );
   }
 
@@ -1454,6 +1540,33 @@ class _DxBallPainter extends CustomPainter {
         ..strokeWidth = 1.5,
     );
 
+    // Bounce flash — 2-px white rim along paddle top, fades over 5 ticks.
+    if (paddleFlash > 0) {
+      final a = (paddleFlash / 5.0) * 0.55;
+      canvas.drawRect(
+        Rect.fromLTWH(paddleX + _paddleH / 2, py, paddleW - _paddleH, 2),
+        Paint()..color = Colors.white.withValues(alpha: a),
+      );
+    }
+
+    // Sticky-catch accent — gold pillars flanking catch point + paddle glow.
+    if (stickyFlash > 0) {
+      final a = (stickyFlash / 6.0);
+      final gold = _puColorSticky;
+      canvas.drawRect(
+        Rect.fromLTWH(stickyFlashX - 4, py - 1, 1, _paddleH + 2),
+        Paint()..color = gold.withValues(alpha: 0.7 * a),
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(stickyFlashX + 3, py - 1, 1, _paddleH + 2),
+        Paint()..color = gold.withValues(alpha: 0.7 * a),
+      );
+      canvas.drawRect(
+        rect,
+        Paint()..color = gold.withValues(alpha: 0.10 * a),
+      );
+    }
+
     // Laser gun nozzles
     if (isLaser) {
       final nozzleP = Paint()..color = const Color(0xFFFF4444);
@@ -1471,8 +1584,41 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawBalls(Canvas canvas) {
     for (final ball in balls) {
+      _drawTrail(canvas, ball);
       _drawSingleBall(canvas, ball.x, ball.y);
+      if (ball.stuck) _drawCaughtRing(canvas, ball.x, ball.y);
     }
+  }
+
+  void _drawTrail(Canvas canvas, _Ball ball) {
+    if (ball.trail.isEmpty) return;
+    final base = isBlast
+        ? const Color(0xFFFF8800)
+        : isThru
+            ? const Color(0xFF00CCFF)
+            : const Color(0xFFCCDDFF);
+    final n = ball.trail.length;
+    for (var i = 0; i < n; i++) {
+      final p = ball.trail[i];
+      // newest = highest alpha. n=3 → 0.04 / 0.07 / 0.10
+      final alpha = 0.04 + (i / (n - 1).clamp(1, n)) * 0.06;
+      canvas.drawCircle(
+        Offset(p.dx, p.dy),
+        _ballR * 0.55,
+        Paint()..color = base.withValues(alpha: alpha),
+      );
+    }
+  }
+
+  void _drawCaughtRing(Canvas canvas, double x, double y) {
+    canvas.drawCircle(
+      Offset(x, y),
+      _ballR + 1.5,
+      Paint()
+        ..color = _puColorSticky.withValues(alpha: 0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
   }
 
   void _drawSingleBall(Canvas canvas, double x, double y) {
