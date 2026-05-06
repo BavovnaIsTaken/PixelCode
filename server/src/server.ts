@@ -2220,6 +2220,11 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
         commitBoardChange();
+        // Done is the archive — losing a completion in the 250ms debounce
+        // window (e.g. SIGKILL from launcher) destroys progress the player
+        // can't recreate. Skip the debounce on transitions into done so the
+        // file is written before we ack.
+        if (task.column === "done") boardWriter.flush();
         broadcastBoardState();
 
         // Auto-enqueue board tasks moved to in_progress for the manager
@@ -2263,6 +2268,7 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Updated task ${msg.taskId}`);
         commitBoardChange();
+        if (task.column === "done") boardWriter.flush();
         broadcastBoardState();
       }
       break;
