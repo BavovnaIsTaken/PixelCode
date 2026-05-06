@@ -1351,15 +1351,15 @@ class _DxBallPainter extends CustomPainter {
 
     switch (type) {
       case _bNormal:
-        _paintDeskBrick(canvas, rect, row);
+        _paintNormalBrick(canvas, rect, row);
       case _bGlass:
-        _paintWhiteboardBrick(canvas, rect, cracked: false);
+        _paintGlassCrystalBrick(canvas, rect, cracked: false);
       case _bCracked:
-        _paintWhiteboardBrick(canvas, rect, cracked: true);
+        _paintGlassCrystalBrick(canvas, rect, cracked: true);
       case _bGold:
-        _paintTrophyBrick(canvas, rect);
+        _paintGoldCrystalBrick(canvas, rect);
       case _bBlast:
-        _paintServerRackBrick(canvas, rect);
+        _paintPlasmaCrystalBrick(canvas, rect);
       case _bSteel:
         _paintSafeBrick(canvas, rect);
     }
@@ -1385,118 +1385,158 @@ class _DxBallPainter extends CustomPainter {
     }
   }
 
-  void _paintDeskBrick(Canvas canvas, Rect r, int row) {
-    canvas.drawRect(r, Paint()..color = const Color(0xFF6B4F2A));
+  // ── Stone+crystal brick system ───────────────────────────────────────────
+  // Single visual trope: polished stone slab with an embedded gem-cut
+  // crystal. Brick "type" varies the crystal's color/motif; row-tint inside
+  // _bNormal cycles through agent clothes so each row reads as one class.
+
+  void _paintStoneBase(Canvas canvas, Rect r, {bool steel = false}) {
+    final highlight =
+        steel ? const Color(0xFFD0D0DC) : const Color(0xFFC8C8D8);
+    final mid = steel ? const Color(0xFF8A8A9A) : const Color(0xFF7A7A8C);
+    final shadow = steel ? const Color(0xFF555566) : const Color(0xFF4A4A5A);
+    const ao = Color(0xFF1A1A28);
+    const leftEdge = Color(0xFF5A5A6C);
+    const rightEdge = Color(0xFF8E8EA0);
+
+    canvas.drawRect(r, Paint()..color = mid);
     canvas.drawRect(
-      Rect.fromLTWH(r.left, r.top, r.width, 1),
-      Paint()..color = const Color(0xFF8B6A3A),
+      Rect.fromLTWH(r.left, r.top, r.width, 2),
+      Paint()..color = highlight,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.bottom - 2, r.width, 1),
+      Paint()..color = shadow,
     );
     canvas.drawRect(
       Rect.fromLTWH(r.left, r.bottom - 1, r.width, 1),
-      Paint()..color = const Color(0xFF3E2B22),
-    );
-
-    final mw = r.width * 0.45;
-    final mh = r.height * 0.62;
-    final mx = r.left + (r.width - mw) / 2;
-    final my = r.top + (r.height - mh) / 2;
-    canvas.drawRect(
-      Rect.fromLTWH(mx, my, mw, mh),
-      Paint()..color = const Color(0xFF111418),
+      Paint()..color = ao,
     );
     canvas.drawRect(
-      Rect.fromLTWH(mx + 1, my + 1, mw - 2, mh - 2),
-      Paint()..color = _kAgentClothes[row % _kAgentClothes.length],
+      Rect.fromLTWH(r.left, r.top, 1, r.height - 1),
+      Paint()..color = leftEdge,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 1, r.top, 1, r.height - 1),
+      Paint()..color = rightEdge,
     );
   }
 
-  void _paintWhiteboardBrick(Canvas canvas, Rect r, {required bool cracked}) {
-    canvas.drawRect(r, Paint()..color = const Color(0xFF252540));
+  void _paintCrystal(
+      Canvas canvas, Rect r, Color light, Color mid, Color dark) {
+    final cw = (r.width * 0.50).clamp(8.0, r.width - 4);
+    final ch = (r.height * 0.62).clamp(7.0, r.height - 4);
+    final cx = r.center.dx;
+    final cy = r.center.dy;
+    final halfH = ch / 2;
+
+    // Diamond rendered row-by-row: width tapers from 1 px at the top/bottom
+    // tips to cw at the middle. Tone slices into light/mid/dark thirds.
+    for (var dy = -halfH.floor(); dy <= halfH.floor(); dy++) {
+      final t = 1 - dy.abs() / halfH;
+      final w = (cw * t).round().clamp(1, cw.round());
+      final tone = dy < -halfH / 3
+          ? light
+          : (dy > halfH / 3 ? dark : mid);
+      canvas.drawRect(
+        Rect.fromLTWH(cx - w / 2, cy + dy, w.toDouble(), 1),
+        Paint()..color = tone,
+      );
+    }
+
+    // Specular pixel — top-left vertex of the widest slice.
     canvas.drawRect(
-      r.deflate(1),
-      Paint()..color = const Color(0xFF3A3A5C),
+      Rect.fromLTWH(cx - cw / 4, cy - halfH * 0.2, 1, 1),
+      Paint()..color = Colors.white.withValues(alpha: 0.75),
     );
-    // Top sheen — wide horizontal strip distinguishes whiteboard from safe.
-    canvas.drawRect(
-      Rect.fromLTWH(r.left + 1, r.top + 1, r.width - 2, 2),
-      Paint()..color = const Color(0xFFB0C4DE).withValues(alpha: 0.55),
+  }
+
+  void _paintNormalBrick(Canvas canvas, Rect r, int row) {
+    _paintStoneBase(canvas, r);
+    final base = _kAgentClothes[row % _kAgentClothes.length];
+    _paintCrystal(
+      canvas,
+      r,
+      Color.lerp(base, Colors.white, 0.45)!,
+      base,
+      Color.lerp(base, Colors.black, 0.35)!,
+    );
+  }
+
+  void _paintGlassCrystalBrick(Canvas canvas, Rect r,
+      {required bool cracked}) {
+    _paintStoneBase(canvas, r);
+    const ice = Color(0xFFB0C8FF);
+    _paintCrystal(
+      canvas,
+      r,
+      Color.lerp(ice, Colors.white, 0.5)!,
+      ice,
+      Color.lerp(ice, Colors.black, 0.35)!,
     );
     if (cracked) {
       final cp = Paint()
         ..color = const Color(0xFF0A0A18)
         ..strokeWidth = 1
         ..style = PaintingStyle.stroke;
+      final cx = r.center.dx;
+      final cy = r.center.dy;
       canvas.drawLine(
-        Offset(r.left + r.width * 0.32, r.top + r.height * 0.1),
-        Offset(r.left + r.width * 0.55, r.bottom - 1),
+        Offset(cx - r.width * 0.14, cy - r.height * 0.18),
+        Offset(cx + r.width * 0.10, cy + r.height * 0.22),
         cp,
       );
       canvas.drawLine(
-        Offset(r.left + r.width * 0.55, r.top + r.height * 0.2),
-        Offset(r.left + r.width * 0.25, r.top + r.height * 0.72),
+        Offset(cx + r.width * 0.04, cy - r.height * 0.10),
+        Offset(cx - r.width * 0.10, cy + r.height * 0.18),
         cp,
       );
     }
   }
 
-  void _paintTrophyBrick(Canvas canvas, Rect r) {
-    canvas.drawRect(r, Paint()..color = const Color(0xFFCA8A04));
-    canvas.drawRect(
-      Rect.fromLTWH(r.left, r.top, r.width, 2),
-      Paint()..color = const Color(0xFFFFD700),
+  void _paintGoldCrystalBrick(Canvas canvas, Rect r) {
+    _paintStoneBase(canvas, r);
+    _paintCrystal(
+      canvas,
+      r,
+      const Color(0xFFFFF5AA),
+      const Color(0xFFFFD700),
+      const Color(0xFFB8860B),
     );
-    canvas.drawRect(
-      Rect.fromLTWH(r.left, r.bottom - 1, r.width, 1),
-      Paint()..color = const Color(0xFF7A5200),
-    );
-    final cup = Paint()..color = const Color(0xFF7A5200);
-    final cx = r.center.dx;
-    final cy = r.center.dy;
-    canvas.drawRect(Rect.fromLTWH(cx - 3, cy - 2, 6, 1), cup);
-    canvas.drawRect(Rect.fromLTWH(cx - 2, cy - 1, 4, 3), cup);
-    canvas.drawRect(Rect.fromLTWH(cx - 3, cy + 2, 6, 1), cup);
   }
 
-  void _paintServerRackBrick(Canvas canvas, Rect r) {
-    canvas.drawRect(r, Paint()..color = const Color(0xFF142028));
-    final shelf = Paint()..color = const Color(0xFF303038);
-    canvas.drawRect(
-      Rect.fromLTWH(r.left + 2, r.top + r.height * 0.28, r.width * 0.55, 1.5),
-      shelf,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(r.left + 2, r.top + r.height * 0.6, r.width * 0.55, 1.5),
-      shelf,
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.32, 2, 2),
-      Paint()..color = const Color(0xFF00E5FF),
-    );
-    canvas.drawRect(
-      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.62, 2, 2),
-      Paint()..color = const Color(0xFFDC2626),
+  void _paintPlasmaCrystalBrick(Canvas canvas, Rect r) {
+    _paintStoneBase(canvas, r);
+    _paintCrystal(
+      canvas,
+      r,
+      const Color(0xFFAAFAFF),
+      const Color(0xFF00E5FF),
+      const Color(0xFF006B7A),
     );
   }
 
   void _paintSafeBrick(Canvas canvas, Rect r) {
-    canvas.drawRect(r, Paint()..color = const Color(0xFF2A2A3C));
-    canvas.drawRect(r.deflate(1), Paint()..color = const Color(0xFF3C3C52));
+    _paintStoneBase(canvas, r, steel: true);
+    final cx = r.center.dx;
+    final cy = r.center.dy;
     canvas.drawRect(
-      r.deflate(0.5),
-      Paint()
-        ..color = const Color(0xFFB0B0C0)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1,
+      Rect.fromCenter(center: Offset(cx, cy), width: 3, height: 3),
+      Paint()..color = const Color(0xFF888898),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 1.5, cy - 1.5, 3, 1),
+      Paint()..color = const Color(0xFFA8A8B8),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 1.5, cy + 0.5, 3, 1),
+      Paint()..color = const Color(0xFF55556A),
     );
     final rivet = Paint()..color = const Color(0xFFB0B0C0);
-    canvas.drawRect(Rect.fromLTWH(r.left + 1, r.top + 1, 1, 1), rivet);
-    canvas.drawRect(Rect.fromLTWH(r.right - 2, r.top + 1, 1, 1), rivet);
-    canvas.drawRect(Rect.fromLTWH(r.left + 1, r.bottom - 2, 1, 1), rivet);
-    canvas.drawRect(Rect.fromLTWH(r.right - 2, r.bottom - 2, 1, 1), rivet);
-    canvas.drawRect(
-      Rect.fromCenter(center: r.center, width: 4, height: 4),
-      Paint()..color = const Color(0xFF1A1A28),
-    );
+    canvas.drawRect(Rect.fromLTWH(r.left + 2, r.top + 2, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.right - 3, r.top + 2, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.left + 2, r.bottom - 4, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.right - 3, r.bottom - 4, 1, 1), rivet);
   }
 
   // ── Paddle ───────────────────────────────────────────────────────────────
