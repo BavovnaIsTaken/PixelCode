@@ -89,6 +89,16 @@ class TaskProgressNotifier extends Notifier<void> {
       // Skip tasks with no assigned agents — nothing to simulate.
       if (task.assignedAgents.isEmpty) {
         _progress.remove(task.id);
+        // Active columns without an agent are an invalid state: the timer
+        // never fires so the card is permanently stuck. Reset to backlog so
+        // the user (or manager) can re-assign and restart work.
+        if (task.column == TaskColumn.inProgress ||
+            task.column == TaskColumn.testing) {
+          ref.read(taskBoardProvider.notifier).moveTask(
+                taskId: task.id,
+                column: TaskColumn.backlog,
+              );
+        }
         continue;
       }
       // Skip completed tasks.
