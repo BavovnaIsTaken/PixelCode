@@ -27,6 +27,7 @@ import 'foreman_overlay_painter.dart';
 import 'office_game_state.dart';
 import 'office_upgrade_dialog.dart';
 import 'pixel_office_painter.dart';
+import 'janitor_overlay.dart';
 import 'pixel_sprites.dart';
 import 'session_banner.dart';
 
@@ -445,6 +446,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                       ),
                     ),
                   ),
+                  const Positioned.fill(child: JanitorOverlay()),
                   if (_isZoomed)
                     Positioned(
                       right: 8,
