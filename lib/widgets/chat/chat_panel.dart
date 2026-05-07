@@ -18,36 +18,10 @@ import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import '../../services/facilitator_session_service.dart';
 import 'board_added_bubble.dart';
+import 'chat_panel_helpers.dart';
 import 'message_decorations.dart';
 import 'send_button.dart';
 import 'thread_widget.dart';
-
-/// Parses numbered choice options from agent text.
-/// Returns a list of choice labels only when the numbered list is at the very
-/// end of the message (i.e. the agent is offering choices, not listing tasks
-/// in the middle of a sentence).
-List<String>? _extractChoices(String text) {
-  final pattern = RegExp(r'(?:^|\n)\s*(\d+)[.)]\s+(.+)', multiLine: true);
-  final matches = pattern.allMatches(text).toList();
-  if (matches.length < 2) return null;
-  final numbers = matches.map((m) => int.tryParse(m.group(1)!) ?? 0).toList();
-  if (numbers.first != 1) return null;
-  for (int i = 1; i < numbers.length; i++) {
-    if (numbers[i] != numbers[i - 1] + 1) return null;
-  }
-  // Only treat as choices when the numbered list is at the end of the message.
-  // If there is meaningful text after the last item it's an informational list.
-  final lastMatch = matches.last;
-  final afterList = text.substring(lastMatch.end).trim();
-  if (afterList.isNotEmpty) return null;
-  return matches.map((m) => m.group(2)!.trim()).toList();
-}
-
-/// Extract roleType prefix from an instanceId ("coder#1" → "coder").
-String _roleTypeOf(String id) {
-  final hash = id.indexOf('#');
-  return hash > 0 ? id.substring(0, hash) : id;
-}
 
 /// Display nickname for an instance — looked up from [agentsProvider] when
 /// possible (custom-set nicknames win), falling back to the role's default.
@@ -55,84 +29,7 @@ String _agentNickname(WidgetRef ref, String id) {
   final agents = ref.read(agentsProvider);
   final info = agents[id]?.info;
   if (info != null && info.name.isNotEmpty) return info.name;
-  return switch (_roleTypeOf(id)) {
-    'manager' => 'Капітан',
-    'tech-lead' => 'Архітект',
-    'coder' => 'Майстер',
-    'reviewer' => 'Детектив',
-    'tester' => 'Крашер',
-    'security' => 'Страж',
-    'ui-ux-designer' => 'Піксельник',
-    'llm-specialist' => 'Промптер',
-    _ => id,
-  };
-}
-
-// ─── Chat item grouping ───────────────────────────────────────────────────────
-
-sealed class _ChatItem {}
-
-class _SingleMessage extends _ChatItem {
-  final ChatMessage message;
-  _SingleMessage(this.message);
-}
-
-class _StatusGroup extends _ChatItem {
-  final List<ChatMessage> messages;
-  _StatusGroup(this.messages);
-}
-
-class _ThreadGroup extends _ChatItem {
-  final String id;
-  final List<ChatMessage> messages;
-  _ThreadGroup({required this.id, required this.messages});
-}
-
-/// Groups a flat message list into runs for rendering.
-///
-/// - Consecutive [MessageCategory.status] messages without a `threadId` (≥2)
-///   become a [_StatusGroup].
-/// - Messages sharing a `threadId` become a [_ThreadGroup].
-/// - Everything else is a [_SingleMessage].
-List<_ChatItem> _buildChatItems(List<ChatMessage> messages) {
-  final items = <_ChatItem>[];
-  int i = 0;
-  while (i < messages.length) {
-    final msg = messages[i];
-
-    // Thread group: all consecutive messages sharing the same threadId
-    if (msg.threadId != null) {
-      final id = msg.threadId!;
-      final group = <ChatMessage>[];
-      while (i < messages.length && messages[i].threadId == id) {
-        group.add(messages[i]);
-        i++;
-      }
-      items.add(_ThreadGroup(id: id, messages: group));
-      continue;
-    }
-
-    // Status run: consecutive status messages without a threadId
-    if (msg.category == MessageCategory.status) {
-      final run = <ChatMessage>[];
-      while (i < messages.length &&
-          messages[i].category == MessageCategory.status &&
-          messages[i].threadId == null) {
-        run.add(messages[i]);
-        i++;
-      }
-      if (run.length >= 2) {
-        items.add(_StatusGroup(run));
-      } else {
-        items.add(_SingleMessage(run.first));
-      }
-      continue;
-    }
-
-    items.add(_SingleMessage(msg));
-    i++;
-  }
-  return items;
+  return defaultAgentNickname(id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,7 +120,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     if (_directMsgHintDismissed) return false;
     if (ref.watch(settingsProvider).hideDirectMessagingHint) return false;
     final selected = ref.watch(selectedAgentProvider);
-    return _roleTypeOf(selected) != 'manager';
+    return roleTypeOf(selected) != 'manager';
   }
 
   void _onInputChanged() {
@@ -248,11 +145,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
     // With reverse: true, pixels == 0 means bottom (newest messages).
-    final atBottom = pos.pixels <= 40;
-    if (_autoScroll && !atBottom) {
-      setState(() => _autoScroll = false);
-    } else if (!_autoScroll && atBottom) {
-      setState(() => _autoScroll = true);
+    final next = shouldAutoStickToBottom(
+      wasAutoScrolling: _autoScroll,
+      currentPixels: pos.pixels,
+    );
+    if (next != _autoScroll) {
+      setState(() => _autoScroll = next);
     }
   }
 
@@ -449,43 +347,17 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         : messages.sublist(messages.length - limit);
     final workDir = ref.read(workingDirectoryProvider);
     final selectedAgent = ref.read(selectedAgentProvider);
-    final now = DateTime.now();
 
-    String two(int n) => n.toString().padLeft(2, '0');
-    String fmtTime(DateTime t) {
-      final l = t.toLocal();
-      return '${two(l.hour)}:${two(l.minute)}:${two(l.second)}';
-    }
-    String fmtDate(DateTime t) {
-      final l = t.toLocal();
-      return '${l.year}-${two(l.month)}-${two(l.day)} ${two(l.hour)}:${two(l.minute)}';
-    }
+    final markdown = buildChatSnippet(
+      tail: tail,
+      totalMessages: messages.length,
+      workingDir: workDir,
+      selectedAgentId: selectedAgent,
+      selectedAgentNickname: _agentNickname(ref, selectedAgent),
+      nicknameFor: (id) => _agentNickname(ref, id),
+    );
 
-    final buf = StringBuffer()
-      ..writeln('# PixelCode chat snippet — ${fmtDate(now)}')
-      ..writeln()
-      ..writeln('- **Working dir:** `${workDir ?? '(unset)'}`')
-      ..writeln('- **Selected agent:** $selectedAgent (${_agentNickname(ref, selectedAgent)})')
-      ..writeln('- **Messages:** last ${tail.length} of ${messages.length}')
-      ..writeln()
-      ..writeln('---')
-      ..writeln();
-
-    for (final m in tail) {
-      final who = m.role == ChatRole.user
-          ? 'user'
-          : '${m.agentId} (${_agentNickname(ref, m.agentId)})';
-      final streamingTag = m.isStreaming ? ' _[streaming]_' : '';
-      buf
-        ..writeln('**${fmtTime(m.timestamp)} — $who:**$streamingTag')
-        ..writeln(m.text.trim().isEmpty ? '_(empty)_' : m.text.trim());
-      if (m.imageBase64s.isNotEmpty) {
-        buf.writeln('_[+${m.imageBase64s.length} image(s)]_');
-      }
-      buf.writeln();
-    }
-
-    await Clipboard.setData(ClipboardData(text: buf.toString()));
+    await Clipboard.setData(ClipboardData(text: markdown));
     _showSnack('Скопійовано ${tail.length} реплік як markdown.');
   }
 
@@ -683,7 +555,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   }
 
   LinearGradient _getAgentGradient(String agentId) =>
-      switch (_roleTypeOf(agentId)) {
+      switch (roleTypeOf(agentId)) {
         'manager' => const LinearGradient(
             colors: [Color(0xFF00D4E7), Color(0xFF00A5B4)],
           ),
@@ -713,7 +585,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
           ),
       };
 
-  Color _getAgentColor(String agentId) => switch (_roleTypeOf(agentId)) {
+  Color _getAgentColor(String agentId) => switch (roleTypeOf(agentId)) {
         'manager' => const Color(0xFF00C0D1),
         'tech-lead' => const Color(0xFFFF6B6B),
         'coder' => const Color(0xFF4ECDC4),
@@ -725,7 +597,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         _ => const Color(0xFF95A5A6),
       };
 
-  IconData _getAgentIcon(String agentId) => switch (_roleTypeOf(agentId)) {
+  IconData _getAgentIcon(String agentId) => switch (roleTypeOf(agentId)) {
         'manager' => Icons.sentiment_very_satisfied,
         'tech-lead' => Icons.architecture,
         'coder' => Icons.code,
@@ -741,7 +613,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   Widget build(BuildContext context) {
     final selectedAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
-    final groupedItems = _buildChatItems(messages);
+    final groupedItems = buildChatItems(messages);
     final syncState = ref.watch(chatSyncStateProvider);
     final agentStatus = ref.watch(
       agentsProvider.select((m) => m[selectedAgent]?.status ?? AgentStatus.idle),
@@ -930,14 +802,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                               final msgIndex = showThinking ? index - 1 : index;
                               final item = groupedItems[groupedItems.length - 1 - msgIndex];
                               return switch (item) {
-                                _SingleMessage(:final message) =>
+                                SingleMessage(:final message) =>
                                   _ChatBubble(message: message),
-                                _StatusGroup(:final messages) =>
+                                StatusGroup(:final messages) =>
                                   StatusGroupWidget(
                                     key: ValueKey('sg_${messages.first.timestamp.millisecondsSinceEpoch}'),
                                     messages: messages,
                                   ),
-                                _ThreadGroup(:final id, :final messages) =>
+                                ThreadGroup(:final id, :final messages) =>
                                   ThreadTile(
                                     key: ValueKey('t_$id'),
                                     threadId: id,
@@ -1360,7 +1232,7 @@ class _ChatBubble extends ConsumerWidget {
     }
 
     final choices =
-        (!isUser && !message.isStreaming) ? _extractChoices(message.text) : null;
+        (!isUser && !message.isStreaming) ? extractChoices(message.text) : null;
 
     final catDecoration = !isUser ? categoryBubbleDecoration(message.category) : null;
     final catTextStyle = !isUser ? categoryTextStyle(message.category) : null;
