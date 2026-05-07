@@ -25,6 +25,7 @@ import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import 'build_decor_section.dart';
+import 'build_menu_helpers.dart';
 import 'office_game_state.dart';
 import 'room_sprites.dart';
 import 'room_themes.dart';
@@ -750,12 +751,8 @@ class BuildMenu extends ConsumerWidget {
     );
   }
 
-  bool _isRoomAvailable(RoomType type, GameState game) {
-    // Hide luxury rooms in the garage tier; they don't fit anyway and seeing
-    // them locked is more clutter than aspiration at the smallest grid.
-    if (type.isLuxury && game.officeLevel == OfficeLevel.garage) return false;
-    return true;
-  }
+  bool _isRoomAvailable(RoomType type, GameState game) =>
+      isRoomAvailableForTier(type, game.officeLevel);
 }
 
 

@@ -12,6 +12,7 @@ import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import 'office_upgrade_helpers.dart';
 
 const _accent = Color(0xFF00C0D1);
 const _gold = Color(0xFFFFD700);
@@ -29,13 +30,9 @@ Future<void> showOfficeUpgradeDialog(BuildContext context) {
 class _OfficeUpgradeDialog extends ConsumerWidget {
   const _OfficeUpgradeDialog();
 
-  String _formatNumber(int n) {
-    if (n >= 1000) {
-      final k = n / 1000;
-      return k % 1 == 0 ? '${k.toStringAsFixed(0)}K' : '${k.toStringAsFixed(1)}K';
-    }
-    return n.toString();
-  }
+  // Delegates to the pure helper so the formatter is unit-testable from
+  // `test/widgets/canvas/office_upgrade_helpers_test.dart`.
+  String _formatNumber(int n) => formatGrymniShort(n);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
