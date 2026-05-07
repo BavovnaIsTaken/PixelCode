@@ -11,7 +11,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/app_theme.dart';
-import '../../models/game_economy.dart';
 import '../../models/task_board.dart';
 import '../../models/work_log_entry.dart';
 import '../../providers/active_facilitator_style_provider.dart';
@@ -20,6 +19,7 @@ import '../../providers/game_economy_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../providers/task_progress_provider.dart';
 import '../../utils/kanban_labels.dart';
+import 'task_board_helpers.dart';
 
 // ─── Sticky note colors ─────────────────────────────────────────────────────
 
@@ -578,7 +578,7 @@ class _ColumnEmptyState extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(
-                  _columnIcon(column),
+                  columnIcon(column),
                   size: 20,
                   color: columnColor.withValues(alpha: 0.5),
                 ),
@@ -609,12 +609,6 @@ class _ColumnEmptyState extends StatelessWidget {
     );
   }
 
-  static IconData _columnIcon(TaskColumn column) => switch (column) {
-        TaskColumn.backlog => Icons.inbox_outlined,
-        TaskColumn.inProgress => Icons.play_circle_outline,
-        TaskColumn.testing => Icons.bug_report_outlined,
-        TaskColumn.done => Icons.check_circle_outline,
-      };
 }
 
 // ─── Mobile Swipe Card (Dismissible wrapper) ────────────────────────────────
@@ -625,37 +619,14 @@ class _MobileSwipeCard extends ConsumerWidget {
 
   const _MobileSwipeCard({required this.task, required this.column});
 
-  TaskColumn? _nextColumn(TaskColumn c) => switch (c) {
-        TaskColumn.backlog => TaskColumn.inProgress,
-        TaskColumn.inProgress => TaskColumn.testing,
-        TaskColumn.testing => TaskColumn.done,
-        TaskColumn.done => null,
-      };
-
-  TaskColumn? _prevColumn(TaskColumn c) => switch (c) {
-        TaskColumn.backlog => null,
-        TaskColumn.inProgress => TaskColumn.backlog,
-        TaskColumn.testing => TaskColumn.inProgress,
-        TaskColumn.done => TaskColumn.testing,
-      };
-
-  DismissDirection _allowedDirection() {
-    final hasNext = _nextColumn(column) != null;
-    final hasPrev = _prevColumn(column) != null;
-    if (hasNext && hasPrev) return DismissDirection.horizontal;
-    if (hasNext) return DismissDirection.startToEnd;
-    if (hasPrev) return DismissDirection.endToStart;
-    return DismissDirection.none;
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final next = _nextColumn(column);
-    final prev = _prevColumn(column);
+    final next = nextColumn(column);
+    final prev = prevColumn(column);
 
     return Dismissible(
       key: ValueKey(task.id),
-      direction: _allowedDirection(),
+      direction: allowedDismissDirection(column),
       dismissThresholds: const {DismissDirection.horizontal: 0.3},
       confirmDismiss: (direction) async {
         final target = direction == DismissDirection.startToEnd ? next : prev;
@@ -1203,17 +1174,17 @@ class _AttachmentsSectionState extends ConsumerState<_AttachmentsSection> {
       for (final file in files) {
         final bytes = await file.readAsBytes();
         if (!mounted) return;
-        if (bytes.length > maxAttachmentBytes) {
+        if (isAttachmentOverCap(bytes.length)) {
           _showError(
-            '«${file.name}» завеликий (${_formatBytes(bytes.length)}). '
-            'Максимум ${_formatBytes(maxAttachmentBytes)}.',
+            '«${file.name}» завеликий (${formatBytes(bytes.length)}). '
+            'Максимум ${formatBytes(maxAttachmentBytes)}.',
           );
           continue;
         }
         ref.read(taskBoardProvider.notifier).addAttachment(
               taskId: widget.task.id,
               name: file.name,
-              mimeType: file.mimeType ?? _mimeFromName(file.name),
+              mimeType: file.mimeType ?? mimeFromName(file.name),
               sizeBytes: bytes.length,
               dataBase64: base64Encode(bytes),
             );
@@ -1378,7 +1349,7 @@ class _AttachmentTile extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _formatBytes(attachment.sizeBytes),
+                    formatBytes(attachment.sizeBytes),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.4),
                       fontSize: 11,
@@ -1408,27 +1379,6 @@ class _AttachmentTile extends StatelessWidget {
       ),
     );
   }
-}
-
-String _formatBytes(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-}
-
-String _mimeFromName(String name) {
-  final ext = name.split('.').last.toLowerCase();
-  return switch (ext) {
-    'png' => 'image/png',
-    'jpg' || 'jpeg' => 'image/jpeg',
-    'gif' => 'image/gif',
-    'webp' => 'image/webp',
-    'pdf' => 'application/pdf',
-    'txt' || 'md' => 'text/plain',
-    'json' => 'application/json',
-    'zip' => 'application/zip',
-    _ => 'application/octet-stream',
-  };
 }
 
 class _DetailRow extends StatelessWidget {
@@ -1587,11 +1537,6 @@ class _WorkHistoryList extends StatelessWidget {
 
   const _WorkHistoryList({required this.workLog, required this.agents});
 
-  String _fmt(int seconds) {
-    if (seconds < 60) return '$seconds с';
-    return '${seconds ~/ 60}хв ${seconds % 60}с';
-  }
-
   @override
   Widget build(BuildContext context) {
     // Group by agentId, summing total duration.
@@ -1629,7 +1574,7 @@ class _WorkHistoryList extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  _fmt(entry.value),
+                  formatWorkDuration(entry.value),
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.4),
                     fontSize: 11,
@@ -2032,7 +1977,8 @@ class _DesktopColumn extends ConsumerWidget {
     final columnColor = _columnColors[column]!;
 
     return DragTarget<TaskCard>(
-      onWillAcceptWithDetails: (details) => details.data.column != column,
+      onWillAcceptWithDetails: (details) =>
+          canDropOnColumn(details.data, column),
       onAcceptWithDetails: (details) {
         ref
             .read(taskBoardProvider.notifier)
@@ -2401,13 +2347,9 @@ class _DifficultyBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (difficulty) {
-      1 => ('· Trivial', const Color(0xFF78909C)),
-      3 => ('··· Medium', const Color(0xFFFFA726)),
-      4 => ('···· Hard', const Color(0xFFEF5350)),
-      5 => ('····· Expert', const Color(0xFFAB47BC)),
-      _ => ('·· Easy', const Color(0xFF66BB6A)),
-    };
+    final data = difficultyChipData(difficulty);
+    final label = data.label;
+    final color = data.color;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -2443,9 +2385,6 @@ class _RequirementChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final roleLabel = task.allowedRoles.length == 1
-        ? (roleCatalogFor(task.allowedRoles.first)?.role ?? task.allowedRoles.first)
-        : '${task.allowedRoles.length} ролей';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
@@ -2454,7 +2393,7 @@ class _RequirementChip extends StatelessWidget {
         border: Border.all(color: textColor.withValues(alpha: 0.25)),
       ),
       child: Text(
-        '🎯 Lv ${task.requiredLevel}+ · $roleLabel',
+        requirementChipText(task),
         style: TextStyle(
           color: textColor.withValues(alpha: 0.75),
           fontSize: 9,
