@@ -35,6 +35,37 @@ import type { TeamReaction } from "./facilitator/team_reactions.js";
 export type LessonResolver = (agentId: string) => DigestLesson | undefined;
 
 /**
+ * Distill a one-paragraph project memory hint from a successful
+ * facilitator seed. The text is what gets injected into every agent's
+ * system prompt as "Project Memory" so the team can answer follow-up
+ * questions ("what project are we in?") without the user re-typing
+ * the brief.
+ *
+ * Why this lives in the loop module: the `facilitator_start` WS handler
+ * has to (a) save it to `team_memory.txt` for cross-session persistence
+ * and (b) set it on the per-client `clientProjectContext` map for the
+ * current session. Both call sites need the same string. Centralising
+ * it here also lets tests assert the exact memory shape.
+ *
+ * Format intentionally minimal — agents shouldn't lift the brief
+ * verbatim into chat. One sentence + a date is enough for grounding.
+ */
+export function deriveProjectMemoryFromBrief(
+  brief: string,
+  now: Date = new Date(),
+): string {
+  const trimmed = brief.trim().replace(/\s+/g, " ");
+  // Cap so a 5-page brief doesn't blow up every agent prompt.
+  const summary = trimmed.length > 280 ? `${trimmed.slice(0, 277)}…` : trimmed;
+  const dateStr = now.toISOString().slice(0, 10);
+  return [
+    `Current project brief (seeded ${dateStr}):`,
+    summary,
+    "If asked which project you're working on, ground answers in this brief — do not say you don't know.",
+  ].join("\n");
+}
+
+/**
  * Append each reaction as an assistant chat message keyed by role id.
  * Caller is responsible for `chatHistory.save(...)` and broadcasting
  * the snapshot — those depend on environment (file path / ws clients).

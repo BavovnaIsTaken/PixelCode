@@ -66,6 +66,7 @@ import { generateTeamReactions } from "./facilitator/team_reactions.js";
 import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
 import {
   applyReactionsToChat,
+  deriveProjectMemoryFromBrief,
   recordTaskCompletion,
 } from "./conversational_loop.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
@@ -4130,6 +4131,17 @@ wss.on("connection", (ws, request) => {
             "facilitator",
             `Seeded "${parsed.value.style.id}" → ${result.seed.outputFormat} (${result.seed.outputJson.length}B)`,
           );
+          // Distil project memory from the brief so EVERY agent prompt
+          // (now and after reconnect) has grounding. Without this the
+          // chat path runs `clientProjectContext.get(ws) → undefined`
+          // and the agent literally asks "what project are we in?" mid-
+          // conversation. Persist to team_memory.txt so reconnects on
+          // any device pick it up via the on-connect loadTeamMemory.
+          const projectMemory = deriveProjectMemoryFromBrief(
+            parsed.value.projectDescription,
+          );
+          clientProjectContext.set(ws, projectMemory);
+          saveTeamMemory(PROJECT_CWD, projectMemory);
           const facilitatorPayload = {
             styleId: parsed.value.style.id,
             finalScore: result.seed.finalScore,
