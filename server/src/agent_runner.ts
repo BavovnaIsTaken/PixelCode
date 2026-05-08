@@ -51,6 +51,13 @@ export interface DispatchParams {
   projectMemory?: string;
   traitStore: TraitStore;
   bypassPermissions?: boolean;
+  /**
+   * Pre-rendered tech-lead digest block. Only used when the dispatched
+   * sub-agent's role is `tech-lead`; ignored otherwise. Kept on this
+   * struct (not pulled from a global) so agent_runner stays pure and
+   * unit-testable without a digest singleton.
+   */
+  techLeadDigest?: string;
   /** Called for every SDK message from the sub-agent (for real-time UI). */
   onMessage: (msg: SDKMessage, agentId: string, dispatchId: string) => void;
   /** Called when the sub-agent completes (success or error). */
@@ -150,12 +157,18 @@ export class AgentRunner {
     params: DispatchParams,
     abortController: AbortController,
   ): Promise<void> {
-    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions } = params;
+    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions, techLeadDigest } = params;
 
     try {
       // Build the sub-agent's system prompt
       const agentTraits = formatTraitsForPrompt(traitStore, agentId);
-      const systemPrompt = buildOfficePrompt(agentId, projectMemory, agentTraits, gameState);
+      const systemPrompt = buildOfficePrompt(
+        agentId,
+        projectMemory,
+        agentTraits,
+        gameState,
+        techLeadDigest,
+      );
 
       // Determine model from hardware (hardware is tracked per instance now)
       const instance = gameState?.instances[agentId];

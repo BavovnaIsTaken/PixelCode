@@ -556,6 +556,13 @@ export function buildOfficePrompt(
   projectMemory?: string,
   agentTraits?: string,
   gameState?: GameStateData,
+  /**
+   * Recent team-completion digest, rendered as a markdown block. Currently
+   * only injected for the tech-lead role so the architect actually sees what
+   * the team finished while replying. Other roles get the existing prompt
+   * unchanged. Pass `undefined` (or empty) to skip.
+   */
+  techLeadDigest?: string,
 ): string {
   const memorySection = projectMemory
     ? `\n\n## Project Memory
@@ -683,7 +690,11 @@ When dispatching work, use the mcp__dispatch__dispatch tool. The agent works ind
 Use mcp__dispatch__team_status to check team workload before dispatching. Pass the EXACT instanceId.
 Available teammates:
 ${delegationLines || "  (no other hired instances — hire more in the shop to enable delegation)"}
-${skillSection}${memorySection}${traitsSection}`;
+${skillSection}${memorySection}${traitsSection}${
+    isTechLead && techLeadDigest && techLeadDigest.trim().length > 0
+      ? `\n\n${techLeadDigest}\n\nUse this when answering: ground architectural reactions in actual finished work, flag concerning patterns ("three failures in auth this week"), and skip generic reassurance.`
+      : ""
+  }`;
 }
 
 // ─── Hired instance info for the UI ────────────────────────────────────────

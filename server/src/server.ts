@@ -56,11 +56,18 @@ import {
   ClaudeQuestLineGenerator,
   ClaudeMissionBriefingGenerator,
   ClaudeMilestoneTreeGenerator,
+  callClaude,
 } from "./facilitator/llm_generators.js";
 import {
   parseStartRequest as parseFacilitatorStart,
   handleStartRequest as handleFacilitatorStart,
 } from "./facilitator/ws_handler.js";
+import { generateTeamReactions } from "./facilitator/team_reactions.js";
+import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
+import {
+  applyReactionsToChat,
+  recordTaskCompletion,
+} from "./conversational_loop.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
@@ -526,6 +533,12 @@ function saveTeamMemory(projectCwd: string, memories: string): void {
 
 const chatHistory = new ChatHistory();
 chatHistory.load(historyFilePath(PROJECT_CWD));
+
+// Tech-lead digest — append-only log of board completions. Replays from
+// disk on boot so the tech-lead agent has continuous awareness across
+// server restarts. Best-effort: any IO failure is swallowed by the module.
+const techLeadDigest = new TechLeadDigest(digestFile(PROJECT_CWD));
+techLeadDigest.loadFromDisk();
 
 // Personalization layer (Phase 4.5.1) — extends each query's system prompt
 // with the agent's learned-context fragment. Kill-switch via env var.
@@ -1310,6 +1323,7 @@ function createDispatchServer(ws: WebSocket) {
         projectMemory,
         traitStore,
         bypassPermissions,
+        techLeadDigest: techLeadDigest.renderForPrompt(15),
         onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
         onComplete: (result) => handleSubAgentComplete(ws, result),
         onError: (agId, dId, error) => handleSubAgentError(ws, agId, dId, error),
@@ -1827,7 +1841,16 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const projectMemory = clientProjectContext.get(ws);
     const agentTraits = formatTraitsForPrompt(traitStore, targetAgentId);
     const gameState = clientGameState.get(ws);
-    const systemPrompt = buildOfficePrompt(targetAgentId, projectMemory, agentTraits, gameState);
+    // Inject tech-lead digest only for the architect role; buildOfficePrompt
+    // gates on isTechLead internally so it's safe to render unconditionally.
+    const digestBlock = techLeadDigest.renderForPrompt(15);
+    const systemPrompt = buildOfficePrompt(
+      targetAgentId,
+      projectMemory,
+      agentTraits,
+      gameState,
+      digestBlock,
+    );
 
     // Append the personalization fragment. Always safe — falls back to vanilla
     // systemPrompt on any failure, controlled by PIXELCODE_PERSONALIZATION env var.
@@ -2132,6 +2155,20 @@ function commitBoardChange(): void {
   boardWriter.schedule(Array.from(boardTasks.values()));
 }
 
+/**
+ * Push a task into the tech-lead digest when it transitions into "done"
+ * and broadcast the freshened pulse so the Hub strip updates without a
+ * poll. Wraps the pure helper in `conversational_loop.ts` with the
+ * server-only side effects (websocket broadcast).
+ */
+function recordTaskCompletionToDigest(task: TaskCardData): void {
+  recordTaskCompletion(techLeadDigest, task);
+  broadcastAll({
+    type: "tech_lead_pulse",
+    entries: techLeadDigest.recent(20),
+  } as ServerMessage);
+}
+
 export function flushBoard(): void {
   boardWriter.flush();
 }
@@ -2225,6 +2262,9 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
         // can't recreate. Skip the debounce on transitions into done so the
         // file is written before we ack.
         if (task.column === "done") boardWriter.flush();
+        if (task.column === "done" && oldColumn !== "done") {
+          recordTaskCompletionToDigest(task);
+        }
         broadcastBoardState();
 
         // Auto-enqueue board tasks moved to in_progress for the manager
@@ -2260,6 +2300,7 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
           dbg("warn", "board", `Rejected board_update_task: invalid column "${updates.column}"`);
           break;
         }
+        const oldColumn = task.column;
         if (updates.title !== undefined) task.title = updates.title;
         if (updates.description !== undefined) task.description = updates.description;
         if (updates.priority !== undefined) task.priority = updates.priority;
@@ -2269,6 +2310,9 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
         dbg("info", "board", `Updated task ${msg.taskId}`);
         commitBoardChange();
         if (task.column === "done") boardWriter.flush();
+        if (task.column === "done" && oldColumn !== "done") {
+          recordTaskCompletionToDigest(task);
+        }
         broadcastBoardState();
       }
       break;
@@ -4023,11 +4067,41 @@ wss.on("connection", (ws, request) => {
             } as any);
             break;
           }
+          // Kick off the team-reaction scene in parallel with seed generation.
+          // Reactions are decorative — failure is swallowed inside the helper,
+          // so we never await rejection and never block the seed pipeline.
+          const reactionsPromise = generateTeamReactions(
+            {
+              projectDescription: parsed.value.projectDescription,
+              validRoles: Object.keys(roleCatalog),
+              projectPath: PROJECT_CWD,
+            },
+            { caller: callClaude, runOptions: { timeoutMs: 30_000, retries: 0 } },
+          )
+            .then((reactions) => {
+              if (reactions.length === 0) return;
+              applyReactionsToChat(chatHistory, reactions, new Date().toISOString());
+              chatHistory.save(historyFilePath(PROJECT_CWD));
+              broadcastAll(chatHistory.snapshot());
+              dbg(
+                "info",
+                "facilitator",
+                `Team reactions: ${reactions.map((r) => r.role).join(", ")}`,
+              );
+            })
+            .catch(() => {
+              // Defensive: generateTeamReactions never throws, but belt-and-braces.
+            });
+
           const result = await handleFacilitatorStart(
             facilitatorRunner,
             PROJECT_CWD,
             parsed.value,
           );
+          // Make sure reactions land in chat history before we close the handler,
+          // even if the seed itself raced ahead. Non-blocking for the user
+          // because broadcasts already happened above.
+          await reactionsPromise;
           if (!result.ok) {
             sendDebug(ws, "error", "facilitator", `Seed failed (${result.code}): ${result.error}`);
             send(ws, {
@@ -4061,6 +4135,15 @@ wss.on("connection", (ws, request) => {
           if (latestFacilitatorOutput) {
             send(ws, { type: "facilitator_output_sync", ...latestFacilitatorOutput } as any);
           }
+          break;
+        }
+
+        case "get_tech_lead_pulse": {
+          const limit = typeof msg.limit === "number" && msg.limit > 0 ? msg.limit : 20;
+          send(ws, {
+            type: "tech_lead_pulse",
+            entries: techLeadDigest.recent(limit),
+          } as ServerMessage);
           break;
         }
 

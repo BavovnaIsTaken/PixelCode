@@ -172,6 +172,10 @@ export type ClientMessage =
   // Pull request: client asks server for the persisted facilitator output.
   // Server replies with `facilitator_output_sync` if one exists, or nothing.
   | { type: "get_facilitator_output" }
+  // Tech-lead pulse: client asks for the recent task-completion digest so it
+  // can surface team activity in the UI (e.g. on the Hub). Server replies
+  // with `tech_lead_pulse` (always sent, possibly with empty entries).
+  | { type: "get_tech_lead_pulse"; limit?: number }
   // Push: client uploads its locally stored facilitator output so the server
   // can serve it to other devices. Sent when client finds output on disk but
   // the server may not have it yet (e.g. after a server restart or first sync).
@@ -605,6 +609,20 @@ export type ServerMessage =
       type: "session_taken";
       /** Device name of the device that took the session. */
       byDevice: string;
+    }
+  // Tech-lead pulse — recent task-completion digest, sent in reply to
+  // `tech_lead_pulse`. Always sent (entries may be empty) so the client
+  // can transition out of a loading state. Newest entry last.
+  | {
+      type: "tech_lead_pulse";
+      entries: Array<{
+        taskId: string;
+        title: string;
+        agentId: string;
+        role: string;
+        outcome: "done";
+        ts: string;
+      }>;
     };
 
 /** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */
