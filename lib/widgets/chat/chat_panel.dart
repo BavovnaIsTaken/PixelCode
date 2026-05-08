@@ -19,6 +19,7 @@ import '../../providers/agent_traits_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import '../../services/facilitator_session_service.dart';
+import '../team_pulse_strip.dart';
 import 'board_added_bubble.dart';
 import 'chat_grouping.dart';
 import 'message_decorations.dart';
@@ -944,6 +945,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
               ],
             ),
           ),
+          // Team pulse — most recent task completion. Returns SizedBox.shrink
+          // when the digest is empty so first-time users see no clutter.
+          const TeamPulseStrip(),
           // Agent filter chips (visible when 2+ unique agents in history)
           Builder(builder: (context) {
             final agentIds = messages

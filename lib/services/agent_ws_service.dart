@@ -285,6 +285,17 @@ class AgentWsService {
     });
   }
 
+  /// Pull the tech-lead pulse (recent task-completion digest) from the
+  /// server. Server replies with a [TechLeadPulseMessage] regardless of
+  /// whether the digest has any entries — clients use the response to
+  /// transition out of a loading state.
+  void getTechLeadPulse({int? limit}) {
+    _send({
+      'type': 'get_tech_lead_pulse',
+      'limit': ?limit,
+    });
+  }
+
   /// Atomically seed multiple tasks. Server validates every entry first;
   /// on any failure none are committed and a `board_seed_batch_result`
   /// with `ok: false` is returned. [source] is stamped onto each task so

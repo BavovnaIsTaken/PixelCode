@@ -150,6 +150,7 @@ sealed class ServerMessage {
       'facilitator_output_sync' => FacilitatorOutputSyncMessage.fromJson(json),
       'session_status' => SessionStatusMessage.fromJson(json),
       'session_taken' => SessionTakenMessage.fromJson(json),
+      'tech_lead_pulse' => TechLeadPulseMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -1100,6 +1101,53 @@ class FacilitatorOutputSyncMessage implements ServerMessage {
           : const ScopeScore.empty(),
       outputFormat: OutputFormat.fromKey(json['outputFormat'] as String? ?? ''),
       outputJson: json['outputJson'] as String? ?? '',
+    );
+  }
+}
+
+// ─── Tech-lead pulse ────────────────────────────────────────────────────────
+
+/// One entry in the tech-lead digest: a recently completed board task.
+class TechLeadPulseEntry {
+  final String taskId;
+  final String title;
+  final String agentId;
+  final String role;
+  final DateTime ts;
+
+  const TechLeadPulseEntry({
+    required this.taskId,
+    required this.title,
+    required this.agentId,
+    required this.role,
+    required this.ts,
+  });
+
+  factory TechLeadPulseEntry.fromJson(Map<String, dynamic> json) =>
+      TechLeadPulseEntry(
+        taskId: json['taskId'] as String? ?? '',
+        title: json['title'] as String? ?? '',
+        agentId: json['agentId'] as String? ?? '',
+        role: json['role'] as String? ?? '',
+        ts: DateTime.tryParse(json['ts'] as String? ?? '')?.toUtc() ??
+            DateTime.now().toUtc(),
+      );
+}
+
+/// Server pushes the recent task-completion digest. Sent in reply to
+/// `get_tech_lead_pulse` AND broadcast on every new completion so the UI
+/// can update without polling. Newest entry last.
+class TechLeadPulseMessage implements ServerMessage {
+  final List<TechLeadPulseEntry> entries;
+  TechLeadPulseMessage({required this.entries});
+  factory TechLeadPulseMessage.fromJson(Map<String, dynamic> json) {
+    final rawEntries = json['entries'];
+    if (rawEntries is! List) return TechLeadPulseMessage(entries: const []);
+    return TechLeadPulseMessage(
+      entries: [
+        for (final e in rawEntries)
+          if (e is Map<String, dynamic>) TechLeadPulseEntry.fromJson(e),
+      ],
     );
   }
 }
