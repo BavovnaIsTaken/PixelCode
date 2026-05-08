@@ -19,11 +19,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/agent_message.dart';
 import 'package:pixelcode/services/chat_history_merge.dart';
 
-ChatMessage _user(String agentId, String text, DateTime ts) => ChatMessage(
+ChatMessage _user(
+  String agentId,
+  String text,
+  DateTime ts, {
+  String? idOverride,
+}) =>
+    ChatMessage(
       role: ChatRole.user,
       text: text,
       agentId: agentId,
       timestamp: ts,
+      id: idOverride,
     );
 
 ChatMessage _assistant(
@@ -270,19 +277,111 @@ void main() {
       expect(merged[agent]!.last.isStreaming, isTrue);
     });
 
-    test('agents present only locally are passed through untouched', () {
+    test('streaming local message on an agent absent from snapshot survives',
+        () {
+      // Captain delegated to coder#1, the coder is mid-stream, and a
+      // chat_history snapshot lands that only covers manager#1. The
+      // streaming coder bubble must NOT be wiped just because the
+      // snapshot didn't mention it — the contract preserves streaming.
       final ts = DateTime.utc(2026, 5, 3, 12, 0);
       final local = {
-        'coder#1': [_user('coder#1', 'note', ts)],
+        'coder#1': [
+          _assistant('coder#1', 'partial...', ts,
+              isStreaming: true, threadId: 't1'),
+        ],
       };
       final merged =
           mergeChatHistory(local, [_user('manager#1', 'hi', ts)]);
-      expect(merged['coder#1']!.single.text, 'note');
+      expect(merged['coder#1']!.single.isStreaming, isTrue);
       expect(merged['manager#1']!.single.text, 'hi');
+    });
+
+    test(
+      'non-streaming local-only ghost on an absent agent is DROPPED '
+      '(server snapshot is authoritative — fixes iPhone↔Mac stale-message bug)',
+      () {
+      // Pre-fix bug pathway: Mac cleared chat, server broadcast empty
+      // snapshot, iPhone kept local stale messages because the merge
+      // had a "subset of agents" fast-path that bypassed the per-msg
+      // rules. Now: a non-streaming, no-id local message on an agent
+      // the snapshot doesn't cover must die — that's what "server is
+      // authoritative" actually means.
+      final ts = DateTime.utc(2026, 5, 3, 12, 0);
+      final stale = {
+        'coder#1': [_user('coder#1', 'stale ghost', ts)],
+      };
+      final merged = mergeChatHistory(stale, const []);
+      expect(merged.containsKey('coder#1'), isFalse,
+          reason: 'agents with only stale ghost messages must drop out '
+              'when the server says "no messages for anyone"');
+      expect(merged, isEmpty);
     });
 
     test('empty local + empty snapshot = empty result', () {
       expect(mergeChatHistory({}, const []), isEmpty);
+    });
+  });
+
+  group('mergeChatHistory — cross-device sync (iPhone↔Mac scenarios)', () {
+    test(
+      'Mac clears chat → server broadcasts empty → iPhone clears too',
+      () {
+      // Setup: both devices in sync after a chat with two messages.
+      final ts1 = DateTime.utc(2026, 5, 3, 12, 0, 0);
+      final ts2 = DateTime.utc(2026, 5, 3, 12, 0, 1);
+      final priorState = mergeChatHistory({}, [
+        _user(agent, 'Привіт', ts1),
+        _assistant(agent, 'Привіт, як справи?', ts2),
+      ]);
+      expect(priorState[agent]!.length, 2);
+
+      // Mac taps "clear chat" → server broadcasts empty snapshot.
+      final afterClear = mergeChatHistory(priorState, const []);
+
+      // iPhone (running this same merge) must reflect the clear.
+      expect(afterClear, isEmpty,
+          reason: 'cross-device clear must propagate — empty snapshot '
+              'wins over stale local list');
+    });
+
+    test(
+      'iPhone joins late: empty local + populated snapshot = full sync',
+      () {
+      // iPhone connects mid-session. It has no local messages. Server
+      // sends the full chat_history. iPhone must end up with everything.
+      final ts1 = DateTime.utc(2026, 5, 3, 12, 0, 0);
+      final ts2 = DateTime.utc(2026, 5, 3, 12, 0, 1);
+      final ts3 = DateTime.utc(2026, 5, 3, 12, 0, 2);
+      final snapshot = [
+        _user(agent, 'A', ts1),
+        _assistant(agent, 'B', ts2),
+        _user(agent, 'C', ts3),
+      ];
+      final merged = mergeChatHistory({}, snapshot);
+      expect(merged[agent]!.length, 3);
+      expect(merged[agent]!.map((m) => m.text).toList(), ['A', 'B', 'C']);
+    });
+
+    test(
+      'one device on agent A, other on agent B — full snapshot syncs both',
+      () {
+      // Mac was on manager#1 chat. iPhone was on coder#1 chat. Snapshot
+      // covers both agents. Both devices must see both threads after merge.
+      final ts = DateTime.utc(2026, 5, 3, 12, 0);
+      final localOnMac = {
+        'manager#1': [
+          _user('manager#1', 'mac local', ts, idOverride: 'mac-id-1'),
+        ],
+      };
+      final fullSnapshot = [
+        _user('manager#1', 'mac local', ts, idOverride: 'mac-id-1'),
+        _user('coder#1', 'from iPhone', ts, idOverride: 'ios-id-1'),
+      ];
+      final merged = mergeChatHistory(localOnMac, fullSnapshot);
+      expect(merged['manager#1']!.single.text, 'mac local');
+      expect(merged['coder#1']!.single.text, 'from iPhone');
+      expect(merged['manager#1']!.length, 1,
+          reason: 'matching id must NOT duplicate');
     });
   });
 }
