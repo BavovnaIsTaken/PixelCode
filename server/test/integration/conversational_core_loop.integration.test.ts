@@ -175,7 +175,22 @@ describe("conversational core loop", () => {
         assert.equal(existsSync(digestPath), false);
 
         wireAuth.column = "done";
-        const recorded = recordTaskCompletion(digest, wireAuth);
+        // Lesson resolver fixture: coder#1 has accumulated one strength
+        // (most-frequent lesson). The wiring snapshots it onto the
+        // digest entry so the tech-lead's prompt can reference concrete
+        // growth.
+        const lessonsByAgent: Record<string, { tag: string; lesson: string; type: "strength" | "weakness" }> = {
+          "coder#1": {
+            tag: "avoided-n-plus-1",
+            lesson: "Pre-fetched related entities to avoid N+1 query.",
+            type: "strength",
+          },
+        };
+        const recorded = recordTaskCompletion(
+          digest,
+          wireAuth,
+          (agentId) => lessonsByAgent[agentId],
+        );
 
         assert.equal(recorded.taskId, wireAuth.id);
         assert.equal(recorded.title, "Wire auth");
@@ -185,19 +200,32 @@ describe("conversational core loop", () => {
           "role MUST be derived from the `coder#1` instance id (drop `#N`)",
         );
         assert.equal(recorded.outcome, "done");
+        assert.deepEqual(
+          recorded.topLesson,
+          lessonsByAgent["coder#1"],
+          "lesson resolver result must be snapshotted onto the entry",
+        );
         assert.equal(digest.recent().length, 1, "ring buffer must have 1 entry");
 
-        // JSONL must exist on disk and contain exactly one line.
+        // JSONL must exist on disk and contain exactly one line, with the
+        // lesson serialized so a restart preserves "what they learned".
         assert.ok(existsSync(digestPath), "digest file must be written");
         const persisted = readFileSync(digestPath, "utf8");
         const lines = persisted.split("\n").filter((l) => l.length > 0);
         assert.equal(lines.length, 1);
-        assert.equal((JSON.parse(lines[0]) as DigestEntry).taskId, wireAuth.id);
+        const persistedEntry = JSON.parse(lines[0]) as DigestEntry;
+        assert.equal(persistedEntry.taskId, wireAuth.id);
+        assert.equal(persistedEntry.topLesson?.tag, "avoided-n-plus-1");
 
         // ── 5. Prompt injection: tech-lead sees digest, others don't ────
         const digestBlock = digest.renderForPrompt(15);
         assert.match(digestBlock, /^## Recent team activity/);
         assert.match(digestBlock, /Wire auth/);
+        assert.match(
+          digestBlock,
+          /learned \(strength\):.*N\+1/,
+          "rendered digest MUST surface the snapshotted lesson",
+        );
 
         const techLeadPrompt = buildOfficePrompt(
           "tech-lead#1",
@@ -237,12 +265,15 @@ describe("conversational core loop", () => {
 
         // ── 6. Restart: a fresh process replays JSONL into the ring ─────
         // Record one more completion before "restarting" to make replay
-        // less trivially mockable.
+        // less trivially mockable. This second task has no lesson —
+        // proves the resolver may return undefined and the entry still
+        // records cleanly.
         const photoGrid = plan.tasks[1];
         photoGrid.assignedAgents = ["coder#1"];
         photoGrid.column = "done";
-        recordTaskCompletion(digest, photoGrid);
+        recordTaskCompletion(digest, photoGrid, () => undefined);
         assert.equal(digest.recent().length, 2);
+        assert.equal(digest.recent()[1].topLesson, undefined);
 
         const restarted = new TechLeadDigest(digestPath);
         // Pre-loadFromDisk: empty (proves replay actually does work).
@@ -256,8 +287,13 @@ describe("conversational core loop", () => {
           [wireAuth.id, photoGrid.id],
           "replay order must match append order (oldest → newest)",
         );
+        assert.equal(
+          replayed[0].topLesson?.tag, "avoided-n-plus-1",
+          "lesson on the older entry survives restart",
+        );
 
-        // The restarted prompt must still mention the older completion.
+        // The restarted prompt must still mention the older completion
+        // AND the lesson it carried.
         const techLeadPromptAfterRestart = buildOfficePrompt(
           "tech-lead#1",
           undefined,
@@ -267,6 +303,7 @@ describe("conversational core loop", () => {
         );
         assert.match(techLeadPromptAfterRestart, /Wire auth/);
         assert.match(techLeadPromptAfterRestart, /Photo grid screen/);
+        assert.match(techLeadPromptAfterRestart, /learned \(strength\):.*N\+1/);
       } finally {
         cleanup();
       }

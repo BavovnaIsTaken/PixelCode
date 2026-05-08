@@ -71,7 +71,7 @@ import {
 import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
-  formatTraitsForPrompt, getAllTraits,
+  formatTraitsForPrompt, getAllTraits, getLessonsForAgent,
   isConsentEnabled, setConsent, getAllConsent,
   type TraitStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
@@ -2162,7 +2162,20 @@ function commitBoardChange(): void {
  * server-only side effects (websocket broadcast).
  */
 function recordTaskCompletionToDigest(task: TaskCardData): void {
-  recordTaskCompletion(techLeadDigest, task);
+  // Resolve the agent's top lesson (by frequency) at completion time,
+  // so the digest entry carries a concrete "they learned X" hint the
+  // tech-lead can ground its replies in. Strength lessons map to
+  // frequency-1 strengths; weakness lessons surface things to watch.
+  recordTaskCompletion(techLeadDigest, task, (agentId) => {
+    const lessons = getLessonsForAgent(traitStore, agentId);
+    const top = lessons[0];
+    if (!top) return undefined;
+    return {
+      tag: top.tag,
+      lesson: top.lesson,
+      type: top.type === "strength" ? "strength" : "weakness",
+    };
+  });
   broadcastAll({
     type: "tech_lead_pulse",
     entries: techLeadDigest.recent(20),

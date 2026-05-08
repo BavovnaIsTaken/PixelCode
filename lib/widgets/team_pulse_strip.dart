@@ -38,8 +38,12 @@ class TeamPulseStrip extends ConsumerWidget {
 
     return Tooltip(
       message: latest
-          .map((e) =>
-              '${e.role}: ${e.title}  ·  ${_relativeTime(e.ts)}')
+          .map((e) {
+            final lessonSuffix = e.topLesson == null
+                ? ''
+                : '\n   learned (${e.topLesson!.type}): ${e.topLesson!.lesson}';
+            return '${e.role}: ${e.title}  ·  ${_relativeTime(e.ts)}$lessonSuffix';
+          })
           .join('\n'),
       child: Container(
         height: 26,

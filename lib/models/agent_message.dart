@@ -1107,6 +1107,31 @@ class FacilitatorOutputSyncMessage implements ServerMessage {
 
 // ─── Tech-lead pulse ────────────────────────────────────────────────────────
 
+/// Compact snapshot of an agent's most-frequent lesson at the moment
+/// a task completed. Optional: present only when the server-side
+/// resolver had something to return. Surfaced in tooltips and richer
+/// growth views.
+class TechLeadPulseLesson {
+  final String tag;
+  final String lesson;
+  /// "strength" or "weakness" — kept as a String to stay forward-compat
+  /// with future lesson types without breaking the parser.
+  final String type;
+
+  const TechLeadPulseLesson({
+    required this.tag,
+    required this.lesson,
+    required this.type,
+  });
+
+  factory TechLeadPulseLesson.fromJson(Map<String, dynamic> json) =>
+      TechLeadPulseLesson(
+        tag: json['tag'] as String? ?? '',
+        lesson: json['lesson'] as String? ?? '',
+        type: json['type'] as String? ?? 'strength',
+      );
+}
+
 /// One entry in the tech-lead digest: a recently completed board task.
 class TechLeadPulseEntry {
   final String taskId;
@@ -1114,6 +1139,7 @@ class TechLeadPulseEntry {
   final String agentId;
   final String role;
   final DateTime ts;
+  final TechLeadPulseLesson? topLesson;
 
   const TechLeadPulseEntry({
     required this.taskId,
@@ -1121,17 +1147,23 @@ class TechLeadPulseEntry {
     required this.agentId,
     required this.role,
     required this.ts,
+    this.topLesson,
   });
 
-  factory TechLeadPulseEntry.fromJson(Map<String, dynamic> json) =>
-      TechLeadPulseEntry(
-        taskId: json['taskId'] as String? ?? '',
-        title: json['title'] as String? ?? '',
-        agentId: json['agentId'] as String? ?? '',
-        role: json['role'] as String? ?? '',
-        ts: DateTime.tryParse(json['ts'] as String? ?? '')?.toUtc() ??
-            DateTime.now().toUtc(),
-      );
+  factory TechLeadPulseEntry.fromJson(Map<String, dynamic> json) {
+    final rawLesson = json['topLesson'];
+    return TechLeadPulseEntry(
+      taskId: json['taskId'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      agentId: json['agentId'] as String? ?? '',
+      role: json['role'] as String? ?? '',
+      ts: DateTime.tryParse(json['ts'] as String? ?? '')?.toUtc() ??
+          DateTime.now().toUtc(),
+      topLesson: rawLesson is Map<String, dynamic>
+          ? TechLeadPulseLesson.fromJson(rawLesson)
+          : null,
+    );
+  }
 }
 
 /// Server pushes the recent task-completion digest. Sent in reply to

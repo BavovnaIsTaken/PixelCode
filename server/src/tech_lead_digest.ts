@@ -27,6 +27,19 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { projectKey } from "./board_persistence.js";
 
+/**
+ * Compact snapshot of an agent's most-frequent lesson at the moment a
+ * task completed. Stored on the digest entry so the tech-lead's prompt
+ * gets a "what they learned" hint per completion without an async
+ * lookup at render time. Optional — agents with no lessons yet record
+ * completions without it, which is the common case for a fresh team.
+ */
+export interface DigestLesson {
+  tag: string;
+  lesson: string;
+  type: "strength" | "weakness";
+}
+
 export interface DigestEntry {
   taskId: string;
   title: string;
@@ -37,6 +50,8 @@ export interface DigestEntry {
   outcome: "done";
   /** ISO 8601 timestamp. */
   ts: string;
+  /** Top accumulated lesson for the agent at the moment of completion. */
+  topLesson?: DigestLesson;
 }
 
 const DEFAULT_CAPACITY = 50;
@@ -101,6 +116,7 @@ export interface CompletionInput {
   title: string;
   agentId: string;
   role?: string;
+  topLesson?: DigestLesson;
 }
 
 /**
@@ -159,7 +175,36 @@ export class TechLeadDigest {
           parsed?.outcome === "done" &&
           typeof parsed?.ts === "string"
         ) {
-          this.store.add(parsed);
+          // Sanitize topLesson — accept only well-formed objects, drop
+          // malformed ones silently so a single bad lesson doesn't poison
+          // the whole entry. Pre-lesson JSONL lines have no field at all
+          // and replay unchanged.
+          const lesson = (parsed as { topLesson?: unknown }).topLesson;
+          let topLesson: DigestLesson | undefined;
+          if (
+            lesson &&
+            typeof lesson === "object" &&
+            typeof (lesson as DigestLesson).tag === "string" &&
+            typeof (lesson as DigestLesson).lesson === "string" &&
+            ((lesson as DigestLesson).type === "strength" ||
+              (lesson as DigestLesson).type === "weakness")
+          ) {
+            topLesson = {
+              tag: (lesson as DigestLesson).tag,
+              lesson: (lesson as DigestLesson).lesson,
+              type: (lesson as DigestLesson).type,
+            };
+          }
+          const entry: DigestEntry = {
+            taskId: parsed.taskId,
+            title: parsed.title,
+            agentId: parsed.agentId,
+            role: parsed.role,
+            outcome: "done",
+            ts: parsed.ts,
+            ...(topLesson ? { topLesson } : {}),
+          };
+          this.store.add(entry);
           recovered++;
         } else {
           skipped++;
@@ -186,6 +231,7 @@ export class TechLeadDigest {
       role: input.role ?? input.agentId,
       outcome: "done",
       ts: this.now(),
+      ...(input.topLesson ? { topLesson: input.topLesson } : {}),
     };
     this.store.add(entry);
     try {
@@ -213,7 +259,12 @@ export class TechLeadDigest {
     const lines: string[] = ["## Recent team activity"];
     for (let i = recent.length - 1; i >= 0; i--) {
       const e = recent[i];
-      lines.push(`- [${e.ts}] ${e.role} (${e.agentId}) finished "${e.title}" (${e.taskId})`);
+      const lessonSuffix = e.topLesson
+        ? ` — learned (${e.topLesson.type}): ${e.topLesson.lesson}`
+        : "";
+      lines.push(
+        `- [${e.ts}] ${e.role} (${e.agentId}) finished "${e.title}" (${e.taskId})${lessonSuffix}`,
+      );
     }
     return lines.join("\n");
   }

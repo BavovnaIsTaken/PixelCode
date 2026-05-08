@@ -5,6 +5,7 @@ import {
   DigestStore,
   TechLeadDigest,
   type DigestEntry,
+  type DigestLesson,
 } from "../src/tech_lead_digest.js";
 
 // ─── DigestStore (ring buffer) ─────────────────────────────────────────────
@@ -164,5 +165,92 @@ describe("TechLeadDigest persistence", () => {
     const block = d.renderForPrompt(3);
     const matches = block.match(/finished "T\d+"/g) ?? [];
     assert.equal(matches.length, 3);
+  });
+});
+
+describe("TechLeadDigest topLesson capture", () => {
+  function inMemoryFs(initial: string = "") {
+    const files = new Map<string, string>();
+    if (initial) files.set("/tmp/x/digest.jsonl", initial);
+    return {
+      files,
+      deps: {
+        appendLine: (path: string, line: string) => {
+          files.set(path, (files.get(path) ?? "") + line + "\n");
+        },
+        readAll: (path: string) => files.get(path) ?? "",
+        exists: (path: string) => files.has(path),
+        ensureDir: () => {},
+        warn: () => {},
+        now: () => "2026-05-08T10:00:00Z",
+      },
+    };
+  }
+
+  const lesson: DigestLesson = {
+    tag: "avoided-n-plus-1",
+    lesson: "Pre-fetched related entities to avoid N+1 query.",
+    type: "strength",
+  };
+
+  test("recordCompletion stores topLesson when supplied", () => {
+    const fs = inMemoryFs();
+    const d = new TechLeadDigest("/tmp/x/digest.jsonl", fs.deps);
+    const entry = d.recordCompletion({
+      taskId: "task_1", title: "Wire query layer",
+      agentId: "coder-1", role: "coder", topLesson: lesson,
+    });
+    assert.deepEqual(entry.topLesson, lesson);
+    const persisted = JSON.parse(
+      (fs.files.get("/tmp/x/digest.jsonl") ?? "").trim(),
+    ) as DigestEntry;
+    assert.deepEqual(persisted.topLesson, lesson);
+  });
+
+  test("renderForPrompt appends '— learned (...): ...' only when present", () => {
+    const fs = inMemoryFs();
+    const d = new TechLeadDigest("/tmp/x/digest.jsonl", fs.deps);
+    d.recordCompletion({
+      taskId: "a", title: "Plain task", agentId: "coder-1", role: "coder",
+    });
+    d.recordCompletion({
+      taskId: "b", title: "Learning task",
+      agentId: "coder-1", role: "coder", topLesson: lesson,
+    });
+    const block = d.renderForPrompt(10);
+    assert.ok(
+      !/Plain task.*learned/.test(block),
+      "plain entry must NOT carry a learned suffix",
+    );
+    assert.match(block, /Learning task.*learned \(strength\):.*N\+1/);
+  });
+
+  test("loadFromDisk restores topLesson on backward-compatible JSONL", () => {
+    const legacy = JSON.stringify({
+      taskId: "old", title: "Pre-lesson task", agentId: "coder-1",
+      role: "coder", outcome: "done", ts: "2026-05-08T09:00:00Z",
+    });
+    const newer = JSON.stringify({
+      taskId: "new", title: "Recent task", agentId: "coder-1",
+      role: "coder", outcome: "done", ts: "2026-05-08T10:00:00Z",
+      topLesson: lesson,
+    });
+    const malformedLesson = JSON.stringify({
+      taskId: "bad-lesson", title: "Has bad lesson",
+      agentId: "coder-1", role: "coder",
+      outcome: "done", ts: "2026-05-08T10:30:00Z",
+      topLesson: { tag: 42, lesson: "not a string but" }, // wrong types
+    });
+    const fs = inMemoryFs(legacy + "\n" + newer + "\n" + malformedLesson + "\n");
+    const d = new TechLeadDigest("/tmp/x/digest.jsonl", fs.deps);
+    d.loadFromDisk();
+    const recent = d.recent();
+    assert.equal(recent.length, 3, "all three entries replay");
+    assert.equal(recent[0].topLesson, undefined, "legacy entry has no lesson");
+    assert.deepEqual(recent[1].topLesson, lesson, "newer entry replays lesson");
+    assert.equal(
+      recent[2].topLesson, undefined,
+      "malformed lesson is dropped silently, entry survives",
+    );
   });
 });
