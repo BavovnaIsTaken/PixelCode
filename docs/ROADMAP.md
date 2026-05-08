@@ -176,7 +176,7 @@
 | **Agent signature/identity** (унікальний ID, історія тренування) | `[TODO]` | Q3 2026 |
 | **Personality presets** (templates для швидкого старту) | `[DONE]` | Q3 2026 |
 | **Custom facilitator spawn** (user-defined persona_prompt + lexicon) | `[TODO]` | Q3 2027 |
-| **Agent stats card** — для marketplace listing (XP, success rate, specializations); shareable з Roster v1 (D.1) | `[TODO]` | Q3 2026 |
+| **Agent stats card** — для marketplace listing (XP, success rate, specializations); shareable з Roster v1 (D.1) | `[PARTIAL]` | 2026-05-08 — first signal landed: `agentCompletionCountProvider` derives recent-completion count per-agent з live `tech_lead_pulse` stream → `_RecentCompletionsBadge` поряд з Level chip у [agent_overview_tab.dart](../lib/widgets/roster/agent_overview_tab.dart). "Done X tasks" видно на профілі відразу. Не shareable card ще — тільки local surface. Повна marketplace card (success rate aggregation, lifetime stats, JSON export → image) залишається TODO до D.1 stats endpoint |
 | **Discord/Reddit thread** — перший community trade ground (поза-аппка) | `[TODO]` | Q3 2026 |
 
 **Залежності:** C (Personalization UI) має бути готова раніше, бо Custom Agent Spawn зливається з нею в одне UI.

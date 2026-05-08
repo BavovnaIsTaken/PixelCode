@@ -42,3 +42,18 @@ final techLeadPulseProvider =
     NotifierProvider<TechLeadPulseNotifier, List<TechLeadPulseEntry>>(
   TechLeadPulseNotifier.new,
 );
+
+/// Number of completed tasks recorded against a specific agent. Derived
+/// directly from the live pulse stream — no extra round-trip. Returns
+/// 0 when the digest holds nothing for the agent (fresh hire) or when
+/// the pulse provider is still loading.
+///
+/// Note: the tech-lead digest is bounded to the most recent ~50 entries
+/// server-side, so this is a "recent completions" count, not lifetime.
+/// That is the right signal for short-term growth feel; lifetime stats
+/// can land later when the agent-signature endpoint is built.
+final agentCompletionCountProvider =
+    Provider.family<int, String>((ref, agentId) {
+  final entries = ref.watch(techLeadPulseProvider);
+  return entries.where((e) => e.agentId == agentId).length;
+});
