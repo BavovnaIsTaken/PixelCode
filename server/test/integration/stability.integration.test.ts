@@ -102,6 +102,11 @@ class ServerHarness {
   readonly clientKimiKey = new Map<string, string>();
   lastSeenDeepSeekKey: string | undefined;
   lastSeenKimiKey: string | undefined;
+  // Session presence: only one ws holds write authority at a time. The
+  // server pairs `clientId` with `ws` so reconnects of the same device
+  // re-claim the slot. Connected clients map carries clientId per ws.
+  readonly connectedClients = new Map<string, { clientId: string; deviceName: string }>();
+  activeSession: { clientId: string; deviceName: string; wsId: string } | null = null;
   latestFacilitatorOutput: FacilitatorOutput | null = null;
   private projectCwd: string;
 
@@ -237,6 +242,45 @@ class ServerHarness {
   private bumpScratch(c: FakeClient): void {
     const s = this.clientScratch.get(c.id);
     if (s) s.msgsSeen += 1;
+  }
+
+  /** Mirrors `case "client_info"` after a successful identify. */
+  identify(c: FakeClient, clientId: string, deviceName: string): void {
+    this.connectedClients.set(c.id, { clientId, deviceName });
+    if (!this.activeSession || this.activeSession.clientId === clientId) {
+      this.activeSession = { clientId, deviceName, wsId: c.id };
+      // Fix: broadcast to ALL peers, not just `c`. Otherwise a viewer
+      // that learnt "no primary" during a prior session_release stays in
+      // that stale view forever until something else triggers a re-broadcast.
+      this.broadcastSessionStatus();
+    } else {
+      this.send(c, {
+        type: "session_status",
+        mode: "viewer",
+        primaryDevice: this.activeSession.deviceName,
+      });
+    }
+  }
+
+  /** Mirrors `case "session_release"` — primary drops the slot. */
+  sessionRelease(c: FakeClient): void {
+    if (this.activeSession?.wsId !== c.id) return;
+    this.activeSession = null;
+    this.broadcastSessionStatus();
+  }
+
+  private broadcastSessionStatus(): void {
+    for (const peer of this.clients) {
+      const isPrimary = this.activeSession?.wsId === peer.id;
+      const msg: Record<string, unknown> = {
+        type: "session_status",
+        mode: isPrimary ? "primary" : "viewer",
+      };
+      if (!isPrimary && this.activeSession) {
+        msg.primaryDevice = this.activeSession.deviceName;
+      }
+      this.send(peer, msg);
+    }
   }
 
   /**
@@ -1025,6 +1069,94 @@ describe("provider key cross-device propagation", () => {
       } finally {
         cleanA();
         cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 7: viewers stuck in stale "no primary" after release+reclaim ────
+
+describe("session presence — primary handover visibility", () => {
+  function lastSessionStatus(c: FakeClient) {
+    for (let i = c.received.length - 1; i >= 0; i--) {
+      const m = c.received[i];
+      if (m.type === "session_status") return m;
+    }
+    return undefined;
+  }
+
+  test(
+    "after release+claim, peer viewers learn the new primary's name",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.identify(mac, "client-mac", "Mac");
+        h.identify(iPhone, "client-iphone", "iPhone");
+        // Mac is primary (claimed first), iPhone is viewer.
+        assert.equal(lastSessionStatus(mac)?.mode, "primary");
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, "Mac");
+
+        // Mac releases. Both clients become viewers with no primary.
+        h.sessionRelease(mac);
+        assert.equal(lastSessionStatus(mac)?.mode, "viewer");
+        assert.equal(lastSessionStatus(mac)?.primaryDevice, undefined);
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, undefined);
+
+        // A new device claims by identifying.
+        const iPad = h.connect("ipad");
+        h.identify(iPad, "client-ipad", "iPad");
+
+        // iPad sees primary, Mac (existing viewer) MUST learn iPad is the
+        // new primary — without the broadcast fix, Mac stayed at "viewer
+        // / no primary" forever.
+        assert.equal(lastSessionStatus(iPad)?.mode, "primary");
+        assert.equal(lastSessionStatus(mac)?.mode, "viewer");
+        assert.equal(
+          lastSessionStatus(mac)?.primaryDevice,
+          "iPad",
+          "Mac (existing viewer) must learn iPad is now primary",
+        );
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, "iPad");
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "reconnect of the previous primary's clientId reclaims the slot and notifies peers",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac1 = h.connect("mac1");
+        const iPhone = h.connect("iphone");
+        h.identify(mac1, "client-mac", "Mac");
+        h.identify(iPhone, "client-iphone", "iPhone");
+        // Mac drops; iPhone is its only peer.
+        h.disconnect(mac1);
+        // Auto-promotion isn't modelled here (the fix targets identify
+        // path); simulate a clean release before reconnect.
+        h.activeSession = null;
+
+        // Mac comes back as new ws but same clientId. Should reclaim.
+        const mac2 = h.connect("mac2");
+        h.identify(mac2, "client-mac", "Mac");
+        assert.equal(lastSessionStatus(mac2)?.mode, "primary");
+        // iPhone (still viewer) must learn Mac is primary again.
+        assert.equal(
+          lastSessionStatus(iPhone)?.primaryDevice,
+          "Mac",
+          "iPhone must see Mac as the primary after Mac reclaims",
+        );
+      } finally {
+        cleanup();
       }
     },
   );

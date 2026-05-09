@@ -4558,7 +4558,11 @@ wss.on("connection", (ws, request) => {
           // Everyone else → viewer.
           if (!activeSession || activeSession.clientId === info.clientId) {
             claimSession(ws);
-            send(ws, { type: "session_status", mode: "primary" } as any);
+            // Broadcast (not just self) — peers stuck in "viewer, no primary"
+            // after a session_release need to learn who the new primary is.
+            // Without this, their UI keeps showing stale session state until
+            // the next primary handover or reconnect.
+            broadcastSessionStatus();
           } else {
             send(ws, {
               type: "session_status",
