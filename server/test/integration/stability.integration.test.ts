@@ -380,6 +380,28 @@ class ServerHarness {
   }
 
   /**
+   * Mirrors `case "push_facilitator_output"` — device pushing local
+   * output after server restart. Only stores if server has nothing, then
+   * broadcasts to all OTHER connected peers.
+   */
+  pushFacilitatorOutput(pusher: FakeClient, outputJson: string): void {
+    if (this.latestFacilitatorOutput) return; // server already has one
+    this.latestFacilitatorOutput = {
+      styleId: "",
+      finalScore: {},
+      outputFormat: "quest_line",
+      outputJson,
+    };
+    mkdirSync(dirname(this.facilitatorFilePath()), { recursive: true });
+    writeFileSync(this.facilitatorFilePath(), JSON.stringify(this.latestFacilitatorOutput));
+    // Broadcast to all OTHER connected devices (the fix).
+    for (const c of this.clients) {
+      if (c.id === pusher.id) continue;
+      this.send(c, { type: "facilitator_output_sync", ...this.latestFacilitatorOutput });
+    }
+  }
+
+  /**
    * Mirrors the part of `case "facilitator_start"` that runs after the
    * seed succeeds: persist the output AND distil project memory so the
    * next agent prompt has grounding. The latter is what was missing.
@@ -1202,6 +1224,60 @@ describe("session presence — primary handover visibility", () => {
       }
     },
   );
+});
+
+// ─── push_facilitator_output broadcasts to peers ──────────────────────────
+
+describe("push_facilitator_output peer sync", () => {
+  test("when device A pushes output after server restart, device B gets facilitator_output_sync", () => {
+    // Scenario: server restarted (no latestFacilitatorOutput). Device A has
+    // local data and pushes it. Device B is already connected but has nothing.
+    // Previously Device B would never learn about A's push until reconnect.
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const deviceA = h.connect("device-a");
+      const deviceB = h.connect("device-b");
+
+      assert.equal(
+        deviceB.received.filter((m) => m.type === "facilitator_output_sync").length,
+        0,
+        "B has nothing yet",
+      );
+
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "build auth" }));
+
+      const bSync = deviceB.received.filter((m) => m.type === "facilitator_output_sync");
+      assert.equal(bSync.length, 1, "B must receive facilitator_output_sync after A's push");
+      assert.ok(bSync[0].outputJson, "sync must include outputJson");
+
+      // A itself must NOT receive an echo of its own push.
+      const aSync = deviceA.received.filter((m) => m.type === "facilitator_output_sync");
+      assert.equal(aSync.length, 0, "A must not receive a self-echo");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("push is ignored when server already has output (no double-write)", () => {
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const deviceA = h.connect("device-a");
+      const deviceB = h.connect("device-b");
+
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "first" }));
+      const beforeCount = deviceB.received.filter((m) => m.type === "facilitator_output_sync").length;
+      assert.equal(beforeCount, 1);
+
+      // Second push — server has output, must be ignored.
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "second" }));
+      const afterCount = deviceB.received.filter((m) => m.type === "facilitator_output_sync").length;
+      assert.equal(afterCount, 1, "B must not receive a second sync from a rejected push");
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // ─── deriveProjectMemoryFromBrief unit-level guarantees ───────────────────

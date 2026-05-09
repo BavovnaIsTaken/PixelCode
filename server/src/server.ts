@@ -4364,6 +4364,13 @@ wss.on("connection", (ws, request) => {
             };
             persistFacilitatorOutput();
             dbg("info", "facilitator", `Accepted push_facilitator_output from client (${msg.outputJson.length}B)`);
+            // Broadcast to all OTHER connected devices — this runs after server
+            // restart when one device has local output and others are online
+            // but haven't seeded yet.
+            broadcastExcept(ws, {
+              type: "facilitator_output_sync",
+              ...latestFacilitatorOutput,
+            } as any);
           }
           break;
         }
