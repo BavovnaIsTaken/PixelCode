@@ -1925,7 +1925,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       ...(mcpServers ? { mcpServers } : {}),
       cwd: PROJECT_CWD,
       includePartialMessages: true,
-      permissionMode: "bypassPermissions",
+      permissionMode: "bypassPermissions" as const,
       maxTurns: 50,
       persistSession: true,
       continue: false,

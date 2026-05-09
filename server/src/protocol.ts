@@ -147,6 +147,8 @@ export type ClientMessage =
   // Android deploy
   | { type: "android_deploy_check" }
   | { type: "android_deploy_list_devices" }
+  | { type: "android_deploy_watch_devices" }
+  | { type: "android_deploy_unwatch_devices" }
   | { type: "android_deploy_start"; deviceSerial?: string }
   | { type: "android_deploy_cancel" }
   // Device screenshot (Android via adb, iOS via simctl)
