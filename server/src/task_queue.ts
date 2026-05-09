@@ -88,6 +88,15 @@ export class TaskQueue {
     return before - this.items.length;
   }
 
+  /** Drop everything. Used on project switch — queued tasks reference the
+   *  prior PROJECT_CWD via the global the runner reads at dispatch time,
+   *  so executing them after a swap would run under the wrong project. */
+  clear(): number {
+    const n = this.items.length;
+    this.items = [];
+    return n;
+  }
+
   /** Get a snapshot of all queued tasks (for status reporting). */
   snapshot(): Array<{ id: string; type: string; priority: TaskPriority; agentId?: string }> {
     return this.items.map((t) => ({

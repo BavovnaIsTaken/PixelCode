@@ -40,6 +40,9 @@ export interface RunningAgent {
   abortController: AbortController;
   startedAt: number;
   promise: Promise<void>;
+  /** Owning WebSocket — kept so disconnect can cancel only the dropped
+   *  client's agents, not every peer's. */
+  ws: WebSocket;
 }
 
 export interface DispatchParams {
@@ -97,6 +100,7 @@ export class AgentRunner {
       abortController,
       startedAt: Date.now(),
       promise: this.runAgent(dispatchId, params, abortController),
+      ws: params.ws,
     };
 
     this.running.set(dispatchId, entry);
@@ -118,9 +122,14 @@ export class AgentRunner {
     return true;
   }
 
-  /** Cancel all running agents for a given WebSocket (e.g. on disconnect). */
+  /**
+   * Cancel running agents. With `ws`, cancels only that ws's agents
+   * (used on disconnect — must NOT take down peer agents). Without `ws`,
+   * cancels everything (used on project switch / shutdown).
+   */
   cancelAll(ws?: WebSocket): void {
     for (const [id, entry] of this.running) {
+      if (ws && entry.ws !== ws) continue;
       entry.abortController.abort();
       this.running.delete(id);
     }

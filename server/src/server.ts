@@ -3931,6 +3931,16 @@ wss.on("connection", (ws, request) => {
           latestFacilitatorOutput = null;
           loadPersistedGameState();
           loadPersistedFacilitatorOutput();
+          // Cancel in-flight agents and drop queued tasks: they reference
+          // the OLD PROJECT_CWD via the runner's read-at-dispatch-time
+          // global, so executing them now would run under the wrong
+          // project's filesystem. The user has to redispatch — small UX
+          // cost vs. the alternative of running rm/edit in the wrong tree.
+          agentRunner.cancelAll();
+          const dropped = taskQueue.clear();
+          if (dropped > 0) {
+            dbg("info", "queue", `Dropped ${dropped} queued task(s) on project switch`);
+          }
           // PROJECT_CWD is global — every connected client now lives in the
           // new project. Clear per-ws scratch + restore team memory for ALL
           // peers, not just the sender. Otherwise iPhone keeps operating on
