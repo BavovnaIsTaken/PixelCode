@@ -39,7 +39,19 @@ export class ChatHistory {
   private readonly _messages: StoredChatMessage[] = [];
   private readonly _enrichedMetadata: Map<string, EnrichedChatMessage["metadata"]> = new Map();
 
+  /**
+   * Append a message. Idempotent when the caller supplies an id: a second
+   * call with the same id is ignored. Lets clients safely replay queued
+   * messages after a reconnect without producing chat duplicates — the
+   * outbox cannot tell whether the original send actually reached the
+   * server before the socket dropped.
+   */
   add(msg: StoredChatMessage): void {
+    if (msg.id) {
+      for (const existing of this._messages) {
+        if (existing.id === msg.id) return;
+      }
+    }
     const withId = { ...msg, id: msg.id ?? randomUUID() };
     this._messages.push(withId);
   }

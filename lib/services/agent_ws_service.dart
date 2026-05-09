@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
+import 'ws_outbox.dart';
 
 class AgentWsService {
   WebSocket? _ws;
@@ -22,6 +23,12 @@ class AgentWsService {
   bool _isConnected = false;
   bool _disposed = false;
   Timer? _reconnectTimer;
+
+  /// Outbox for messages submitted while the socket is down. Drained in
+  /// FIFO order after the next successful (re)connect, immediately after
+  /// the `client_info` handshake. Capped + ephemeral-type denylist live
+  /// inside `WsOutbox`; the service just forwards.
+  final WsOutbox _outbox = WsOutbox();
 
   /// Short status token (≤5 chars) shown by the connection terminal widget.
   /// `null` once a session is established — the widget hides itself.
@@ -140,6 +147,10 @@ class AgentWsService {
       _sendClientInfo();
       setBypassPermissions(true);
       getTraits();
+      // Drain anything queued during the outage. Order: client_info first
+      // so the server has re-identified this device before user-action
+      // replays land — keeps session presence stable across the gap.
+      _drainOutbox();
 
       _wsSub = _ws!.listen(
         (data) {
@@ -643,8 +654,33 @@ class AgentWsService {
   void _send(Map<String, dynamic> msg) {
     if (_ws != null && _isConnected && !_disposed) {
       _ws!.add(jsonEncode(msg));
-    } else {
-      _log('Message dropped (not connected): ${msg['type']}');
+      return;
+    }
+    if (_disposed) return;
+    final type = msg['type'] as String?;
+    final result = _outbox.enqueue(msg);
+    switch (result) {
+      case EnqueueResult.droppedEphemeral:
+        _log('Ephemeral dropped (not connected): $type');
+      case EnqueueResult.evictedOldest:
+        _log('Outbox full — evicted oldest to make room for: $type');
+      case EnqueueResult.enqueued:
+        _log('Outbox queued (${_outbox.length}/${_outbox.cap}): $type');
+    }
+  }
+
+  /// Send everything sitting in the outbox in FIFO order. Called after a
+  /// reconnect once `client_info` has been resent so the server has
+  /// already re-identified this device. Server-side `ChatHistory.add` is
+  /// idempotent on caller-supplied id, so even if a queued message
+  /// originally raced past flush before onDone fired, the replay is safe.
+  void _drainOutbox() {
+    if (!_isConnected || _ws == null || _disposed) return;
+    final pending = _outbox.drainAll();
+    if (pending.isEmpty) return;
+    _log('Draining outbox (${pending.length} message(s))');
+    for (final m in pending) {
+      _ws!.add(jsonEncode(m));
     }
   }
 
