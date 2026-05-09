@@ -3737,6 +3737,17 @@ wss.on("connection", (ws, request) => {
       fullState: latestFullGameState,
       stateUpdatedAt: latestStateUpdatedAt,
     } as any);
+    // Inherit the authoritative roster into this ws's clientGameState
+    // so its first dispatch/validation reads a real roster instead of
+    // undefined. Without this, peers that join after a hire have an
+    // empty server-side roster until they send their own set_game_state.
+    try {
+      const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
+      if (parsed.instances) clientGameState.set(ws, parsed as GameStateData);
+    } catch {
+      // Persisted blob is malformed; leave clientGameState unset so the
+      // first set_game_state from this ws seeds it cleanly.
+    }
     dbg("info", "game", `Sent stored game state to new client (updatedAt=${latestStateUpdatedAt})`);
   }
   ws.on("message", async (data) => {
@@ -4011,6 +4022,15 @@ wss.on("connection", (ws, request) => {
               latestFullGameState = msg.fullState;
               latestStateUpdatedAt = incomingTs;
               persistGameState();
+              // Mirror the new roster into EVERY peer's clientGameState so
+              // their server-side dispatch/validation paths don't read a
+              // stale roster after another device hires/fires. The sender's
+              // entry was already updated above (line: `clientGameState.set(ws, gs)`).
+              for (const peer of wss.clients) {
+                if (peer === ws) continue;
+                if (peer.readyState !== WebSocket.OPEN) continue;
+                clientGameState.set(peer, gs);
+              }
               broadcastExcept(ws, {
                 type: "game_state_sync",
                 fullState: msg.fullState,

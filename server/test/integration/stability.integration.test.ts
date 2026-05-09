@@ -89,6 +89,13 @@ class ServerHarness {
   // in server.ts. Modeling it here is what lets us pin "set_project clears
   // peer state too" instead of just the sender's.
   readonly clientScratch = new Map<string, { msgsSeen: number }>();
+  // Mirrors `clientGameState` WeakMap in server.ts: the per-ws roster that
+  // dispatch/validation paths read. Latest accepted roster from any client
+  // must propagate here for ALL connected clients, not just the sender —
+  // otherwise peer dispatches operate on a stale roster server-side.
+  readonly clientGameState = new Map<string, { instances: Record<string, unknown> }>();
+  latestFullGameState: { instances: Record<string, unknown> } | null = null;
+  latestStateUpdatedAt = 0;
   latestFacilitatorOutput: FacilitatorOutput | null = null;
   private projectCwd: string;
 
@@ -114,6 +121,11 @@ class ServerHarness {
     const c: FakeClient = { id, received: [] };
     this.clients.push(c);
     this.clientScratch.set(c.id, { msgsSeen: 0 });
+    // Inherit current authoritative roster (if any) so a late-joining
+    // client's per-ws clientGameState matches what other clients see.
+    if (this.latestFullGameState) {
+      this.clientGameState.set(c.id, this.latestFullGameState);
+    }
     // Mirror wss.on("connection", …): init + chat_history + team-memory
     // restore + facilitator_output_sync if present.
     this.send(c, {
@@ -162,9 +174,13 @@ class ServerHarness {
     this.latestFacilitatorOutput = existsSync(this.facilitatorFilePath())
       ? (JSON.parse(readFileSync(this.facilitatorFilePath(), "utf-8")) as FacilitatorOutput)
       : null;
+    // The new project has its own roster; clear the cross-project cache.
+    this.latestFullGameState = null;
+    this.latestStateUpdatedAt = 0;
     // Reset every connected client's per-ws state, not just the sender.
     for (const peer of this.clients) {
       this.clientScratch.set(peer.id, { msgsSeen: 0 });
+      this.clientGameState.delete(peer.id);
       if (newMemory) this.clientProjectContext.set(peer.id, newMemory);
       else this.clientProjectContext.delete(peer.id);
       // Broadcast `init` with new workingDirectory so every device's UI
@@ -192,6 +208,44 @@ class ServerHarness {
   private bumpScratch(c: FakeClient): void {
     const s = this.clientScratch.get(c.id);
     if (s) s.msgsSeen += 1;
+  }
+
+  /**
+   * Mirrors `case "set_game_state"` in server.ts after the
+   * last-write-wins gate accepts. The fix: set the per-ws roster on EVERY
+   * connected client, not just the sender. Without this, peer devices
+   * keep server-side stale rosters; their next dispatch/validation reads
+   * `clientGameState.get(peerWs)` and fails on the freshly-hired agent.
+   */
+  setGameState(
+    c: FakeClient,
+    gs: { instances: Record<string, unknown> },
+    updatedAt: number,
+  ): void {
+    const isSeed = this.latestFullGameState === null;
+    if (!isSeed && updatedAt <= this.latestStateUpdatedAt) {
+      // Reject stale; push authoritative back to sender.
+      this.send(c, {
+        type: "game_state_sync",
+        fullState: JSON.stringify(this.latestFullGameState),
+        stateUpdatedAt: this.latestStateUpdatedAt,
+      });
+      return;
+    }
+    this.latestFullGameState = gs;
+    this.latestStateUpdatedAt = updatedAt;
+    // Set on EVERY connected client so dispatch/validation paths see the
+    // current roster regardless of which device sent it.
+    for (const peer of this.clients) {
+      this.clientGameState.set(peer.id, gs);
+      if (peer.id !== c.id) {
+        this.send(peer, {
+          type: "game_state_sync",
+          fullState: JSON.stringify(gs),
+          stateUpdatedAt: updatedAt,
+        });
+      }
+    }
   }
 
   disconnect(c: FakeClient): void {
@@ -591,6 +645,109 @@ describe("set_project sync across connected clients", () => {
       } finally {
         cleanA();
         cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 4: set_game_state leaves peer ws's clientGameState stale ────────
+
+describe("set_game_state peer sync", () => {
+  test(
+    "Mac hires an agent → server-side iPhone roster reflects it without reconnect",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // Mac hires roster R1 (has manager + coder).
+        const r1 = {
+          instances: {
+            "manager#1": { roleType: "manager", nickname: "m" },
+            "coder#1": { roleType: "coder", nickname: "c" },
+          },
+        };
+        h.setGameState(mac, r1, 1_000);
+
+        // iPhone (peer) sees the broadcast on the wire AND server-side
+        // its per-ws clientGameState now matches — its next dispatch
+        // would see "coder#1" as a hired instance.
+        const iphoneSync = iPhone.received.find(
+          (m) => m.type === "game_state_sync",
+        );
+        assert.ok(iphoneSync, "iPhone should receive game_state_sync from broadcast");
+        assert.deepEqual(
+          h.clientGameState.get(iPhone.id),
+          r1,
+          "server-side iPhone roster must update on broadcast, not stay stale",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "stale write rejected and authoritative roster is pushed back",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+
+        // Mac sets ts=2000 first.
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          2_000,
+        );
+
+        // Late-arriving stale write at ts=1000 must be rejected, and the
+        // sender pushed the current authoritative state back so it converges.
+        const before = mac.received.length;
+        h.setGameState(
+          mac,
+          { instances: { "coder#1": { roleType: "coder", nickname: "c" } } },
+          1_000,
+        );
+        const echoed = mac.received.slice(before).find(
+          (m) => m.type === "game_state_sync",
+        ) as { stateUpdatedAt: number } | undefined;
+        assert.ok(echoed, "stale writer must receive an authoritative bounce-back");
+        assert.equal(echoed.stateUpdatedAt, 2_000);
+        assert.equal(
+          h.latestStateUpdatedAt,
+          2_000,
+          "authoritative roster must NOT regress on a stale write",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a late-joining client inherits current roster server-side",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const r1 = {
+          instances: { "manager#1": { roleType: "manager", nickname: "m" } },
+        };
+        h.setGameState(mac, r1, 1_000);
+        // iPhone joins after roster is set.
+        const iPhone = h.connect("iphone");
+        assert.deepEqual(
+          h.clientGameState.get(iPhone.id),
+          r1,
+          "fresh client's server-side roster must match the authoritative state",
+        );
+      } finally {
+        cleanup();
       }
     },
   );
