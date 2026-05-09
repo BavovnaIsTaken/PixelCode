@@ -1011,6 +1011,14 @@ function sendTraits(ws: WebSocket): void {
   send(ws, { type: "agent_traits", traits: getAllTraits(traitStore) });
 }
 
+/** Broadcast updated traits to every connected client after a write. */
+function broadcastTraits(): void {
+  const msg: ServerMessage = { type: "agent_traits", traits: getAllTraits(traitStore) };
+  for (const c of wss.clients) {
+    if (c.readyState === WebSocket.OPEN) send(c, msg);
+  }
+}
+
 /**
  * Record an auto-detected lesson from runtime signals (rework, errors, clean runs).
  * Broadcasts updated traits to the client.
@@ -1030,7 +1038,7 @@ function autoLearnLesson(
   });
   dbg("info", "traits", `${type === "weakness" ? "⚡" : "✦"} [${agentId}] ${tag} (freq=${result.frequency}): ${lesson}`);
   sendDebug(ws, "info", "traits", `Lesson ${type === "weakness" ? "learned" : "confirmed"}: [${agentId}] ${lesson} (×${result.frequency})`);
-  sendTraits(ws);
+  broadcastTraits();
 }
 
 // ─── Activity log ───────────────────────────────────────────────────────────
@@ -4410,7 +4418,7 @@ wss.on("connection", (ws, request) => {
           });
           dbg("info", "traits", `Manual lesson recorded: [${msg.agentId}] ${msg.tag} (freq=${lesson.frequency})`);
           sendDebug(ws, "info", "traits", `Lesson recorded for ${msg.agentId}: ${msg.lesson}`);
-          sendTraits(ws);
+          broadcastTraits();
           break;
         }
 
@@ -4420,7 +4428,7 @@ wss.on("connection", (ws, request) => {
             dbg("info", "traits", `Lesson removed: ${msg.lessonId}`);
             sendDebug(ws, "info", "traits", `Lesson removed: ${msg.lessonId}`);
           }
-          sendTraits(ws);
+          broadcastTraits();
           break;
         }
 
