@@ -50,7 +50,7 @@ import {
 
 const localGemini = new LocalGeminiRunner();
 import { runDungeon, getChallenge } from "./dungeon.js";
-import { FacilitatorRunner, type RunnerState } from "./facilitator/runner.js";
+import { FacilitatorRunner } from "./facilitator/runner.js";
 import { GeneratorRegistry } from "./facilitator/output_generator.js";
 import {
   ClaudeQuestLineGenerator,
@@ -655,14 +655,6 @@ const nonStreamingProviders = new Map<number, NonStreamingProviderConfig>([
     },
   ],
 ]);
-
-/**
- * Per-client Facilitator System runtime state. Survives across messages on
- * the same WS so subsequent ticks/switches see the same fire-log + style.
- * Lost on reconnect (acceptable for the vertical slice; persistence lands
- * with the personalization integration).
- */
-const clientFacilitatorState = new WeakMap<WebSocket, RunnerState>();
 
 /**
  * Singleton runner with LLM-backed generators wired in at boot.
@@ -3904,25 +3896,34 @@ wss.on("connection", (ws, request) => {
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
-          // Clear per-client UI/state; restore team memory for new project if available
+          // PROJECT_CWD is global — every connected client now lives in the
+          // new project. Clear per-ws scratch + restore team memory for ALL
+          // peers, not just the sender. Otherwise iPhone keeps operating on
+          // the OLD project's metrics/log/active-tasks until it reconnects,
+          // and its agent dispatches grab the wrong project context.
           const newMemory = loadTeamMemory(PROJECT_CWD);
-          if (newMemory) clientProjectContext.set(ws, newMemory);
-          else clientProjectContext.delete(ws);
-          clientGameState.delete(ws);
-          getCommLog(ws).length = 0;
-          getMetrics(ws).clear();
-          getActiveTasks(ws).clear();
-          getAgentMap(ws).clear();
-          getEmittedTools(ws).clear();
-          // Send fresh init with the resolved session for this project
-          send(ws, {
-            type: "init",
-            sessionId: currentSessionId ?? "pending",
-            agents: agentInfoForClient(ws),
-            workingDirectory: PROJECT_CWD,
-          });
+          for (const peer of wss.clients) {
+            if (peer.readyState !== WebSocket.OPEN) continue;
+            if (newMemory) clientProjectContext.set(peer, newMemory);
+            else clientProjectContext.delete(peer);
+            clientGameState.delete(peer);
+            getCommLog(peer).length = 0;
+            getMetrics(peer).clear();
+            getActiveTasks(peer).clear();
+            getAgentMap(peer).clear();
+            getEmittedTools(peer).clear();
+            // Re-init every peer so their UI re-syncs to the new project.
+            send(peer, {
+              type: "init",
+              sessionId: currentSessionId ?? "pending",
+              agents: agentInfoForClient(peer),
+              workingDirectory: PROJECT_CWD,
+            });
+            sendTraits(peer);
+          }
           sendDebug(ws, "info", "project", `Switched to: ${newPath}`);
-          sendTraits(ws);
+          // Refresh chat history view for everyone — it just changed.
+          broadcastAll(chatHistory.snapshot());
           break;
         }
 
@@ -4136,7 +4137,6 @@ wss.on("connection", (ws, request) => {
             } as any);
             break;
           }
-          clientFacilitatorState.set(ws, result.state);
           dbg(
             "info",
             "facilitator",
@@ -4512,7 +4512,6 @@ wss.on("connection", (ws, request) => {
     agentRunner.cancelAll(ws);
     androidDeployUnwatchDevices(ws);
     connectedClients.delete(ws);
-    clientFacilitatorState.delete(ws);
     // Session presence: if primary disconnected, promote a viewer
     if (activeSession?.ws === ws) handlePrimaryDisconnect();
   });

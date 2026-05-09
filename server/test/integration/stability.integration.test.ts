@@ -82,41 +82,54 @@ interface FacilitatorOutput {
  * drift in production code surfaces here.
  */
 class ServerHarness {
-  readonly chatHistory: ChatHistory;
+  chatHistory: ChatHistory;
   readonly clients: FakeClient[] = [];
   readonly clientProjectContext = new Map<string, string>();
+  // Per-ws scratch state — mirrors clientGameState/getCommLog/getMetrics/etc.
+  // in server.ts. Modeling it here is what lets us pin "set_project clears
+  // peer state too" instead of just the sender's.
+  readonly clientScratch = new Map<string, { msgsSeen: number }>();
   latestFacilitatorOutput: FacilitatorOutput | null = null;
+  private projectCwd: string;
 
-  constructor(private readonly baseDir: string) {
+  constructor(baseDir: string) {
+    this.projectCwd = baseDir;
     this.chatHistory = new ChatHistory();
     this.chatHistory.load(this.historyFilePath());
   }
 
   // ── Storage paths (mirror `server.ts`) ─────────────────────────────────
   private historyFilePath(): string {
-    return join(this.baseDir, "history.json");
+    return join(this.projectCwd, "history.json");
   }
   private teamMemoryFilePath(): string {
-    return join(this.baseDir, "team_memory.txt");
+    return join(this.projectCwd, "team_memory.txt");
   }
   private facilitatorFilePath(): string {
-    return join(this.baseDir, "facilitator_output.json");
+    return join(this.projectCwd, "facilitator_output.json");
   }
 
   // ── Connect / disconnect ───────────────────────────────────────────────
   connect(id: string): FakeClient {
     const c: FakeClient = { id, received: [] };
     this.clients.push(c);
+    this.clientScratch.set(c.id, { msgsSeen: 0 });
     // Mirror wss.on("connection", …): init + chat_history + team-memory
     // restore + facilitator_output_sync if present.
-    this.send(c, { type: "init", sessionId: "test", agents: [] });
+    this.send(c, {
+      type: "init",
+      sessionId: "test",
+      agents: [],
+      workingDirectory: this.projectCwd,
+    });
     this.send(c, this.chatHistory.snapshot() as unknown as Record<string, unknown>);
     if (existsSync(this.teamMemoryFilePath())) {
       this.clientProjectContext.set(
         c.id,
         readFileSync(this.teamMemoryFilePath(), "utf-8"),
       );
-    } else if (existsSync(this.facilitatorFilePath())) {
+    }
+    if (existsSync(this.facilitatorFilePath())) {
       // Reload latestFacilitatorOutput from disk to mirror server boot.
       this.latestFacilitatorOutput = JSON.parse(
         readFileSync(this.facilitatorFilePath(), "utf-8"),
@@ -131,6 +144,56 @@ class ServerHarness {
     return c;
   }
 
+  /**
+   * Mirrors `case "set_project"` in server.ts: switch global PROJECT_CWD,
+   * reload chat history + team memory for the new project, and re-init
+   * EVERY connected client (not just the sender) so peer devices don't
+   * keep operating on stale state. The bug pinned by the regression test
+   * is: previously per-ws scratch + clientProjectContext was cleared only
+   * for the sender, leaving peer devices in an inconsistent state.
+   */
+  setProject(c: FakeClient, newBaseDir: string): void {
+    this.projectCwd = newBaseDir;
+    this.chatHistory = new ChatHistory();
+    this.chatHistory.load(this.historyFilePath());
+    const newMemory = existsSync(this.teamMemoryFilePath())
+      ? readFileSync(this.teamMemoryFilePath(), "utf-8")
+      : null;
+    this.latestFacilitatorOutput = existsSync(this.facilitatorFilePath())
+      ? (JSON.parse(readFileSync(this.facilitatorFilePath(), "utf-8")) as FacilitatorOutput)
+      : null;
+    // Reset every connected client's per-ws state, not just the sender.
+    for (const peer of this.clients) {
+      this.clientScratch.set(peer.id, { msgsSeen: 0 });
+      if (newMemory) this.clientProjectContext.set(peer.id, newMemory);
+      else this.clientProjectContext.delete(peer.id);
+      // Broadcast `init` with new workingDirectory so every device's UI
+      // re-syncs to the new project.
+      this.send(peer, {
+        type: "init",
+        sessionId: "test",
+        agents: [],
+        workingDirectory: this.projectCwd,
+      });
+      this.send(
+        peer,
+        this.chatHistory.snapshot() as unknown as Record<string, unknown>,
+      );
+      if (this.latestFacilitatorOutput) {
+        this.send(peer, {
+          type: "facilitator_output_sync",
+          ...this.latestFacilitatorOutput,
+        });
+      }
+    }
+  }
+
+  /** Mirrors per-ws bookkeeping done on user-message receive. */
+  private bumpScratch(c: FakeClient): void {
+    const s = this.clientScratch.get(c.id);
+    if (s) s.msgsSeen += 1;
+  }
+
   disconnect(c: FakeClient): void {
     const i = this.clients.indexOf(c);
     if (i >= 0) this.clients.splice(i, 1);
@@ -142,6 +205,7 @@ class ServerHarness {
 
   // ── Chat handler (mirrors `case "chat_message"` in server.ts) ──────────
   sendUserMessage(c: FakeClient, content: string, ts: string): void {
+    this.bumpScratch(c);
     this.chatHistory.add({
       role: "user",
       text: content,
@@ -442,6 +506,91 @@ describe("facilitator project memory survives", () => {
         );
       } finally {
         cleanup();
+      }
+    },
+  );
+});
+
+// ─── Bug 3: set_project leaves peer devices on the OLD project ───────────
+
+describe("set_project sync across connected clients", () => {
+  test(
+    "switching project re-inits all connected clients, not just sender",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        // Pre-seed projectB with a different brief on disk so we can
+        // assert peers actually reload it.
+        mkdirSync(projectB, { recursive: true });
+        writeFileSync(
+          join(projectB, "team_memory.txt"),
+          "Project B: ship Slack integration.",
+        );
+
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.sendUserMessage(mac, "msg in project A", "2026-05-09T10:00:00Z");
+        // Sanity: both clients see the projectA message.
+        assert.equal(lastChatHistory(iPhone).length, 1);
+
+        // Mac switches to project B. iPhone is still connected.
+        h.setProject(mac, projectB);
+
+        // iPhone (peer) MUST be re-inited to project B without reconnect.
+        const iPhoneInits = iPhone.received.filter(
+          (m) => m.type === "init",
+        ) as Array<{ workingDirectory: string }>;
+        assert.equal(
+          iPhoneInits[iPhoneInits.length - 1].workingDirectory,
+          projectB,
+          "peer iPhone should receive an init pointing at the new project",
+        );
+        // iPhone's chat view must reflect projectB's empty history, not
+        // projectA's stale snapshot.
+        assert.equal(
+          lastChatHistory(iPhone).length,
+          0,
+          "peer iPhone's chat must reset to projectB's history",
+        );
+        // iPhone's project memory must reload to projectB's brief.
+        assert.match(
+          h.clientProjectContext.get(iPhone.id) ?? "",
+          /Slack integration/,
+          "peer iPhone's project memory must reflect projectB's brief",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+
+  test(
+    "switching project clears peer scratch state, not just sender's",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.sendUserMessage(iPhone, "first", "2026-05-09T10:00:00Z");
+        h.sendUserMessage(iPhone, "second", "2026-05-09T10:01:00Z");
+        assert.equal(h.clientScratch.get(iPhone.id)?.msgsSeen, 2);
+
+        // Mac switches projects. iPhone's scratch should reset too —
+        // otherwise stale per-ws state from project A bleeds into B.
+        h.setProject(mac, projectB);
+        assert.equal(
+          h.clientScratch.get(iPhone.id)?.msgsSeen,
+          0,
+          "peer iPhone's scratch must be cleared when project switches",
+        );
+      } finally {
+        cleanA();
+        cleanB();
       }
     },
   );
