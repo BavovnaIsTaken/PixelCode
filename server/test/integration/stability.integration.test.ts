@@ -96,6 +96,12 @@ class ServerHarness {
   readonly clientGameState = new Map<string, { instances: Record<string, unknown> }>();
   latestFullGameState: { instances: Record<string, unknown> } | null = null;
   latestStateUpdatedAt = 0;
+  // Per-ws provider keys + the most-recent value seen on any ws. Single-
+  // tenant server, so a key typed on one device must reach the others.
+  readonly clientDeepSeekKey = new Map<string, string>();
+  readonly clientKimiKey = new Map<string, string>();
+  lastSeenDeepSeekKey: string | undefined;
+  lastSeenKimiKey: string | undefined;
   latestFacilitatorOutput: FacilitatorOutput | null = null;
   private projectCwd: string;
 
@@ -126,6 +132,10 @@ class ServerHarness {
     if (this.latestFullGameState) {
       this.clientGameState.set(c.id, this.latestFullGameState);
     }
+    // Inherit any provider keys another device already forwarded —
+    // single-tenant server, late joiner is the same user.
+    if (this.lastSeenDeepSeekKey) this.clientDeepSeekKey.set(c.id, this.lastSeenDeepSeekKey);
+    if (this.lastSeenKimiKey) this.clientKimiKey.set(c.id, this.lastSeenKimiKey);
     // Mirror wss.on("connection", …): init + chat_history + team-memory
     // restore + facilitator_output_sync if present.
     this.send(c, {
@@ -177,10 +187,14 @@ class ServerHarness {
     // The new project has its own roster; clear the cross-project cache.
     this.latestFullGameState = null;
     this.latestStateUpdatedAt = 0;
+    this.lastSeenDeepSeekKey = undefined;
+    this.lastSeenKimiKey = undefined;
     // Reset every connected client's per-ws state, not just the sender.
     for (const peer of this.clients) {
       this.clientScratch.set(peer.id, { msgsSeen: 0 });
       this.clientGameState.delete(peer.id);
+      this.clientDeepSeekKey.delete(peer.id);
+      this.clientKimiKey.delete(peer.id);
       if (newMemory) this.clientProjectContext.set(peer.id, newMemory);
       else this.clientProjectContext.delete(peer.id);
       // Broadcast `init` with new workingDirectory so every device's UI
@@ -221,7 +235,29 @@ class ServerHarness {
     c: FakeClient,
     gs: { instances: Record<string, unknown> },
     updatedAt: number,
+    opts: { deepseekApiKey?: string; kimiApiKey?: string } = {},
   ): void {
+    // Stash any newly-arrived API keys before validating + propagate to
+    // peers that don't already have one (local-typed wins). Server is
+    // single-tenant so the keys identify the user, not the ws.
+    if (opts.deepseekApiKey) {
+      this.clientDeepSeekKey.set(c.id, opts.deepseekApiKey);
+      this.lastSeenDeepSeekKey = opts.deepseekApiKey;
+      for (const peer of this.clients) {
+        if (peer.id === c.id) continue;
+        if (!this.clientDeepSeekKey.has(peer.id))
+          this.clientDeepSeekKey.set(peer.id, opts.deepseekApiKey);
+      }
+    }
+    if (opts.kimiApiKey) {
+      this.clientKimiKey.set(c.id, opts.kimiApiKey);
+      this.lastSeenKimiKey = opts.kimiApiKey;
+      for (const peer of this.clients) {
+        if (peer.id === c.id) continue;
+        if (!this.clientKimiKey.has(peer.id))
+          this.clientKimiKey.set(peer.id, opts.kimiApiKey);
+      }
+    }
     const isSeed = this.latestFullGameState === null;
     if (!isSeed && updatedAt <= this.latestStateUpdatedAt) {
       // Reject stale; push authoritative back to sender.
@@ -748,6 +784,152 @@ describe("set_game_state peer sync", () => {
         );
       } finally {
         cleanup();
+      }
+    },
+  );
+});
+
+// ─── Bug 5: provider keys typed on one device don't reach the others ─────
+
+describe("provider key cross-device propagation", () => {
+  test(
+    "key typed on Mac is available to iPhone server-side without iPhone retyping",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // Mac forwards its DeepSeek key with set_game_state. iPhone never
+        // typed one — its UI's deepseekAuthProvider returns null.
+        h.setGameState(
+          mac,
+          {
+            instances: { "manager#1": { roleType: "manager", nickname: "m" } },
+          },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-mac" },
+        );
+
+        // iPhone's server-side per-ws key now has Mac's value, so iPhone's
+        // next dispatch to a deepseek-backed agent succeeds the
+        // `clientDeepSeekKey.get(iPhoneWs)` check.
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          "sk-deepseek-mac",
+          "peer iPhone must inherit Mac's DeepSeek key without retyping",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a peer's locally-typed key is NOT overwritten by a propagated one",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // iPhone forwards its own key first.
+        h.setGameState(
+          iPhone,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-iphone" },
+        );
+        // Mac later forwards a different key — iPhone's local entry must win.
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          2_000,
+          { deepseekApiKey: "sk-deepseek-mac" },
+        );
+
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          "sk-deepseek-iphone",
+          "iPhone's locally-typed key must not be clobbered by Mac's propagation",
+        );
+        assert.equal(
+          h.clientDeepSeekKey.get(mac.id),
+          "sk-deepseek-mac",
+          "Mac sees its own key on its own ws",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a late-joining device inherits the most-recent provider key",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-mac", kimiApiKey: "sk-kimi-mac" },
+        );
+
+        // iPhone joins after the keys were already forwarded.
+        const iPhone = h.connect("iphone");
+        assert.equal(h.clientDeepSeekKey.get(iPhone.id), "sk-deepseek-mac");
+        assert.equal(h.clientKimiKey.get(iPhone.id), "sk-kimi-mac");
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "switching project clears all provider keys (different account possible)",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-projA" },
+        );
+        // Sanity: both clients have the key.
+        assert.equal(h.clientDeepSeekKey.get(mac.id), "sk-deepseek-projA");
+        assert.equal(h.clientDeepSeekKey.get(iPhone.id), "sk-deepseek-projA");
+
+        h.setProject(mac, projectB);
+        assert.equal(
+          h.clientDeepSeekKey.get(mac.id),
+          undefined,
+          "sender's key cleared on project switch",
+        );
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          undefined,
+          "peer's key cleared on project switch",
+        );
+        // A late joiner to projectB MUST NOT inherit projectA's key.
+        const newDevice = h.connect("ipad");
+        assert.equal(
+          h.clientDeepSeekKey.get(newDevice.id),
+          undefined,
+          "late-joiner to projectB inherits no key from projectA",
+        );
+      } finally {
+        cleanA();
+        cleanB();
       }
     },
   );

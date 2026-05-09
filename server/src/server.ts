@@ -628,6 +628,17 @@ const clientGameState = new WeakMap<WebSocket, GameStateData>();
 const clientDeepSeekKey = new WeakMap<WebSocket, string>();
 /** Per-client Kimi API key, forwarded from client SharedPreferences. */
 const clientKimiKey = new WeakMap<WebSocket, string>();
+/**
+ * Most-recent provider key seen on any ws. The server is single-tenant
+ * (no auth boundary), so a key the user typed on Mac is the same user's
+ * key everywhere. Late-joining devices inherit from these on connect, so
+ * iPhone that never typed the key can still dispatch to a DeepSeek agent
+ * that Mac hired. Local-typed keys on a peer always win — see
+ * `set_game_state` propagation. Cleared on `set_project` (different
+ * project may use a different account).
+ */
+let lastSeenDeepSeekKey: string | undefined;
+let lastSeenKimiKey: string | undefined;
 
 /**
  * Registry of non-streaming providers keyed by `AgentProviderType` enum index.
@@ -3728,6 +3739,10 @@ wss.on("connection", (ws, request) => {
   // Restore shared team memory for this project so every client (incl. mobile) gets captain context
   const savedMemory = loadTeamMemory(PROJECT_CWD);
   if (savedMemory) clientProjectContext.set(ws, savedMemory);
+  // Inherit any provider keys another device on this server already
+  // forwarded. Single-tenant model: keys identify the user, not the ws.
+  if (lastSeenDeepSeekKey) clientDeepSeekKey.set(ws, lastSeenDeepSeekKey);
+  if (lastSeenKimiKey) clientKimiKey.set(ws, lastSeenKimiKey);
   // Send existing chat history so new clients are in sync
   sendChatHistory(ws);
   // Send stored game state for cross-device sync
@@ -3913,6 +3928,11 @@ wss.on("connection", (ws, request) => {
           // the OLD project's metrics/log/active-tasks until it reconnects,
           // and its agent dispatches grab the wrong project context.
           const newMemory = loadTeamMemory(PROJECT_CWD);
+          // Different project may belong to a different account; force each
+          // client to re-supply provider keys instead of leaking the prior
+          // project's keys into a context they may not own.
+          lastSeenDeepSeekKey = undefined;
+          lastSeenKimiKey = undefined;
           for (const peer of wss.clients) {
             if (peer.readyState !== WebSocket.OPEN) continue;
             if (newMemory) clientProjectContext.set(peer, newMemory);
@@ -3923,6 +3943,8 @@ wss.on("connection", (ws, request) => {
             getActiveTasks(peer).clear();
             getAgentMap(peer).clear();
             getEmittedTools(peer).clear();
+            clientDeepSeekKey.delete(peer);
+            clientKimiKey.delete(peer);
             // Re-init every peer so their UI re-syncs to the new project.
             send(peer, {
               type: "init",
@@ -3954,8 +3976,29 @@ wss.on("connection", (ws, request) => {
 
           // Stash any newly-arrived API keys before validating so an
           // instance whose key arrives in the same message is accepted.
-          if (msg.deepseekApiKey) clientDeepSeekKey.set(ws, msg.deepseekApiKey);
-          if (msg.kimiApiKey) clientKimiKey.set(ws, msg.kimiApiKey);
+          // Propagate to every peer ws too: the keys identify the *user*
+          // (this server is single-tenant, no auth boundary). Otherwise
+          // Mac types the key, hires a deepseek agent → broadcast lands
+          // on iPhone, but iPhone's `clientDeepSeekKey[ws]` is empty so
+          // iPhone's first dispatch to that agent fails server-side.
+          // Don't overwrite a peer's existing key — they may have typed
+          // their own in Settings; let an explicit local entry win.
+          if (msg.deepseekApiKey) {
+            clientDeepSeekKey.set(ws, msg.deepseekApiKey);
+            lastSeenDeepSeekKey = msg.deepseekApiKey;
+            for (const peer of wss.clients) {
+              if (peer === ws || peer.readyState !== WebSocket.OPEN) continue;
+              if (!clientDeepSeekKey.has(peer)) clientDeepSeekKey.set(peer, msg.deepseekApiKey);
+            }
+          }
+          if (msg.kimiApiKey) {
+            clientKimiKey.set(ws, msg.kimiApiKey);
+            lastSeenKimiKey = msg.kimiApiKey;
+            for (const peer of wss.clients) {
+              if (peer === ws || peer.readyState !== WebSocket.OPEN) continue;
+              if (!clientKimiKey.has(peer)) clientKimiKey.set(peer, msg.kimiApiKey);
+            }
+          }
 
           // Pre-validate the payload — bad role types, two managers,
           // out-of-range stats, or non-Claude hires without a session key
