@@ -2566,6 +2566,7 @@ let tailscaleUrl: string | null = null;
 /** Shared HTTP request handler — serves /admin/* and OTA artifacts (IPA + manifest). */
 function makeOtaHandler() {
   return async (req: IncomingMessage, res: ServerResponse) => {
+    try {
     const url = req.url ?? "/";
 
     // Admin UI + API takes precedence over OTA. Loopback-only inside the handler.
@@ -2626,6 +2627,13 @@ function makeOtaHandler() {
       "Content-Type": contentType[ext] ?? "application/octet-stream",
     });
     res.end(readFileSync(filePath));
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end("Internal server error");
+      }
+      console.error("[server] HTTP handler error:", err);
+    }
   };
 }
 
