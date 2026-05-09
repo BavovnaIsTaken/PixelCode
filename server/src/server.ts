@@ -3664,6 +3664,17 @@ function broadcastExcept(sender: WebSocket, msg: ServerMessage): void {
   }
 }
 
+/**
+ * Apply a project-memory update to every currently-connected client.
+ * `clientProjectContext` is a per-ws WeakMap, but PROJECT_CWD is global —
+ * if we only set on the sender, peer devices keep stale/empty memory until
+ * they reconnect, and their next agent dispatch literally asks
+ * "what project are we in?". Mirrors `chatHistory.snapshot` broadcasts.
+ */
+function setTeamMemoryEverywhere(memory: string): void {
+  for (const client of wss.clients) clientProjectContext.set(client, memory);
+}
+
 /** Send the full chat history snapshot to a single client (e.g. on connect).
  *  Always sent — even when empty — so the client can transition out of the
  *  `syncing` state on resumed sessions with no prior messages. */
@@ -3917,7 +3928,7 @@ wss.on("connection", (ws, request) => {
 
         case "set_project_context": {
           const memories = (msg as { type: "set_project_context"; memories: string }).memories;
-          clientProjectContext.set(ws, memories);
+          setTeamMemoryEverywhere(memories);
           saveTeamMemory(PROJECT_CWD, memories);
           dbg("info", "project", `Project memory set (${memories.length} chars)`);
           sendDebug(ws, "info", "project", `Team memory loaded (${memories.length} chars)`);
@@ -4140,7 +4151,7 @@ wss.on("connection", (ws, request) => {
           const projectMemory = deriveProjectMemoryFromBrief(
             parsed.value.projectDescription,
           );
-          clientProjectContext.set(ws, projectMemory);
+          setTeamMemoryEverywhere(projectMemory);
           saveTeamMemory(PROJECT_CWD, projectMemory);
           const facilitatorPayload = {
             styleId: parsed.value.style.id,

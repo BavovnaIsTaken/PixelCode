@@ -175,7 +175,10 @@ class ServerHarness {
     const memory = deriveProjectMemoryFromBrief(brief, now);
     mkdirSync(dirname(this.teamMemoryFilePath()), { recursive: true });
     writeFileSync(this.teamMemoryFilePath(), memory);
-    this.clientProjectContext.set(c.id, memory);
+    // Mirror server.ts: set on every currently-connected client, not just
+    // the sender. Otherwise peer devices keep stale/empty memory until
+    // they reconnect.
+    for (const peer of this.clients) this.clientProjectContext.set(peer.id, memory);
 
     this.broadcastAll({
       type: "facilitator_seeded",
@@ -321,6 +324,38 @@ describe("facilitator project memory survives", () => {
           prompt,
           /If asked which project you're working on, ground answers in this brief/,
           "prompt must instruct the agent NOT to ask 'what project'",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a device ALREADY connected when seed lands also gets project context",
+    () => {
+      // Regression: previously `clientProjectContext.set(ws, …)` ran only
+      // on the sending ws. A peer device that was already connected when
+      // facilitator_start fired kept its old (or empty) context until it
+      // reconnected — so its agent dispatches asked "what project are we in?"
+      // even though the brief was already on disk.
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        // iPhone runs facilitator_start AFTER both clients are already
+        // connected. Mac must still see the brief in its prompt.
+        h.facilitatorSeed(
+          iPhone,
+          "Ship a Slack bot for stand-ups.",
+          new Date("2026-05-09T10:00:00Z"),
+        );
+        const macPrompt = h.promptFor(mac, "tech-lead#1");
+        assert.match(
+          macPrompt,
+          /Slack bot/,
+          "Mac was connected at seed time → must inherit the brief without reconnect",
         );
       } finally {
         cleanup();
