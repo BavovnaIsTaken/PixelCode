@@ -1820,6 +1820,7 @@ function detectImageMimeType(base64: string): "image/jpeg" | "image/png" | "imag
 }
 
 async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string, images?: string[]): Promise<void> {
+  let _queryTimedOut = false;
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -1918,6 +1919,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       ? { dispatch: createDispatchServer(ws) }
       : undefined;
 
+    const queryAbort = new AbortController();
     const queryOptions = {
       systemPrompt: finalSystemPrompt,
       model: targetModel,
@@ -1929,6 +1931,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       maxTurns: 50,
       persistSession: true,
       continue: false,
+      abortController: queryAbort,
       ...(hasSession ? { resume: existingSessionId } : {}),
     };
 
@@ -2048,6 +2051,14 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             options: queryOptions,
           });
 
+    // Abort after 5 minutes — a hung API call would lock withSessionLock
+    // forever, blocking every subsequent manager query.
+    const _queryTimeoutId = setTimeout(() => {
+      _queryTimedOut = true;
+      queryAbort.abort();
+    }, 5 * 60_000);
+
+    try {
     let messageCount = 0;
     for await (const message of q) {
       messageCount++;
@@ -2102,8 +2113,13 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     sendDebug(ws, "info", "session",
       `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${currentSessionId?.slice(0, 12) ?? "?"}…`
     );
+    } finally {
+      clearTimeout(_queryTimeoutId);
+    }
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const errMsg = _queryTimedOut
+      ? `Manager query timed out after 5 minutes — API may be unresponsive`
+      : err instanceof Error ? err.message : String(err);
     dbg("error", "session", `Query failed: ${errMsg}`);
     sendDebug(ws, "error", "session", `Query FAILED: ${errMsg}`);
     // If the persisted session is unrecoverable (binary deleted the JSONL,

@@ -168,6 +168,7 @@ export class AgentRunner {
   ): Promise<void> {
     const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions, techLeadDigest } = params;
 
+    let _timedOut = false;
     try {
       // Build the sub-agent's system prompt
       const agentTraits = formatTraitsForPrompt(traitStore, agentId);
@@ -210,6 +211,14 @@ export class AgentRunner {
       let costUsd = 0;
       let durationMs = 0;
 
+      // Abort after 3 minutes — a stuck sub-agent holds a MAX_CONCURRENT slot
+      // and starves other dispatches.
+      const _timeoutId = setTimeout(() => {
+        _timedOut = true;
+        abortController.abort();
+      }, 3 * 60_000);
+
+      try {
       for await (const message of q) {
         // Forward all messages for real-time UI updates
         params.onMessage(message, agentId, dispatchId);
@@ -245,9 +254,14 @@ export class AgentRunner {
         costUsd,
         durationMs,
       });
+      } finally {
+        clearTimeout(_timeoutId);
+      }
     } catch (err) {
-      if (abortController.signal.aborted) return; // cancelled, not an error
-      const errMsg = err instanceof Error ? err.message : String(err);
+      if (abortController.signal.aborted && !_timedOut) return; // explicit cancel
+      const errMsg = _timedOut
+        ? `Sub-agent ${agentId} timed out after 3 minutes`
+        : err instanceof Error ? err.message : String(err);
       params.onError(agentId, dispatchId, errMsg);
     }
   }

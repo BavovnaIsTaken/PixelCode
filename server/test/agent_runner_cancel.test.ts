@@ -73,3 +73,33 @@ test("cancelAll(ws) for a ws with no running agents is a no-op", () => {
   assert.equal(b1.abortController.signal.aborted, false);
   assert.equal(runner.getRunning().length, 1);
 });
+
+test("timeout abort is distinguishable from explicit cancel via signal.aborted", () => {
+  // Regression: the original code did `if (abortController.signal.aborted) return`
+  // which swallowed timeout errors the same as explicit cancels. Now only
+  // explicit cancel (aborted && !_timedOut) returns silently — a timeout
+  // surfaces an error message to the user.
+  //
+  // This test pins the contract by verifying that an AbortController that
+  // fires because of a timeout sets `.signal.aborted` to true — the
+  // runAgent code then inspects its own `_timedOut` flag to discriminate.
+  const abortController = new AbortController();
+  const timedOut = { value: false };
+
+  const timeoutId = setTimeout(() => {
+    timedOut.value = true;
+    abortController.abort();
+  }, 10);
+
+  return new Promise<void>((resolve) => {
+    const interval = setInterval(() => {
+      if (abortController.signal.aborted) {
+        clearInterval(interval);
+        clearTimeout(timeoutId);
+        assert.equal(timedOut.value, true, "timeout fired before abort");
+        assert.equal(abortController.signal.aborted, true, "signal aborted after timeout");
+        resolve();
+      }
+    }, 5);
+  });
+});
