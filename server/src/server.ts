@@ -3896,7 +3896,9 @@ wss.on("connection", (ws, request) => {
           persistSession();
           chatHistory.clear();
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          // Broadcast cleared init to all clients so every device resets.
+          // Broadcast cleared init + empty chat_history to all clients so
+          // every device's chat panel clears — without chat_history peers
+          // keep showing the old messages until reconnect.
           for (const c of wss.clients) {
             if (c.readyState !== WebSocket.OPEN) continue;
             send(c as WebSocket, {
@@ -3905,6 +3907,7 @@ wss.on("connection", (ws, request) => {
               agents: agentInfoForClient(c as WebSocket),
               workingDirectory: PROJECT_CWD,
             });
+            sendChatHistory(c as WebSocket);
           }
           break;
         }

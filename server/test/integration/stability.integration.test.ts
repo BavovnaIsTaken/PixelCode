@@ -367,6 +367,19 @@ class ServerHarness {
   }
 
   /**
+   * Mirrors `case "new_chat"` in server.ts — clears history and broadcasts
+   * both `init` and `chat_history` to every peer.
+   */
+  newChat(initiator: FakeClient): void {
+    this.chatHistory.clear();
+    this.chatHistory.save(this.historyFilePath());
+    for (const c of this.clients) {
+      this.send(c, { type: "init", sessionId: "pending" });
+      this.send(c, this.chatHistory.snapshot() as unknown as Record<string, unknown>);
+    }
+  }
+
+  /**
    * Mirrors the part of `case "facilitator_start"` that runs after the
    * seed succeeds: persist the output AND distil project memory so the
    * next agent prompt has grounding. The latter is what was missing.
@@ -479,6 +492,35 @@ describe("chat sync across connected clients", () => {
       assert.deepEqual(
         replayed.map((m) => m.text),
         ["First message", "Second message"],
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("new_chat broadcasts empty chat_history to ALL peers, not just the initiator", () => {
+    // Regression: new_chat only sent `init` to peers; the chat panel on
+    // peer devices kept showing the old messages until reconnect.
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const iPhone = h.connect("iphone");
+      const mac = h.connect("mac");
+
+      h.sendUserMessage(iPhone, "Old message", "2026-05-09T10:00:00Z");
+      assert.equal(lastChatHistory(mac).length, 1, "mac has old message");
+
+      h.newChat(iPhone); // initiator clears, broadcasts to all
+
+      assert.equal(
+        lastChatHistory(mac).length,
+        0,
+        "mac must receive empty chat_history after new_chat"
+      );
+      assert.equal(
+        lastChatHistory(iPhone).length,
+        0,
+        "iPhone must also receive empty chat_history",
       );
     } finally {
       cleanup();
