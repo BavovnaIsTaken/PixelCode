@@ -3964,6 +3964,17 @@ wss.on("connection", (ws, request) => {
             getEmittedTools(peer).clear();
             clientDeepSeekKey.delete(peer);
             clientKimiKey.delete(peer);
+            // In-flight flags reset because we just cancelled every running
+            // agent above. Without these resets a peer's manager appears
+            // busy forever (manager_busy guard never lifts) and the
+            // first message after switch can be silently swallowed.
+            clientSentAssistantMessage.delete(peer);
+            managerBusy.delete(peer);
+            // Tool-use → agent map is keyed by tool_use_id from the OLD
+            // project's running agents; nothing in it is reachable now.
+            toolUseIdToAgent.get(peer)?.clear();
+            // Activity ring is the UI log for the prior project.
+            clientQueryActivities.get(peer)?.splice(0);
             // Re-init every peer so their UI re-syncs to the new project.
             send(peer, {
               type: "init",
