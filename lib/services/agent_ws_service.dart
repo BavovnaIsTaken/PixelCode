@@ -263,7 +263,7 @@ class AgentWsService {
       'content': content,
       'agentId': agentId,
       if (images != null && images.isNotEmpty) 'images': images,
-      if (localId != null) 'localId': localId,
+      'localId': ?localId,
     });
   }
 

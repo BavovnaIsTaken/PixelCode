@@ -145,27 +145,6 @@ void main() {
   output.writeln('import \'dart:ui\';');
   output.writeln('');
 
-  // Helper to convert sprite to ARGB list
-  String spriteToArgb(Sprite s) {
-    final buf = StringBuffer();
-    buf.writeln('  // ${s.width}x${s.height}');
-    buf.writeln('  width: ${s.width}, height: ${s.height},');
-    buf.write('  pixels: [');
-    for (var i = 0; i < s.pixels.length; i++) {
-      if (i % s.width == 0) buf.write('\n    ');
-      final idx = s.pixels[i];
-      if (idx == 0) {
-        buf.write('0x00000000,');
-      } else if (idx < palette.length) {
-        buf.write('0x${palette[idx].toRadixString(16).padLeft(8, '0')},');
-      } else {
-        buf.write('0x00000000,');
-      }
-    }
-    buf.writeln('\n  ],');
-    return buf.toString();
-  }
-
   // Ship frames
   output.writeln('// Ship sprite: 24 rotation frames, 16x16 each');
   output.writeln('const _ogShipFrames = <List<int>>[');
@@ -257,7 +236,6 @@ void main() {
   for (final pu in ['pu_shield', 'pu_aimed', 'pu_rapid', 'pu_multi', 'pu_ass', 'pu_heavy', 'pu_bounce']) {
     final frames = allSprites[pu];
     if (frames == null || frames.isEmpty) continue;
-    final s = frames[0];
     final dartName = pu.split('_').map((w) => w[0].toUpperCase() + w.substring(1)).join('');
     outputSingle(dartName, pu);
   }

@@ -156,13 +156,11 @@ void main() {
 
     testWidgets('displays cancel button when training',
         (WidgetTester tester) async {
-      var cancelCalled = false;
-
       await tester.pumpWidget(buildTestApp(
         isTraining: true,
         completedRuns: 3,
         totalRuns: 10,
-        onCancel: () => cancelCalled = true,
+        onCancel: () {},
       ));
 
       expect(find.byKey(const Key('cancel-training')), findsOneWidget);
