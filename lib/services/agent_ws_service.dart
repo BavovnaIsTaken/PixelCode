@@ -23,6 +23,7 @@ class AgentWsService {
   bool _isConnected = false;
   bool _disposed = false;
   Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
 
   /// Outbox for messages submitted while the socket is down. Drained in
   /// FIFO order after the next successful (re)connect, immediately after
@@ -140,6 +141,7 @@ class AgentWsService {
       // dispose() may have been called while we were awaiting the connection.
       if (_disposed) { await _ws?.close(); return; }
       _isConnected = true;
+      _reconnectAttempt = 0;
       if (!_connectionController.isClosed) _connectionController.add(true);
       _emitPhase(null);
       _reconnectTimer?.cancel();
@@ -686,15 +688,14 @@ class AgentWsService {
 
   void _scheduleReconnect(String url) {
     if (_disposed) return;
-    _log('Reconnect scheduled in 3s → $url');
+    final delay = backoffDelay(_reconnectAttempt, Random().nextDouble());
+    _reconnectAttempt++;
+    _log('Reconnect in ${delay.inMilliseconds}ms (attempt $_reconnectAttempt) → $url');
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(
-      const Duration(seconds: 3),
-      () {
-        _emitPhase('RTRY');
-        connect(url: url);
-      },
-    );
+    _reconnectTimer = Timer(delay, () {
+      _emitPhase('RTRY');
+      connect(url: url);
+    });
     // While the timer is counting down, surface a WAIT badge — but only if
     // we're not already showing a more specific terminal phase like FAIL/ERR
     // (those flip to WAIT after a brief moment so the user sees the cause first).
@@ -704,6 +705,15 @@ class AgentWsService {
       if (_reconnectTimer?.isActive != true) return;
       _emitPhase('WAIT');
     });
+  }
+
+  /// Exponential backoff with ±20% jitter. Caps at 30 s.
+  /// [jitter] is a [0, 1) random value — injectable for tests.
+  @visibleForTesting
+  static Duration backoffDelay(int attempt, double jitter) {
+    final base = min(1 << attempt, 30); // seconds: 1,2,4,8,16,30,30,…
+    final ms = (base * 1000 * (0.8 + jitter * 0.4)).round();
+    return Duration(milliseconds: ms);
   }
 
   Future<void> dispose() async {

@@ -60,7 +60,7 @@ class _FakeWs extends AgentWsService {
 
   @override
   void sendMessage(String content,
-      {String agentId = 'manager', List<String>? images}) {
+      {String agentId = 'manager', List<String>? images, String? localId}) {
     sent.add({'op': 'sendMessage', 'content': content, 'agentId': agentId});
   }
 
