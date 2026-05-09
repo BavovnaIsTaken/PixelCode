@@ -3941,6 +3941,14 @@ wss.on("connection", (ws, request) => {
           if (dropped > 0) {
             dbg("info", "queue", `Dropped ${dropped} queued task(s) on project switch`);
           }
+          // Kill in-flight iOS / Android deploy processes — their cwd and
+          // build output paths point at projectA, so leaving them running
+          // after a switch produces artifacts attributed to projectB.
+          for (const peer of wss.clients) {
+            if (peer.readyState !== WebSocket.OPEN) continue;
+            iosDeployCancel(peer);
+            androidDeployCancel(peer);
+          }
           // PROJECT_CWD is global — every connected client now lives in the
           // new project. Clear per-ws scratch + restore team memory for ALL
           // peers, not just the sender. Otherwise iPhone keeps operating on
@@ -4620,6 +4628,12 @@ wss.on("connection", (ws, request) => {
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
     agentRunner.cancelAll(ws);
     androidDeployUnwatchDevices(ws);
+    // Disconnecting client may have an iOS/Android deploy in flight; the
+    // child process is keyed on this ws and there's nobody left to cancel
+    // it via UI. Without these calls the build keeps running orphaned and
+    // its temp artifacts pile up under ~/.pixelcode until next restart.
+    iosDeployCancel(ws);
+    androidDeployCancel(ws);
     connectedClients.delete(ws);
     // Session presence: if primary disconnected, promote a viewer
     if (activeSession?.ws === ws) handlePrimaryDisconnect();
