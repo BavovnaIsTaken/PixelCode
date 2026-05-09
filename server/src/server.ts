@@ -3922,6 +3922,15 @@ wss.on("connection", (ws, request) => {
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
+          // Reload other per-project caches so peers don't read the OLD
+          // project's roster / facilitator output on the new project — and
+          // so the next persist doesn't clobber the new project's disk
+          // file with stale data from the previous one.
+          latestFullGameState = null;
+          latestStateUpdatedAt = 0;
+          latestFacilitatorOutput = null;
+          loadPersistedGameState();
+          loadPersistedFacilitatorOutput();
           // PROJECT_CWD is global — every connected client now lives in the
           // new project. Clear per-ws scratch + restore team memory for ALL
           // peers, not just the sender. Otherwise iPhone keeps operating on
@@ -3953,6 +3962,22 @@ wss.on("connection", (ws, request) => {
               workingDirectory: PROJECT_CWD,
             });
             sendTraits(peer);
+            // Push the new project's roster + facilitator output so peers
+            // don't keep the prior project's UI state until first reload.
+            if (latestFullGameState) {
+              send(peer, {
+                type: "game_state_sync",
+                fullState: latestFullGameState,
+                stateUpdatedAt: latestStateUpdatedAt,
+              } as any);
+              try {
+                const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
+                if (parsed.instances) clientGameState.set(peer, parsed as GameStateData);
+              } catch { /* malformed blob; let next set_game_state seed it */ }
+            }
+            if (latestFacilitatorOutput) {
+              send(peer, { type: "facilitator_output_sync", ...(latestFacilitatorOutput as object) } as any);
+            }
           }
           sendDebug(ws, "info", "project", `Switched to: ${newPath}`);
           // Refresh chat history view for everyone — it just changed.

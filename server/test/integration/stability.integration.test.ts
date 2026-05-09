@@ -121,6 +121,9 @@ class ServerHarness {
   private facilitatorFilePath(): string {
     return join(this.projectCwd, "facilitator_output.json");
   }
+  private gameStateFilePath(): string {
+    return join(this.projectCwd, "game_state.json");
+  }
 
   // ── Connect / disconnect ───────────────────────────────────────────────
   connect(id: string): FakeClient {
@@ -181,12 +184,16 @@ class ServerHarness {
     const newMemory = existsSync(this.teamMemoryFilePath())
       ? readFileSync(this.teamMemoryFilePath(), "utf-8")
       : null;
+    // The new project has its own caches on disk; reload them. Without
+    // this, server keeps the OLD project's roster + facilitator output
+    // and clobbers the new project's disk file on next persist.
+    this.latestFullGameState = existsSync(this.gameStateFilePath())
+      ? (JSON.parse(readFileSync(this.gameStateFilePath(), "utf-8")) as { instances: Record<string, unknown> })
+      : null;
+    this.latestStateUpdatedAt = this.latestFullGameState ? Date.now() : 0;
     this.latestFacilitatorOutput = existsSync(this.facilitatorFilePath())
       ? (JSON.parse(readFileSync(this.facilitatorFilePath(), "utf-8")) as FacilitatorOutput)
       : null;
-    // The new project has its own roster; clear the cross-project cache.
-    this.latestFullGameState = null;
-    this.latestStateUpdatedAt = 0;
     this.lastSeenDeepSeekKey = undefined;
     this.lastSeenKimiKey = undefined;
     // Reset every connected client's per-ws state, not just the sender.
@@ -209,6 +216,14 @@ class ServerHarness {
         peer,
         this.chatHistory.snapshot() as unknown as Record<string, unknown>,
       );
+      if (this.latestFullGameState) {
+        this.send(peer, {
+          type: "game_state_sync",
+          fullState: JSON.stringify(this.latestFullGameState),
+          stateUpdatedAt: this.latestStateUpdatedAt,
+        });
+        this.clientGameState.set(peer.id, this.latestFullGameState);
+      }
       if (this.latestFacilitatorOutput) {
         this.send(peer, {
           type: "facilitator_output_sync",
@@ -789,7 +804,87 @@ describe("set_game_state peer sync", () => {
   );
 });
 
-// ─── Bug 5: provider keys typed on one device don't reach the others ─────
+// ─── Bug 5: project switch leaves stale per-project caches behind ───────
+
+describe("project switch reloads per-project caches", () => {
+  test(
+    "switching projects clears the OLD roster so the new project reads its own disk",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        // projectA: a peer roster R_A.
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const rA = {
+          instances: { "manager#1": { roleType: "manager", nickname: "m_A" } },
+        };
+        h.setGameState(mac, rA, 1_000);
+
+        // Pre-seed projectB on disk with a different roster so the
+        // post-switch state must come from disk, not RAM.
+        mkdirSync(projectB, { recursive: true });
+        const rB = {
+          instances: {
+            "tech-lead#1": { roleType: "tech-lead", nickname: "tl_B" },
+          },
+        };
+        writeFileSync(join(projectB, "game_state.json"), JSON.stringify(rB));
+
+        h.setProject(mac, projectB);
+
+        // Server-side authoritative state must reflect projectB, not A.
+        assert.deepEqual(
+          h.latestFullGameState,
+          rB,
+          "post-switch authoritative roster must come from projectB's disk",
+        );
+        // Mac's per-ws clientGameState must also match projectB's roster.
+        assert.deepEqual(
+          h.clientGameState.get(mac.id),
+          rB,
+          "Mac's per-ws roster updates to projectB after switch",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+
+  test(
+    "switching to a fresh project drops the prior facilitator output",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        h.facilitatorSeed(
+          mac,
+          "Build projectA: a thing.",
+          new Date("2026-05-09T10:00:00Z"),
+        );
+        assert.ok(h.latestFacilitatorOutput, "projectA seeded the cache");
+
+        // projectB has nothing on disk.
+        mkdirSync(projectB, { recursive: true });
+        h.setProject(mac, projectB);
+
+        assert.equal(
+          h.latestFacilitatorOutput,
+          null,
+          "fresh projectB must clear projectA's cached facilitator output",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 6: provider keys typed on one device don't reach the others ─────
 
 describe("provider key cross-device propagation", () => {
   test(
