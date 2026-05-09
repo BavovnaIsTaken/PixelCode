@@ -3621,6 +3621,23 @@ function shutdownMdns(signal: string): void {
 process.on("SIGINT", () => shutdownMdns("SIGINT"));
 process.on("SIGTERM", () => shutdownMdns("SIGTERM"));
 
+// Prevent unhandled promise rejections from crashing the server —
+// individual handler failures (bad JSON, SDK timeout) must not kill all
+// connected sessions.
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] Unhandled rejection:", reason);
+});
+
+// For uncaught synchronous exceptions the process is in undefined state;
+// flush the board and let the launcher restart.
+let _uncaughtExiting = false;
+process.on("uncaughtException", (err) => {
+  if (_uncaughtExiting) return;
+  _uncaughtExiting = true;
+  console.error("[server] Uncaught exception:", err);
+  gracefulExit(1, `uncaughtException: ${err.message}`);
+});
+
 // ─── Admin context (status / config / restart / stop / logs) ────────────────
 
 adminContext = {
@@ -3691,6 +3708,13 @@ console.log(`   Admin UI:        http://localhost:${PORT}/admin/  (loopback only
 console.log(`   Config file:     ${__configSource.filePath}`);
 console.log(`   Roles available: ${Object.keys(roleCatalog).join(", ")}`);
 console.log(`   Trait memory:    ${getAllTraits(traitStore).length} lessons loaded`);
+
+wss.on("error", (err) => {
+  console.error("[server] WebSocketServer error:", err);
+});
+httpServer.on("error", (err) => {
+  console.error("[server] HTTP server error:", err);
+});
 
 wss.on("connection", (ws, request) => {
   wsClientsReady = true;
@@ -4621,6 +4645,13 @@ wss.on("connection", (ws, request) => {
       sendDebug(ws, "error", "ws", errMsg);
       send(ws, { type: "error", message: errMsg });
     }
+  });
+
+  // Without this handler, network errors (ECONNRESET etc.) propagate as
+  // uncaught exceptions and crash the entire server for one bad connection.
+  ws.on("error", (err) => {
+    const label = connectedClients.get(ws)?.deviceName ?? "unknown";
+    dbg("warn", "ws", `WebSocket error from ${label}: ${err.message}`);
   });
 
   ws.on("close", () => {
