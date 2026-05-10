@@ -25,7 +25,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 const RESTART_EXIT_CODE = 75;
-const READINESS_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_POLL_MS = 200;
 const STOP_GRACE_MS = 5_000;
 const BOOT_LOG_CAP = 400;
@@ -144,9 +144,14 @@ export function runLauncher(opts: LauncherOptions): void {
     state.lastExitCode = null;
     state.lastSignal = null;
 
+    // Pin the child's cwd to the server project root (parent of serverEntry).
+    // If the launcher's own cwd was deleted (e.g. legacy `launcher/` dir wiped
+    // during the PixelDock merge), inheriting it would crash esbuild on
+    // `process.cwd()` with ENOENT before the server even starts.
     const child = spawn(opts.tsxBin, [opts.serverEntry, ...opts.serverArgs], {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
+      cwd: dirname(dirname(opts.serverEntry)),
     });
 
     state.child = child;
