@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/game_economy.dart';
+import '../../providers/game_economy_provider.dart';
 
 /// Data class for custom agent spawn submission.
 class CustomAgentSpawnData {
@@ -67,12 +68,20 @@ class _CustomAgentSpawnFormState extends ConsumerState<CustomAgentSpawnForm> {
   String _selectedPreset = 'balanced';
   final String _formId = 'spawn-form-1';
 
+  bool _userEditedNickname = false;
+  bool _settingNicknameProgrammatically = false;
+
   @override
   void initState() {
     super.initState();
     _formKey = GlobalKey<FormState>();
     _nicknameCtrl = TextEditingController();
     _promptCtrl = TextEditingController();
+    _nicknameCtrl.addListener(() {
+      if (_settingNicknameProgrammatically) return;
+      _userEditedNickname = true;
+    });
+    _rerollNickname();
   }
 
   @override
@@ -80,6 +89,28 @@ class _CustomAgentSpawnFormState extends ConsumerState<CustomAgentSpawnForm> {
     _nicknameCtrl.dispose();
     _promptCtrl.dispose();
     super.dispose();
+  }
+
+  void _rerollNickname() {
+    Iterable<String> used = const [];
+    try {
+      used = ref
+          .read(gameEconomyProvider)
+          .agents
+          .values
+          .map((a) => a.nickname);
+    } catch (_) {
+      // Game-economy provider unavailable (e.g., isolated widget tests with
+      // a bare ProviderScope). Suggested name still works without team-scope
+      // uniqueness — duplicates can be re-rolled via the dice button.
+    }
+    final suggested =
+        pickRoleNickname(_selectedRole, excludeNicknames: used);
+    _settingNicknameProgrammatically = true;
+    _nicknameCtrl.text = suggested;
+    _settingNicknameProgrammatically = false;
+    _userEditedNickname = false;
+    if (mounted) setState(() {});
   }
 
   void _applyPreset(String presetKey) {
@@ -157,9 +188,15 @@ class _CustomAgentSpawnFormState extends ConsumerState<CustomAgentSpawnForm> {
             TextFormField(
               key: const Key('spawn-nickname'),
               controller: _nicknameCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'e.g., Speedy Coder',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  key: const Key('spawn-nickname-reroll'),
+                  icon: const Icon(Icons.casino_outlined),
+                  tooltip: 'Інше імʼя',
+                  onPressed: _rerollNickname,
+                ),
               ),
               validator: (v) {
                 if (v == null || v.trim().isEmpty) {
@@ -181,9 +218,9 @@ class _CustomAgentSpawnFormState extends ConsumerState<CustomAgentSpawnForm> {
               isExpanded: true,
               value: _selectedRole,
               onChanged: (value) {
-                if (value != null) {
-                  setState(() => _selectedRole = value);
-                }
+                if (value == null) return;
+                setState(() => _selectedRole = value);
+                if (!_userEditedNickname) _rerollNickname();
               },
               items: [
                 'coder',

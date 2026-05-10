@@ -5,6 +5,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
 
 import 'agent_message.dart';
 import 'app_theme.dart';
@@ -41,7 +42,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.garage => 'Гараж',
         OfficeLevel.smallOffice => 'Маленький офіс',
         OfficeLevel.modernOffice => 'Модерн офіс',
-        OfficeLevel.techHub => 'Тех хаб',
+        OfficeLevel.techHub => 'Тех-хаб',
         OfficeLevel.campus => 'Кампус',
       };
 
@@ -53,7 +54,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice =>
           'Сучасний офіс з ергономічними кріслами та швидким інтернетом.',
         OfficeLevel.techHub =>
-          'Стильний тех хаб з неоновим підсвічуванням та топовим залізом.',
+          'Стильний тех-хаб з неоновим підсвічуванням та топовим залізом.',
         OfficeLevel.campus =>
           'Розкішний кампус з усіма зручностями. Мрія кожного розробника.',
       };
@@ -612,6 +613,12 @@ class RoleCatalogEntry {
   /// Defaults to 0 (Claude).
   final int defaultProvider;
 
+  /// Ukrainian personal-name pool. New seeds / custom spawns pick a random name
+  /// from here (excluding names already used on the team). Pool intentionally
+  /// thematic per role (martial for security, lyrical for artist, etc.) so the
+  /// generated team reads like a curated cast, not random noise.
+  final List<String> nicknamePool;
+
   final AgentPassive passive;
 
   const RoleCatalogEntry({
@@ -623,6 +630,7 @@ class RoleCatalogEntry {
     required this.hireCost,
     required this.salary,
     required this.passive,
+    this.nicknamePool = const [],
     this.singleton = false,
     this.defaultSeedCount = 0,
     this.defaultProvider = 0,
@@ -640,6 +648,7 @@ const roleCatalog = <RoleCatalogEntry>[
     salary: 50,
     singleton: true,
     defaultSeedCount: 1,
+    nicknamePool: ['Остап', 'Святослав', 'Орест', 'Левко'],
     passive: AgentPassive(
       icon: '🧠',
       name: 'Tactical Mind',
@@ -657,6 +666,7 @@ const roleCatalog = <RoleCatalogEntry>[
     hireCost: 0,
     salary: 40,
     defaultSeedCount: 1,
+    nicknamePool: ['Юрій', 'Степан', 'Ярема', 'Влад'],
     passive: AgentPassive(
       icon: '⌨️',
       name: 'Speed Typing',
@@ -673,6 +683,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Деталі low-level реалізації та pixel-perfect UI.',
     hireCost: 500,
     salary: 80,
+    nicknamePool: ['Олег', 'Михайло', 'Ігор', 'Антін'],
     passive: AgentPassive(
       icon: '🏗️',
       name: 'System Vision',
@@ -689,6 +700,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Не пише й не змінює код — тільки оглядає.',
     hireCost: 300,
     salary: 40,
+    nicknamePool: ['Тарас', 'Лука', 'Ілля', 'Захар'],
     passive: AgentPassive(
       icon: '🔍',
       name: 'Bug Radar',
@@ -705,6 +717,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Архітектурні рішення й візуальний дизайн — поза зоною.',
     hireCost: 300,
     salary: 40,
+    nicknamePool: ['Петро', 'Кирило', 'Гліб', 'Микита'],
     passive: AgentPassive(
       icon: '👆',
       name: 'Swipe Master',
@@ -721,12 +734,13 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Не вміє в polish фіч та візуал.',
     hireCost: 800,
     salary: 60,
+    nicknamePool: ['Роман', 'Євген', 'Володимир', 'Адам'],
     passive: AgentPassive(
       icon: '🛡️',
       name: 'Firewall',
       nameUk: 'Фаєрвол',
       description:
-          'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 в коді.',
+          'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 у коді.',
     ),
   ),
   RoleCatalogEntry(
@@ -737,6 +751,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Бекенд-архітектура й алгоритми — не профіль.',
     hireCost: 400,
     salary: 45,
+    nicknamePool: ['Маркіян', 'Северин', 'Юрко', 'Стах'],
     passive: AgentPassive(
       icon: '🎨',
       name: 'Pixel Perfect',
@@ -754,6 +769,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Без LLM-задач у беклозі простоює — звичайний CRUD не його профіль.',
     hireCost: 1200,
     salary: 100,
+    nicknamePool: ['Артур', 'Платон', 'Серафим', 'Філіп'],
     passive: AgentPassive(
       icon: '🤖',
       name: 'Prompt Whisperer',
@@ -771,6 +787,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Сам код не пише — здає спеки і дифи в roadmap, реалізацію передає coder/tech-lead.',
     hireCost: 600,
     salary: 70,
+    nicknamePool: ['Денис', 'Влас', 'Тимко', 'Іларіон'],
     passive: AgentPassive(
       icon: '🎲',
       name: 'Game Sense',
@@ -788,6 +805,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Код не пише — здає вердикти зі scope і точкові дифи у STRATEGY/ROADMAP, які власник застосовує сам.',
     hireCost: 1000,
     salary: 90,
+    nicknamePool: ['Богуслав', 'Аркадій', 'Лаврін', 'Гордій'],
     passive: AgentPassive(
       icon: '🧭',
       name: 'Reality Check',
@@ -806,6 +824,7 @@ const roleCatalog = <RoleCatalogEntry>[
         'Не дизайнить екрани і UI-флоу — це робота UI/UX дизайнера. Без задач на новий контент простоює.',
     hireCost: 500,
     salary: 55,
+    nicknamePool: ['Лесь', 'Ярослав', 'Корній', 'Сава'],
     passive: AgentPassive(
       icon: '🎨',
       name: 'Color Soul',
@@ -953,6 +972,30 @@ String nextInstanceId(String roleType, Iterable<String> existingIds) {
 /// First instance gets the bare [baseName], later ones get "baseName 2", "baseName 3"…
 String defaultNicknameFor(RoleCatalogEntry role, int ordinal) {
   return ordinal <= 1 ? role.baseName : '${role.baseName} $ordinal';
+}
+
+/// Random Ukrainian personal name for a new instance of [roleType]. Picks
+/// uniformly from the role's [RoleCatalogEntry.nicknamePool], excluding any
+/// nicknames already used on the team so duplicates don't clutter the roster.
+///
+/// Falls back to [defaultNicknameFor] (class label) when the role is unknown
+/// or the pool is empty / fully consumed by exclusions. Pass [seed] for
+/// deterministic output in tests.
+String pickRoleNickname(
+  String roleType, {
+  Iterable<String> excludeNicknames = const [],
+  int? seed,
+}) {
+  final role = roleCatalogFor(roleType);
+  if (role == null) return roleType;
+  if (role.nicknamePool.isEmpty) return role.baseName;
+
+  final usedLower = {for (final n in excludeNicknames) n.toLowerCase()};
+  final available =
+      role.nicknamePool.where((n) => !usedLower.contains(n.toLowerCase())).toList();
+  final pool = available.isNotEmpty ? available : role.nicknamePool;
+  final rng = seed != null ? Random(seed) : Random();
+  return pool[rng.nextInt(pool.length)];
 }
 
 // ─── Donation packages ─────────────────────────────────────────────────────
@@ -2344,10 +2387,11 @@ class GameState {
     for (final role in roleCatalog) {
       for (var i = 1; i <= role.defaultSeedCount; i++) {
         final id = nextInstanceId(role.roleType, agents.keys);
+        final used = agents.values.map((a) => a.nickname);
         agents[id] = AgentGameData(
           instanceId: id,
           roleType: role.roleType,
-          nickname: defaultNicknameFor(role, i),
+          nickname: pickRoleNickname(role.roleType, excludeNicknames: used),
           hardware: HardwareTier.oldLaptop,
           skills: initialSkillsForRole(role.roleType),
         );

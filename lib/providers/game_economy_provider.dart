@@ -277,13 +277,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final cost = role.hireCost;
 
     final instanceId = nextInstanceId(roleType, state.agents.keys);
-    final ordinal = state.roleCount(roleType) + 1;
+    final usedNames = state.agents.values.map((a) => a.nickname);
 
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = AgentGameData(
       instanceId: instanceId,
       roleType: roleType,
-      nickname: defaultNicknameFor(role, ordinal),
+      nickname: pickRoleNickname(roleType, excludeNicknames: usedNames),
       hardware: HardwareTier.oldLaptop,
       provider: AgentProviderType.values[role.defaultProvider],
       skills: initialSkillsForRole(roleType),
@@ -374,12 +374,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final cost = role.hireCost;
 
     final instanceId = nextInstanceId(data.selectedRole, state.agents.keys);
+    final usedNames = state.agents.values.map((a) => a.nickname);
     final updated = Map<String, AgentGameData>.from(state.agents);
     updated[instanceId] = AgentGameData(
       instanceId: instanceId,
       roleType: data.selectedRole,
       nickname: data.nickname.isEmpty
-          ? defaultNicknameFor(role, state.roleCount(data.selectedRole) + 1)
+          ? pickRoleNickname(data.selectedRole, excludeNicknames: usedNames)
           : data.nickname,
       hardware: HardwareTier.oldLaptop,
       provider: AgentProviderType.values[role.defaultProvider],
