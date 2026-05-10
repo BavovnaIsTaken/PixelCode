@@ -62,6 +62,7 @@ class PixelCodeApp extends ConsumerStatefulWidget {
 class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
   late final AppLifecycleListener _lifecycleListener;
   late final AgentWsService _wsService;
+  String _activeWsUrl = 'ws://localhost:9720';
 
   @override
   void initState() {
@@ -71,6 +72,8 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     // when the console panel is closed (provider would otherwise be lazy-init'd).
     ref.read(debugLogProvider);
     _lifecycleListener = AppLifecycleListener(
+      onHide: _onAppBackground,
+      onResume: _onAppForeground,
       onExitRequested: () async {
         await _wsService.dispose();
         return AppExitResponse.exit;
@@ -78,6 +81,14 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     );
     _initSession();
   }
+
+  // Called when the app goes to background (iOS suspend / Android kill).
+  // Sends a clean WebSocket close frame so the server knows the client left.
+  void _onAppBackground() => _wsService.disconnect();
+
+  // Called when the app returns to foreground.
+  // Forces a fresh connection so stale/frozen sockets are replaced immediately.
+  void _onAppForeground() => _wsService.reconnect(url: _activeWsUrl);
 
   Future<void> _initSession() async {
     try {
@@ -95,8 +106,8 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
 
       // Connect WebSocket to the active session, or fallback to local server.
       final profile = ref.read(sessionProvider).activeProfile;
-      final wsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
-      await ref.read(wsServiceProvider).connect(url: wsUrl);
+      _activeWsUrl = profile?.wsUrl ?? 'ws://localhost:9720';
+      await ref.read(wsServiceProvider).connect(url: _activeWsUrl);
     } catch (e) {
       debugPrint('[PixelCode] Init session failed: $e');
     }

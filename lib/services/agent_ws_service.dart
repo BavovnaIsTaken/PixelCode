@@ -638,6 +638,23 @@ class AgentWsService {
     });
   }
 
+  /// Close the current connection without scheduling a reconnect.
+  /// Used when the app goes to background so the server receives a clean
+  /// close frame rather than a TCP timeout.
+  Future<void> disconnect() async {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _wsSub?.cancel();
+    try {
+      await _ws?.close();
+    } catch (_) {}
+    _ws = null;
+    if (_isConnected) {
+      _isConnected = false;
+      if (!_connectionController.isClosed) _connectionController.add(false);
+    }
+  }
+
   /// Force-close the current connection and reconnect immediately.
   Future<void> reconnect({required String url}) async {
     if (_disposed) return;

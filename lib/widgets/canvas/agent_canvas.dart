@@ -4,11 +4,9 @@
 /// when active, and wander when idle — like a game.
 library;
 
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +17,7 @@ import '../../models/game_economy.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
+import '../../providers/office_simulation_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import 'build_menu.dart';
 import 'character_sprites.dart';
@@ -40,37 +39,17 @@ class AgentCanvas extends ConsumerStatefulWidget {
   ConsumerState<AgentCanvas> createState() => _AgentCanvasState();
 }
 
-class _AgentCanvasState extends ConsumerState<AgentCanvas>
-    with SingleTickerProviderStateMixin {
-  late final Ticker _ticker;
-  late final OfficeGameState _gameState;
+class _AgentCanvasState extends ConsumerState<AgentCanvas> {
   final SpriteManager _sprites = SpriteManager();
   final TransformationController _transformController =
       TransformationController();
   final FocusNode _keyboardFocusNode = FocusNode();
-  Duration _lastElapsed = Duration.zero;
-  int _tick = 0;
-  double _tickAccum = 0;
 
   /// When false, the canvas hides the amber selection halo around the
   /// currently selected agent. Tapping empty space clears it; tapping a
   /// character restores it. The underlying [selectedAgentProvider] stays put
   /// so chat context and name overlays remain addressable.
   bool _selectionVisible = true;
-
-  // Build Mode state lives in `buildModeProvider` — agent_canvas is just one
-  // of two surfaces that consume it (the other is hub_screen, which mounts
-  // the menu in the chat-panel slot on desktop).
-
-  // Track last synced level/rooms to avoid rebuilding tile map every frame
-  OfficeLevel? _lastLevel;
-  int _lastExpansions = -1;
-  List<PlacedRoom>? _lastRooms;
-  List<FurniturePlacement>? _lastFurniture;
-  List<PlacedCorridor>? _lastCorridors;
-
-  StreamSubscription<ServerMessage>? _msgSub;
-  Timer? _posSyncTimer;
 
   /// True until the player has tapped the foreman at least once. Drives the
   /// bouncing onboarding chevron above the foreman's head. Persisted across
@@ -83,16 +62,19 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   static const String _foremanIntroSeenKey = 'foremanIntroSeen';
 
+  /// Read-only access to the simulation game state. The simulation lives in
+  /// [officeSimulationProvider] so its lifecycle is independent of this
+  /// widget — recreating the canvas no longer resets agent positions.
+  OfficeGameState get _gameState =>
+      ref.read(officeSimulationProvider).gameState;
+
   @override
   void initState() {
     super.initState();
-    _gameState = OfficeGameState();
-    _ticker = createTicker(_onTick)..start();
     _sprites.load().then((_) {
       if (mounted) setState(() {});
     });
     _loadForemanIntroFlag();
-    _startPositionSync();
   }
 
   Future<void> _loadForemanIntroFlag() async {
@@ -110,137 +92,64 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     await prefs.setBool(_foremanIntroSeenKey, true);
   }
 
-  void _startPositionSync() {
-    // Send our positions every 3 seconds so other devices can follow
-    _posSyncTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted) return;
-      final ws = ref.read(wsServiceProvider);
-      if (ws.isConnected) {
-        ws.syncPositions(_gameState.serializePositions());
-      }
-    });
-
-    // Listen for position updates from other devices
-    _msgSub = ref.read(wsServiceProvider).messages.listen(_onServerMessage);
-  }
-
-  void _onServerMessage(ServerMessage msg) {
-    if (msg is PositionsSyncMessage) {
-      _gameState.applyRemotePositions({
-        for (final e in msg.positions.entries)
-          e.key: (
-            col: e.value.col,
-            row: e.value.row,
-            state: e.value.state,
-            dir: e.value.dir,
-            onSkateboard: e.value.onSkateboard,
-          ),
-      });
-    }
-  }
-
   @override
   void dispose() {
-    _msgSub?.cancel();
-    _posSyncTimer?.cancel();
-    _ticker.dispose();
     _transformController.dispose();
     _keyboardFocusNode.dispose();
     super.dispose();
   }
-
-  void _onTick(Duration elapsed) {
-    final dt =
-        (elapsed - _lastElapsed).inMicroseconds / 1000000.0;
-    _lastElapsed = elapsed;
-    final clampedDt = dt.clamp(0.0, 0.1);
-
-    _gameState.update(clampedDt);
-
-    // Slow tick for monitor animation & bubbles (~3.3 Hz)
-    _tickAccum += clampedDt;
-    if (_tickAccum >= 0.3) {
-      _tickAccum -= 0.3;
-      _tick++;
-    }
-
-    setState(() {});
-  }
-
 
   bool _logExpanded = false;
   String? _hoveredAgentId;
 
   @override
   Widget build(BuildContext context) {
+    // Subscribe to the long-lived simulation. The service itself doesn't
+    // change identity over the app lifetime — `ref.watch` here is just to
+    // create the dependency edge (and trigger creation if not yet built).
+    final service = ref.watch(officeSimulationProvider);
     final agents = ref.watch(agentsProvider);
     final metrics = ref.watch(metricsProvider);
     final activityLog = ref.watch(activityLogProvider);
     final commEvents = ref.watch(commGraphProvider);
     final gameEconomy = ref.watch(gameEconomyProvider);
 
-    // Rebuild tile map when office level, expansions, rooms, furniture, or corridors change
-    final level = gameEconomy.officeLevel;
-    final expansions = gameEconomy.officeExpansions;
-    final rooms = gameEconomy.placedRooms;
-    final furniture = gameEconomy.placedFurniture;
-    final corridors = gameEconomy.placedCorridors;
-    if (!identical(rooms, _lastRooms) ||
-        !identical(furniture, _lastFurniture) ||
-        !identical(corridors, _lastCorridors) ||
-        level != _lastLevel ||
-        expansions != _lastExpansions) {
-      _lastLevel = level;
-      _lastExpansions = expansions;
-      _lastRooms = rooms;
-      _lastFurniture = furniture;
-      _lastCorridors = corridors;
-      _gameState.rebuildLayout(level, expansions, rooms, furniture, corridors);
-    }
-
-    // Sync agent states and hired status into game engine
-    _gameState.syncAgents(agents);
-    final hardwareMap = {
-      for (final e in gameEconomy.agents.entries)
-        e.key: e.value.hardware,
-    };
-    final workplaceStatusMap = {
-      for (final e in gameEconomy.agents.entries)
-        e.key: e.value.workplaceStatus,
-    };
-    final newlyAssigned = _gameState.syncHiredAgents(
-        gameEconomy.hiredAgentIds, hardwareMap, workplaceStatusMap);
-    if (newlyAssigned.isNotEmpty) {
-      final notifier = ref.read(gameEconomyProvider.notifier);
-      for (final id in newlyAssigned) {
-        notifier.assignWorkplace(id);
-      }
-    }
-
-    final activeAgents =
-        agents.entries.where((e) => e.value.isActive).toList();
+    final activeAgents = service.gameState.isAutonomous
+        ? <MapEntry<String, AgentState>>[]
+        : agents.entries.where((e) => e.value.isActive).toList();
 
     final c = context.appColors;
-    return Container(
-      color: c.background,
-      child: Column(
-        children: [
-          _buildHeader(agents),
-          if (activeAgents.isNotEmpty)
-            _ActiveAgentsStrip(agents: activeAgents, tick: _tick),
-          Expanded(
-            child: _buildOffice(agents, gameEconomy),
+    // ListenableBuilder rebuilds the entire body on every simulation frame
+    // so character-following overlays (name labels, cat label) track motion
+    // without us having to call setState() ourselves.
+    return ListenableBuilder(
+      listenable: service.frame,
+      builder: (context, _) {
+        // Slow tick (~3.3 Hz) for monitor flicker, status pulses and bubbles.
+        // Derived from the per-frame counter so we don't need a second timer.
+        final slowTick = service.frame.value ~/ 18;
+        return Container(
+          color: c.background,
+          child: Column(
+            children: [
+              _buildHeader(agents),
+              if (activeAgents.isNotEmpty)
+                _ActiveAgentsStrip(agents: activeAgents, tick: slowTick),
+              Expanded(child: _buildOffice(agents, gameEconomy, slowTick)),
+              if (metrics.isNotEmpty) _TeamMetricsBar(metrics: metrics),
+              if (commEvents.isNotEmpty) _CommGraphPanel(events: commEvents),
+              _ActivityLogPanel(
+                events: activityLog,
+                expanded: _logExpanded,
+                onToggle: () =>
+                    setState(() => _logExpanded = !_logExpanded),
+                onClear: () =>
+                    ref.read(activityLogProvider.notifier).clear(),
+              ),
+            ],
           ),
-          if (metrics.isNotEmpty) _TeamMetricsBar(metrics: metrics),
-          if (commEvents.isNotEmpty) _CommGraphPanel(events: commEvents),
-          _ActivityLogPanel(
-            events: activityLog,
-            expanded: _logExpanded,
-            onToggle: () => setState(() => _logExpanded = !_logExpanded),
-            onClear: () => ref.read(activityLogProvider.notifier).clear(),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -295,7 +204,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     );
   }
 
-  Widget _buildOffice(Map<String, AgentState> agents, GameState gameEconomy) {
+  Widget _buildOffice(
+      Map<String, AgentState> agents, GameState gameEconomy, int slowTick) {
     final officeLevel = gameEconomy.officeLevel;
     final editMode = ref.watch(furnitureEditModeProvider);
     final buildMode = ref.watch(buildModeProvider);
@@ -369,7 +279,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       ? ref.watch(selectedAgentProvider)
                                       : null,
                                   hoveredAgentId: _hoveredAgentId,
-                                  tick: _tick,
+                                  tick: slowTick,
                                   officeLevel: officeLevel,
                                   placedFurniture:
                                       gameEconomy.placedFurniture,
@@ -413,7 +323,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                     painter: ForemanOverlayPainter(
                                       gridCols: _gameState.gridCols,
                                       gridRows: _gameState.gridRows,
-                                      tick: _tick,
+                                      tick: slowTick,
                                       officeLevel: officeLevel,
                                       sprites: _sprites,
                                       attention: _renovationAttention(

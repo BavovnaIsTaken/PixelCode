@@ -408,6 +408,9 @@ class OfficeGameState {
   List<FurniturePlacement> _placedFurniture;
   List<PlacedCorridor> _placedCorridors;
   double _chatScanAccum = 0;
+  bool _frozen = false;
+  bool _autonomousMode = false;
+  final Map<String, double> _wakeDelayRemaining = {};
 
   int get gridCols => _gridCols;
   int get gridRows => _gridRows;
@@ -448,6 +451,55 @@ class OfficeGameState {
         _placedCorridors = placedCorridors {
     _buildAll();
     cat = OfficeCat();
+  }
+
+  bool get isFrozen => _frozen;
+  bool get isAutonomous => _autonomousMode;
+
+  /// Switch to autonomous wander mode — used when the server is offline or
+  /// during shutdown. Active tasks are cancelled; agents keep wandering at a
+  /// calmer pace without skateboarding until the connection is restored.
+  void enterAutonomousWander() {
+    _frozen = false;
+    _autonomousMode = true;
+    _wakeDelayRemaining.clear();
+    for (final ch in characters.values) {
+      if (!ch.isHired) continue;
+      ch.isActive = false;
+      ch.isOnSkateboard = false;
+      ch.isChatting = false;
+      ch.chatPartnerId = null;
+      if (ch.state == CharState.typing ||
+          ch.state == CharState.skateMount ||
+          ch.state == CharState.skateDismount) {
+        ch.state = CharState.idle;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
+        ch.wanderCount = 0;
+        ch.wanderLimit = _randomInt(kWanderMovesMin, kWanderMovesMax);
+      }
+      // Characters already walking or chatting-idle continue naturally.
+    }
+  }
+
+  /// Unfreeze characters with a distance-from-door stagger so those near the
+  /// entrance wake up first (natural "workday starts at the door" narrative).
+  /// delay = 200 ms base + 120 ms per manhattan tile from door + ±80 ms jitter.
+  void wakeUpStaggered() {
+    if (!_frozen && !_autonomousMode) return;
+    _frozen = false;
+    _autonomousMode = false;
+    // Mirror doorLeftColFor from foreman_overlay_painter (row 0 = back wall).
+    final doorCol = ((_gridCols - 2) ~/ 2).clamp(1, _gridCols - 1);
+    const doorRow = 0;
+    for (final ch in characters.values) {
+      final dist =
+          (ch.tileCol - doorCol).abs() + (ch.tileRow - doorRow).abs();
+      final delay =
+          0.200 + dist * 0.120 + (_rng.nextDouble() * 0.160 - 0.080);
+      _wakeDelayRemaining[ch.instanceId] = delay.clamp(0.1, 5.0);
+    }
   }
 
   void _buildAll() {
@@ -1121,6 +1173,36 @@ class OfficeGameState {
   }
 
   void _updateCharacter(GameCharacter ch, double dt) {
+    // Disconnected: stand still, occasionally turn to a random direction.
+    if (_frozen) {
+      if (ch.state != CharState.idle && ch.state != CharState.waiting) {
+        ch.state = CharState.idle;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        ch.wanderTimer = _randomRange(4.0, 10.0);
+      }
+      ch.wanderTimer -= dt;
+      if (ch.wanderTimer <= 0) {
+        ch.wanderTimer = _randomRange(4.0, 10.0);
+        ch.dir = CharDirection.values[_rng.nextInt(CharDirection.values.length)];
+      }
+      return;
+    }
+
+    // Staggered wake-up: hold idle until this character's delay expires.
+    final wakeDelay = _wakeDelayRemaining[ch.instanceId];
+    if (wakeDelay != null) {
+      final remaining = wakeDelay - dt;
+      if (remaining > 0) {
+        _wakeDelayRemaining[ch.instanceId] = remaining;
+        return;
+      }
+      _wakeDelayRemaining.remove(ch.instanceId);
+      ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
+      ch.wanderCount = 0;
+      ch.wanderLimit = _randomInt(kWanderMovesMin, kWanderMovesMax);
+    }
+
     ch.frameTimer += dt;
 
     // Count down coffee timer while typing
@@ -1221,9 +1303,9 @@ class OfficeGameState {
           }
 
           if (walkableTiles.isNotEmpty) {
-            final wantSkate = ch.hasCoffee
+            final wantSkate = !_autonomousMode && (ch.hasCoffee
                 ? _rng.nextDouble() < kCoffeeSkateChance
-                : _rng.nextDouble() < kSkateboardChance;
+                : _rng.nextDouble() < kSkateboardChance);
 
             List<TilePos> path = const [];
             bool skate = false;
@@ -1308,7 +1390,8 @@ class OfficeGameState {
         ch.dir = _directionBetween(
           ch.tileCol, ch.tileRow, nextTile.col, nextTile.row,
         );
-        final walkSpeed = (ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec) * _speedBonus;
+        final baseSpeed = ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec;
+        final walkSpeed = baseSpeed * _speedBonus * (_autonomousMode ? 0.65 : 1.0);
         ch.moveProgress += (walkSpeed / kTileSize) * dt;
 
         final fromX = ch.tileCol * kTileSize + kTileSize / 2;

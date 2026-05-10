@@ -509,15 +509,17 @@ class _HubScreenState extends ConsumerState<HubScreen>
           // Alignment.center keeps the content's center at the window's center
           // — the native collapse is symmetric, so the center stays put and
           // top/bottom get progressively clipped (old-TV iris effect).
-          if (_isShuttingDown) {
-            body = OverflowBox(
-              maxHeight: _shutdownHeight,
-              alignment: Alignment.center,
-              child: body,
-            );
-          }
-
-          return body;
+          //
+          // OverflowBox stays in the tree unconditionally so flipping
+          // _isShuttingDown only mutates its constraints — wrapping it
+          // conditionally re-parents the Stack subtree, which costs the
+          // office CustomPainter one blank repaint frame ("blink") on tap.
+          return OverflowBox(
+            minHeight: _isShuttingDown ? _shutdownHeight : null,
+            maxHeight: _isShuttingDown ? _shutdownHeight : null,
+            alignment: Alignment.center,
+            child: body,
+          );
         },
         child: _isMobile
             ? _buildMobileLayout(isConnected)
