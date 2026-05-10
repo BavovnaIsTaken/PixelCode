@@ -17,6 +17,19 @@ import * as fs from "fs";
 import * as path from "path";
 import { z } from "zod";
 
+import {
+  runAddCharacterSkin,
+  addCharacterSkinSchema,
+} from "./tools/add_skin.js";
+import {
+  runPreviewSkinPalette,
+  previewSkinPaletteSchema,
+} from "./tools/preview_palette.js";
+import {
+  runDiffAgainstExistingPalettes,
+  diffAgainstExistingPalettesSchema,
+} from "./tools/diff_palettes.js";
+
 const ASSETS_DIR = process.env.ASSETS_DIR || path.resolve(process.cwd(), "assets");
 const PROJECT_DIR = process.env.PROJECT_DIR || process.cwd();
 
@@ -1047,6 +1060,108 @@ server.tool(
       ],
     };
   }
+);
+
+// ─── Tool: add_character_skin ─────────────────────────────────────────────────
+
+server.tool(
+  "add_character_skin",
+  "Atomically append a new CharacterSkin to lib/widgets/canvas/character_skins.dart and register it in allCharacterSkins. Validates: snake_case skin_id, palette completeness across all agent classes, hex format. Idempotent — re-running with identical content is a no-op. Use this instead of raw Edit on the Dart file (defensive: prevents broken syntax / missed list registration).",
+  addCharacterSkinSchema,
+  async (input) => {
+    try {
+      const result = runAddCharacterSkin(input, PROJECT_DIR);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ ok: true, ...result }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { ok: false, error: (err as Error).message },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+  },
+);
+
+// ─── Tool: preview_skin_palette ───────────────────────────────────────────────
+
+server.tool(
+  "preview_skin_palette",
+  "Static analysis of a proposed (or full) skin palette: per-slot hex codes plus WCAG contrast against floor colors of every office tier (1=Garage → 5=Campus). Flags slots where the character would blend with the floor. Use BEFORE add_character_skin to catch unreadable palettes early. Pass either {palette, class_id} for a single class or {palettes: {agent_id: palette, …}} for a full skin.",
+  previewSkinPaletteSchema,
+  async (input) => {
+    try {
+      const result = runPreviewSkinPalette(input);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ ok: true, ...result }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { ok: false, error: (err as Error).message },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+  },
+);
+
+// ─── Tool: diff_against_existing_palettes ─────────────────────────────────────
+
+server.tool(
+  "diff_against_existing_palettes",
+  "Find the top-K nearest existing palettes to a proposed one (per agent class). Returns Euclidean RGB distance per slot and total. Sets is_clone=true if total ≤ clone_threshold (default 80). Use this BEFORE add_character_skin to actively avoid mode collapse — if the proposal clones an existing skin, shift hue or value on the dominant slots first.",
+  diffAgainstExistingPalettesSchema,
+  async (input) => {
+    try {
+      const result = runDiffAgainstExistingPalettes(input, PROJECT_DIR);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({ ok: true, ...result }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              { ok: false, error: (err as Error).message },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    }
+  },
 );
 
 // ─── Start server ─────────────────────────────────────────────────────────────
