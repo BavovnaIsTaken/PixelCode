@@ -55,6 +55,7 @@ Color agentColorFor(String agentId) => switch (_roleTypeOfId(agentId)) {
       'security' => const Color(0xFF8E44AD),
       'ui-ux-designer' => const Color(0xFF3498DB),
       'llm-specialist' => const Color(0xFF9B59FF),
+      'character-artist' => const Color(0xFFC2410C),
       _ => const Color(0xFF95A5A6),
     };
 
@@ -67,6 +68,7 @@ IconData agentIconFor(String agentId) => switch (_roleTypeOfId(agentId)) {
       'security' => Icons.security,
       'ui-ux-designer' => Icons.palette,
       'llm-specialist' => Icons.psychology,
+      'character-artist' => Icons.brush,
       _ => Icons.smart_toy_outlined,
     };
 

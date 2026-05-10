@@ -12,7 +12,8 @@ const int maxAgentLevel = 20;
 ///
 /// Two role-based weight profiles (Speed intentionally excluded):
 ///   - default (analytical roles): `0.4*insight + 0.3*precision + 0.2*reliability + 0.1*creativity`
-///   - creative (ui-ux-designer, game-designer): `0.25*insight + 0.2*precision + 0.2*reliability + 0.35*creativity`
+///   - creative (ui-ux-designer, game-designer, character-artist):
+///     `0.25*insight + 0.2*precision + 0.2*reliability + 0.35*creativity`
 /// Thresholds: ≥14 opus, ≥8 sonnet, else haiku.
 ///
 /// Used by the Energy meter to tag completed tasks with the model tier
@@ -24,7 +25,9 @@ String capabilityModelForSkills({
   required int reliability,
   String? roleType,
 }) {
-  final isCreative = roleType == 'ui-ux-designer' || roleType == 'game-designer';
+  final isCreative = roleType == 'ui-ux-designer' ||
+      roleType == 'game-designer' ||
+      roleType == 'character-artist';
   final capability = isCreative
       ? 0.25 * insight + 0.2 * precision + 0.2 * reliability + 0.35 * creativity
       : 0.4 * insight + 0.3 * precision + 0.2 * reliability + 0.1 * creativity;

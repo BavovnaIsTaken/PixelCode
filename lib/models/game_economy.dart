@@ -796,6 +796,24 @@ const roleCatalog = <RoleCatalogEntry>[
           'Тримає курс — раз на період звіряє останні коміти з roadmap і повідомляє, де доки розійшлися з реальністю, поки drift не став хронічним.',
     ),
   ),
+  RoleCatalogEntry(
+    roleType: 'character-artist',
+    baseName: 'Піксельмейстер',
+    role: 'Художник',
+    specialization:
+        'Створює нових персонажів з нуля — спрайти, скін-палітри, анімаційні сети, NPC. Працює із 7-колірною палітрою та 16×32 sprite sheet.',
+    weakness:
+        'Не дизайнить екрани і UI-флоу — це робота UI/UX дизайнера. Без задач на новий контент простоює.',
+    hireCost: 500,
+    salary: 55,
+    passive: AgentPassive(
+      icon: '🎨',
+      name: 'Color Soul',
+      nameUk: 'Кольорова душа',
+      description:
+          'Відчуває характер персонажа через палітру — нові скіни і NPC народжуються з першого ескізу без переробок.',
+    ),
+  ),
 ];
 
 RoleCatalogEntry? roleCatalogFor(String roleType) {
@@ -886,6 +904,13 @@ Map<SkillType, int> initialSkillsForRole(String roleType) {
         SkillType.creativity: 1,
         SkillType.insight: 5,
         SkillType.reliability: 3,
+      },
+    'character-artist' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 4,
+        SkillType.creativity: 6,
+        SkillType.insight: 1,
+        SkillType.reliability: 1,
       },
     _ => const {
         SkillType.speed: 2,

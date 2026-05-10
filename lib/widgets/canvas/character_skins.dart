@@ -31,6 +31,7 @@ const _agents = [
   'llm-specialist',
   'game-designer',
   'strategy-keeper',
+  'character-artist',
 ];
 
 Map<String, SkinPalette> _buildPalettes(List<SkinPalette> list) {
@@ -115,6 +116,13 @@ final skinDefault = CharacterSkin(
       clothes: Color(0xFF1E3A8A), pants: Color(0xFF1E293B),
       boots: Color(0xFF0F172A),
     ),
+    // character-artist — copper hair, violet paint apron
+    SkinPalette(
+      hair: Color(0xFFC2410C), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFFBBF24),
+      clothes: Color(0xFF5B21B6), pants: Color(0xFF44403C),
+      boots: Color(0xFF292524),
+    ),
   ]),
 );
 
@@ -193,6 +201,13 @@ final skinCasual = CharacterSkin(
       hair: Color(0xFF1F2937), skin: Color(0xFFE8B89D),
       skinLight: Color(0xFFF5CDB8), eye: Color(0xFF7DD3FC),
       clothes: Color(0xFF1E40AF), pants: Color(0xFF334155),
+      boots: Color(0xFF1E293B),
+    ),
+    // character-artist — paint-spattered indigo hoodie
+    SkinPalette(
+      hair: Color(0xFF92400E), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFF59E0B),
+      clothes: Color(0xFF4338CA), pants: Color(0xFF475569),
       boots: Color(0xFF1E293B),
     ),
   ]),
@@ -275,6 +290,13 @@ final skinCorporate = CharacterSkin(
       clothes: Color(0xFF1E293B), pants: Color(0xFF0F172A),
       boots: Color(0xFF020617),
     ),
+    // character-artist — gallery curator, deep purple suit
+    SkinPalette(
+      hair: Color(0xFF44403C), skin: Color(0xFFE8B89D),
+      skinLight: Color(0xFFF5CDB8), eye: Color(0xFFB45309),
+      clothes: Color(0xFF4C1D95), pants: Color(0xFF1F2937),
+      boots: Color(0xFF0F172A),
+    ),
   ]),
 );
 
@@ -354,6 +376,13 @@ final skinHacker = CharacterSkin(
       skinLight: Color(0xFFE0BCA0), eye: Color(0xFF00CCFF),
       clothes: Color(0xFF0A1228), pants: Color(0xFF08101C),
       boots: Color(0xFF040810),
+    ),
+    // character-artist — glitch-art violet hood, magenta neon eye
+    SkinPalette(
+      hair: Color(0xFFA855F7), skin: Color(0xFFC0B8B0),
+      skinLight: Color(0xFFD8D0C8), eye: Color(0xFFFF00FF),
+      clothes: Color(0xFF1E1B4B), pants: Color(0xFF0F0E1F),
+      boots: Color(0xFF050510),
     ),
   ]),
 );
@@ -435,6 +464,13 @@ final skinCreative = CharacterSkin(
       clothes: Color(0xFF0EA5E9), pants: Color(0xFF1E3A8A),
       boots: Color(0xFF1E40AF),
     ),
+    // character-artist — full-rainbow expressionist
+    SkinPalette(
+      hair: Color(0xFFEC4899), skin: Color(0xFFF3D2C1),
+      skinLight: Color(0xFFFBE8DC), eye: Color(0xFFFBBF24),
+      clothes: Color(0xFFA855F7), pants: Color(0xFF14B8A6),
+      boots: Color(0xFF1E293B),
+    ),
   ]),
 );
 
@@ -514,6 +550,13 @@ final skinRetro = CharacterSkin(
       skinLight: Color(0xFFE4CCA8), eye: Color(0xFF6B8AAB),
       clothes: Color(0xFF506888), pants: Color(0xFF485870),
       boots: Color(0xFF303848),
+    ),
+    // character-artist — 80s coral sunset, magenta blouse
+    SkinPalette(
+      hair: Color(0xFFFB7185), skin: Color(0xFFD4B898),
+      skinLight: Color(0xFFE4CCA8), eye: Color(0xFFFFA94D),
+      clothes: Color(0xFFA21CAF), pants: Color(0xFF5B21B6),
+      boots: Color(0xFF1E1B4B),
     ),
   ]),
 );
@@ -595,6 +638,13 @@ final skinCyberpunk = CharacterSkin(
       clothes: Color(0xFF001A40), pants: Color(0xFF0A0A1C),
       boots: Color(0xFF050A14),
     ),
+    // character-artist — neon graffiti, cyan hair + hot pink neon eye
+    SkinPalette(
+      hair: Color(0xFF00FFFF), skin: Color(0xFFB8A0A8),
+      skinLight: Color(0xFFC8B0B8), eye: Color(0xFFFF1493),
+      clothes: Color(0xFF08081C), pants: Color(0xFF0A0A12),
+      boots: Color(0xFF040408),
+    ),
   ]),
 );
 
@@ -674,6 +724,13 @@ final skinCozy = CharacterSkin(
       skinLight: Color(0xFFF8D4B4), eye: Color(0xFF88AAC8),
       clothes: Color(0xFF2A4068), pants: Color(0xFF4A4A5A),
       boots: Color(0xFF303040),
+    ),
+    // character-artist — autumn paint-stained sienna cardigan
+    SkinPalette(
+      hair: Color(0xFF8B3A1A), skin: Color(0xFFF0C0B0),
+      skinLight: Color(0xFFFCD4C4), eye: Color(0xFFD2691E),
+      clothes: Color(0xFFA0522D), pants: Color(0xFF4A3838),
+      boots: Color(0xFF302828),
     ),
   ]),
 );

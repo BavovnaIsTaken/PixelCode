@@ -68,6 +68,7 @@ String _agentNickname(WidgetRef ref, String id) {
     'security' => 'Страж',
     'ui-ux-designer' => 'Піксельник',
     'llm-specialist' => 'Промптер',
+    'character-artist' => 'Піксельмейстер',
     _ => id,
   };
 }
@@ -738,6 +739,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         'llm-specialist' => const LinearGradient(
             colors: [Color(0xFF9B59FF), Color(0xFF6C2BD9)],
           ),
+        'character-artist' => const LinearGradient(
+            colors: [Color(0xFFC2410C), Color(0xFF5B21B6)],
+          ),
         _ => const LinearGradient(
             colors: [Color(0xFF95A5A6), Color(0xFF7F8C8D)],
           ),
@@ -754,6 +758,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         'security' => Icons.security,
         'ui-ux-designer' => Icons.palette,
         'llm-specialist' => Icons.smart_toy,
+        'character-artist' => Icons.brush,
         _ => Icons.person,
       };
 
@@ -1891,7 +1896,7 @@ class _PixelGarlandState extends State<_PixelGarland>
       start: startAt,
       life: 0.04 + _rng.nextDouble() * 0.12,
       color: _palette[_rng.nextInt(_palette.length)],
-      size: 1.0 + _rng.nextInt(2),
+      size: (1.0 + _rng.nextInt(2)) * ((!kIsWeb && Platform.isMacOS) ? 0.5 : 1.0),
     );
   }
 
