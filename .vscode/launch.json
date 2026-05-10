@@ -11,40 +11,26 @@
             "preLaunchTask": "none"
         },
         {
-            "name": "🎮 🖥️ macOS",
+            "name": "🎮 MacOS",
             "request": "launch",
             "type": "dart",
             "deviceId": "macos"
         },
         {
-            "name": "🎮 📱 iOS (Wireless)",
+            "name": "🎮 iOS (Wireless)",
             "request": "launch",
             "type": "dart",
             "flutterMode": "profile",
             "deviceId": "00008140-00090C412268801C"
         },
         {
-            "name": "────── 🚀 Launcher ──────",
+            "name": "────── 🚀 PixelDock ──────",
             "request": "launch",
             "type": "dart",
             "preLaunchTask": "none"
         },
         {
-            "name": "🚀 🖥️ macOS",
-            "request": "launch",
-            "type": "dart",
-            "cwd": "launcher",
-            "program": "lib/main.dart",
-            "deviceId": "macos"
-        },
-        {
-            "name": "────── 🛠️ ServerDock ──────",
-            "request": "launch",
-            "type": "dart",
-            "preLaunchTask": "none"
-        },
-        {
-            "name": "🛠️ 🖥️ macOS",
+            "name": "🚀 MacOS",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
@@ -52,7 +38,7 @@
             "deviceId": "macos"
         },
         {
-            "name": "🛠️ 📱 iOS (Wireless)",
+            "name": "🚀 iOS (Wireless)",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
@@ -60,7 +46,13 @@
             "deviceId": "00008140-00090C412268801C"
         },
         {
-            "name": "────────────────────",
+            "name": "******************************************",
+            "request": "launch",
+            "type": "dart",
+            "preLaunchTask": "none"
+        },
+        {
+            "name": "  ",
             "request": "launch",
             "type": "dart",
             "preLaunchTask": "none"
