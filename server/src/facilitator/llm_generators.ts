@@ -122,7 +122,7 @@ export async function callClaude(
       allowedTools: [],
       cwd: projectPath,
       includePartialMessages: false,
-      permissionMode: "acceptEdits",
+      permissionMode: "bypassPermissions",
       maxTurns: 1,
       persistSession: false,
     },
