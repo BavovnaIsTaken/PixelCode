@@ -2,10 +2,8 @@
 """
 Render the PixelDock app icon at all macOS icon sizes.
 
-Pixel-art style matching PixelCode: dark navy background, cyan/purple neon
-accents, gold highlight. Subject is a stylized server tower (the "ship")
-docked at a pier with two status LEDs — cyan for the always-on launcher,
-green for the running server.
+Pixel-art rubber duck on a navy gradient — bright yellow body, orange beak,
+tiny black eye, and a few cyan ripples that hint at bathwater.
 
 Output goes into the macOS AppIcon.appiconset alongside Contents.json.
 Run from anywhere: paths are computed relative to this script.
@@ -16,34 +14,25 @@ from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "macos" / "Runner" / "Assets.xcassets" / "AppIcon.appiconset"
-
-# ─── Pixel-art canvas (32×32) — every render scales this up with NEAREST ──
+ASSETS_LOGO = ROOT / "assets" / "logo.png"
 
 GRID = 32
 
-# Palette tuned to PixelCode's default theme.
-BG_TOP    = (12, 14, 26)       # near-black with a hint of navy
-BG_BOTTOM = (24, 18, 48)       # subtle purple lift at the bottom
-DOCK      = (32, 26, 60)
-DOCK_LINE = (90, 70, 180)
-TOWER     = (28, 28, 36)
-TOWER_HI  = (70, 70, 86)
-TOWER_DK  = (16, 16, 22)
-SCREEN    = (0, 192, 209)      # PixelCode cyan
-SCREEN_HI = (180, 240, 250)
-SCREEN_DK = (0, 110, 130)
-LED_ON    = (34, 220, 142)     # green = server alive
-LED_IDLE  = (255, 215, 0)      # gold = launcher always on
-ACCENT    = (180, 120, 255)    # purple neon
+BG_TOP    = (12, 14, 26)
+BG_BOTTOM = (24, 18, 48)
 
-PALETTE_PIXELS = [
-    # Each row is a list of (x, color). y is implicit by row index.
-    # 32×32 grid; (0,0) is top-left.
-]
+DUCK     = (255, 213, 0)
+DUCK_HI  = (255, 240, 140)
+DUCK_DK  = (210, 155, 0)
+BEAK     = (255, 140, 0)
+BEAK_DK  = (200, 90, 0)
+EYE      = (16, 16, 22)
+EYE_HI   = (240, 240, 250)
+WATER    = (0, 160, 200)
+WATER_HI = (140, 220, 240)
 
 
 def draw_base(draw: ImageDraw.ImageDraw) -> None:
-    # Gradient background: linear top→bottom navy → deep purple.
     for y in range(GRID):
         t = y / (GRID - 1)
         r = int(BG_TOP[0] * (1 - t) + BG_BOTTOM[0] * t)
@@ -52,115 +41,122 @@ def draw_base(draw: ImageDraw.ImageDraw) -> None:
         draw.line([(0, y), (GRID - 1, y)], fill=(r, g, b))
 
 
-def draw_dock(draw: ImageDraw.ImageDraw) -> None:
-    # Dock line (the "pier") — 3 px tall band near the bottom.
-    pier_y = 26
-    draw.rectangle([(0, pier_y), (GRID - 1, pier_y + 1)], fill=DOCK)
-    # Highlighted top edge of the pier.
-    for x in range(0, GRID, 2):
-        draw.point((x, pier_y), fill=DOCK_LINE)
-    # Pillars under the pier.
-    for x in (4, 11, 20, 27):
-        draw.line([(x, pier_y + 1), (x, GRID - 1)], fill=DOCK)
+def draw_duck(draw: ImageDraw.ImageDraw) -> None:
+    # Head — soft circle around (12, 11).
+    head_rows = {
+        7:  range(11, 14),
+        8:  range(10, 15),
+        9:  range(9, 16),
+        10: range(8, 16),
+        11: range(8, 16),
+        12: range(9, 16),
+        13: range(10, 15),
+    }
+    for y, xs in head_rows.items():
+        for x in xs:
+            draw.point((x, y), fill=DUCK)
+
+    # Body — oval, wider than head, sitting low.
+    body_rows = {
+        14: range(10, 23),
+        15: range(9, 24),
+        16: range(9, 25),
+        17: range(9, 26),
+        18: range(9, 26),
+        19: range(10, 25),
+        20: range(11, 24),
+        21: range(13, 22),
+    }
+    for y, xs in body_rows.items():
+        for x in xs:
+            draw.point((x, y), fill=DUCK)
+
+    # Tail upturn — small back-left bump above body line.
+    draw.point((8, 13), fill=DUCK)
+    draw.point((9, 12), fill=DUCK)
+
+    # Highlights — top-left of head and body.
+    for x, y in [(10, 8), (11, 8), (10, 9),
+                 (11, 15), (12, 15), (10, 16), (11, 16)]:
+        draw.point((x, y), fill=DUCK_HI)
+
+    # Shading — bottom-right of body.
+    for x, y in [(24, 17), (24, 18), (23, 19), (24, 19),
+                 (22, 20), (23, 20), (20, 21), (21, 21)]:
+        draw.point((x, y), fill=DUCK_DK)
+
+    # Beak — orange wedge to the right of the head.
+    draw.point((15, 10), fill=BEAK)
+    draw.point((16, 10), fill=BEAK)
+    draw.point((15, 11), fill=BEAK)
+    draw.point((16, 11), fill=BEAK)
+    draw.point((17, 11), fill=BEAK)
+    draw.point((15, 12), fill=BEAK_DK)
+    draw.point((16, 12), fill=BEAK_DK)
+
+    # Eye — single dark pixel + a tiny highlight.
+    draw.point((12, 10), fill=EYE)
+    draw.point((13, 10), fill=EYE_HI)
 
 
-def draw_tower(draw: ImageDraw.ImageDraw) -> None:
-    # Tower body: 12 wide × 18 tall, centered horizontally.
-    left, right = 10, 21
-    top, bot = 7, 25
-
-    # Outer frame (slight beveled look via two-tone outline).
-    draw.rectangle([(left, top), (right, bot)], outline=TOWER_HI, fill=TOWER)
-    # Inner shadow at right & bottom.
-    for y in range(top + 1, bot):
-        draw.point((right - 1, y), fill=TOWER_DK)
-    for x in range(left + 1, right):
-        draw.point((x, bot - 1), fill=TOWER_DK)
-
-    # Top "antenna".
-    draw.line([(15, 4), (15, 6)], fill=TOWER_HI)
-    draw.point((15, 3), fill=ACCENT)
-
-    # CRT-style screen.
-    s_left, s_right = 12, 19
-    s_top, s_bot = 9, 14
-    draw.rectangle([(s_left, s_top), (s_right, s_bot)], fill=SCREEN_DK)
-    draw.rectangle([(s_left + 1, s_top + 1), (s_right - 1, s_bot - 1)], fill=SCREEN)
-
-    # Heartbeat / pulse readout — a single bright peak across the screen.
-    # Reads as "alive / monitoring" at any size, even when the chevrons we
-    # tried earlier collapse into noise.
-    base_y = s_top + 3                # baseline pixel row
-    flat_color = SCREEN_HI
-    peak_color = (255, 255, 255)
-    # Flat baseline on the left.
-    for x in range(s_left + 1, 14):
-        draw.point((x, base_y), fill=flat_color)
-    # Up-stroke into the peak.
-    draw.point((14, base_y - 1), fill=flat_color)
-    draw.point((15, base_y - 2), fill=peak_color)   # peak top
-    draw.point((15, base_y - 1), fill=peak_color)
-    # Down-stroke and flat tail on the right.
-    draw.point((16, base_y - 1), fill=flat_color)
-    draw.point((16, base_y),     fill=flat_color)
-    draw.point((17, base_y + 1), fill=flat_color)   # dip
-    for x in range(18, s_right):
-        draw.point((x, base_y), fill=flat_color)
-
-    # Two LEDs below the screen.
-    # Launcher LED (always on, gold).
-    draw.rectangle([(13, 17), (14, 18)], fill=LED_IDLE)
-    # Server LED (green = running).
-    draw.rectangle([(17, 17), (18, 18)], fill=LED_ON)
-
-    # Vent slats below LEDs to break up the front face.
-    for y in (20, 21, 22):
-        for x in range(13, 19):
-            if (x + y) % 2 == 0:
-                draw.point((x, y), fill=TOWER_HI)
+def draw_water(draw: ImageDraw.ImageDraw) -> None:
+    # Cute wave dashes — bath-water hint, kept short so they don't
+    # compete with the duck silhouette at small sizes.
+    bright = [
+        (4, 24), (5, 24),
+        (10, 24), (11, 24),
+        (20, 24), (21, 24),
+        (26, 24), (27, 24),
+        (7, 26), (8, 26),
+        (14, 26), (15, 26), (16, 26),
+        (23, 26), (24, 26),
+    ]
+    for x, y in bright:
+        draw.point((x, y), fill=WATER_HI)
+    for x, y in [(3, 24), (12, 24), (22, 24), (28, 24),
+                 (6, 26), (13, 26), (17, 26), (25, 26)]:
+        draw.point((x, y), fill=WATER)
 
 
 def render_grid() -> Image.Image:
     base = Image.new("RGBA", (GRID, GRID), (0, 0, 0, 0))
     draw = ImageDraw.Draw(base)
     draw_base(draw)
-    draw_tower(draw)
-    draw_dock(draw)
+    draw_duck(draw)
+    draw_water(draw)
     return base
 
 
 def add_glow(grid_img: Image.Image, scale: int) -> Image.Image:
     """Scale up with NEAREST (crisp pixels), then composite a soft glow on top.
 
-    The glow is a Gaussian-blurred copy of just the cyan/gold/green pixels —
-    gives the icon that warm CRT/neon feel without ruining pixel-art edges.
+    The glow is a Gaussian-blurred copy of just the saturated pixels —
+    gives the duck a warm rubber sheen without ruining pixel-art edges.
     """
     big = grid_img.resize((GRID * scale, GRID * scale), Image.Resampling.NEAREST)
 
-    # Build a glow mask: pull bright/saturated pixels.
     glow_src = Image.new("RGBA", big.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow_src)
     for y in range(GRID):
         for x in range(GRID):
             r, g, b, a = grid_img.getpixel((x, y))
-            # Highlight neon-ish colors only.
             saturation = max(r, g, b) - min(r, g, b)
             brightness = (r + g + b) / 3
-            if saturation > 90 and brightness > 80:
+            is_white_peak = r > 235 and g > 235 and b > 235
+            if (saturation > 100 and brightness > 90) or is_white_peak:
                 px, py = x * scale, y * scale
                 glow_draw.rectangle(
                     [(px, py), (px + scale - 1, py + scale - 1)],
-                    fill=(r, g, b, 200),
+                    fill=(r, g, b, 160),
                 )
     blur_radius = max(scale * 0.9, 2)
     glow = glow_src.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
     out = Image.alpha_composite(big, glow)
-    return Image.alpha_composite(out, big)  # crisp pixels on top of glow
+    return Image.alpha_composite(out, big)
 
 
 def round_corners(img: Image.Image, radius_ratio: float = 0.22) -> Image.Image:
-    """macOS Big Sur+ icon mask: rounded squircle (approximated as rounded rect)."""
     w, h = img.size
     radius = int(min(w, h) * radius_ratio)
     mask = Image.new("L", (w, h), 0)
@@ -175,11 +171,9 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     grid = render_grid()
 
-    # Sizes used by the existing AppIcon.appiconset.
     sizes = [16, 32, 64, 128, 256, 512, 1024]
     for size in sizes:
         scale = max(1, size // GRID)
-        # For sizes smaller than GRID, fall back to bicubic to keep glyph readable.
         if size < GRID:
             scaled = grid.resize((size, size), Image.Resampling.BILINEAR)
         else:
@@ -190,6 +184,10 @@ def main() -> None:
         path = OUT_DIR / f"app_icon_{size}.png"
         scaled.save(path)
         print(f"  wrote {path.relative_to(ROOT)}  ({size}×{size})")
+        if size == 256:
+            ASSETS_LOGO.parent.mkdir(parents=True, exist_ok=True)
+            scaled.save(ASSETS_LOGO)
+            print(f"  wrote {ASSETS_LOGO.relative_to(ROOT)}  (in-app logo)")
 
 
 if __name__ == "__main__":

@@ -3689,6 +3689,8 @@ adminContext = {
   getConnectedClients: () => buildClientsList(),
   getMdnsActive: () => mdnsActive,
   getTailscaleUrl: () => tailscaleUrl,
+  getQueuedTaskCount: () => taskQueue.size,
+  getActiveAgentCount: () => agentRunner.getStatus().length,
   scheduleExit: (code, reason) => {
     // Defer slightly so the HTTP response flushes before we tear down.
     setTimeout(() => gracefulExit(code, reason), 100);
