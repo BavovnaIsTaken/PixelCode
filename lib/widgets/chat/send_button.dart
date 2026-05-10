@@ -1,11 +1,12 @@
 /// The chat "send" button — the single most-clicked element in the app.
 ///
-/// Renders one of four hand-crafted designs selected via the cosmetic
+/// Renders one of five hand-crafted designs selected via the cosmetic
 /// catalog (see [SendButtonVariant]). Interaction states (idle / hover /
 /// pressed / tapped) are tuned per-variant so each design feels physically
 /// distinct — the classic button is flat and responsive, Gold Rocket is
-/// weighty with a shimmer, Neon Pulse breathes, and Pixel Arcade snaps
-/// into its drop-shadow like a real arcade cabinet key.
+/// weighty with a shimmer, Neon Pulse breathes, Pixel Arcade snaps into its
+/// drop-shadow like a real arcade cabinet key, and Liquid Glass refracts
+/// the surface beneath with an engraved pixel arrow.
 library;
 
 import 'dart:math' as math;
@@ -77,6 +78,7 @@ class _SendButtonBodyState extends State<_SendButtonBody>
   late final AnimationController _press;
   late final AnimationController _hover;
   late final AnimationController _idle; // loops forever — drives shimmer/pulse
+  late final AnimationController _drift; // 8s loop — cloud-mass drift
   late final AnimationController _burst; // one-shot on tap
 
   bool _hovered = false;
@@ -97,6 +99,10 @@ class _SendButtonBodyState extends State<_SendButtonBody>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat();
+    _drift = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 8000),
+    )..repeat();
     _burst = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 520),
@@ -108,6 +114,7 @@ class _SendButtonBodyState extends State<_SendButtonBody>
     _press.dispose();
     _hover.dispose();
     _idle.dispose();
+    _drift.dispose();
     _burst.dispose();
     super.dispose();
   }
@@ -140,11 +147,12 @@ class _SendButtonBodyState extends State<_SendButtonBody>
         onTapUp: _handleTapUp,
         child: AnimatedBuilder(
           animation:
-              Listenable.merge([_press, _hover, _idle, _burst]),
+              Listenable.merge([_press, _hover, _idle, _drift, _burst]),
           builder: (context, _) {
             final press = Curves.easeOut.transform(_press.value);
             final hover = Curves.easeInOut.transform(_hover.value);
             final idle = _idle.value;
+            final drift = _drift.value;
             final burst = _burst.value;
 
             return SizedBox(
@@ -185,6 +193,13 @@ class _SendButtonBodyState extends State<_SendButtonBody>
                     hover: hover,
                     burst: burst,
                     accent: widget.accent,
+                    size: widget.size,
+                  ),
+                SendButtonVariant.cloudDrift => _CloudDriftPaint(
+                    press: press,
+                    hover: hover,
+                    drift: drift,
+                    burst: burst,
                     size: widget.size,
                   ),
               },
@@ -440,11 +455,17 @@ class _BurstRingsPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Stagger: each ring starts later, but all three must finish by t=1.0
+    // (the burst controller stops there). Divide by (1 - maxOffset) so the
+    // last ring also completes — otherwise its alpha never reaches 0 and the
+    // ring stays drawn until the next tap.
+    const maxOffset = 2 * 0.18;
+    const span = 1.0 - maxOffset;
     final center = size.center(Offset.zero);
     for (int i = 0; i < 3; i++) {
       final offset = i * 0.18;
-      final local = (t - offset).clamp(0.0, 1.0);
-      if (local <= 0) continue;
+      final local = ((t - offset) / span).clamp(0.0, 1.0);
+      if (local <= 0 || local >= 1) continue;
       final alpha = (1.0 - local) * 0.6;
       final radius = baseSize / 2 + local * baseSize * 0.9;
       final paint = Paint()
@@ -759,7 +780,6 @@ class _PixelArrowPainter extends CustomPainter {
 // with backdrop blur, rim highlight and a subtle accent tint. The
 // pixel-art arrow is engraved (deboss + emboss layers, no fill) so the
 // PixelCode identity reads through as etched glass instead of a sticker.
-// Auto-substituted for [pixelArcade] on Apple platforms.
 
 class _LiquidGlassPaint extends StatelessWidget {
   const _LiquidGlassPaint({
@@ -934,4 +954,170 @@ class _LiquidGlassPaint extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─── Variant 6: Cloud Drift ───────────────────────────────────────────────
+// Four pastel cloud-masses (lavender, peach, mint, fuchsia) drift slowly
+// across the glow halo around a dark core. Each blob follows its own
+// incommensurate sinusoid so the pattern never resolves — masses softly
+// mix at the edges via BlendMode.screen but never collapse into a single
+// mid-tone. Locked palette: identity-defining like Gold Rocket and Pixel
+// Arcade, does not follow the theme accent.
+
+class _CloudDriftPaint extends StatelessWidget {
+  const _CloudDriftPaint({
+    required this.press,
+    required this.hover,
+    required this.drift,
+    required this.burst,
+    required this.size,
+  });
+
+  final double press;
+  final double hover;
+  final double drift;
+  final double burst;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = 1.0 - press * 0.05;
+
+    return Transform.scale(
+      scale: scale,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          SizedBox(
+            width: size * 2,
+            height: size * 2,
+            child: CustomPaint(
+              painter: _CloudDriftPainter(
+                t: drift,
+                hover: hover,
+                press: press,
+                burst: burst,
+                buttonSize: size,
+              ),
+            ),
+          ),
+          Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              color: const Color(0xFF05060A),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.10),
+                width: 1,
+              ),
+            ),
+            child: Center(
+              child: Icon(
+                Icons.send_rounded,
+                size: size * 0.44,
+                color: Colors.white.withValues(alpha: 0.95),
+                shadows: const [
+                  Shadow(color: Colors.black54, blurRadius: 4),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CloudDriftPainter extends CustomPainter {
+  _CloudDriftPainter({
+    required this.t,
+    required this.hover,
+    required this.press,
+    required this.burst,
+    required this.buttonSize,
+  });
+
+  final double t;
+  final double hover;
+  final double press;
+  final double burst;
+  final double buttonSize;
+
+  static const _colors = <Color>[
+    Color(0xFFC4ACFF),
+    Color(0xFFFFBFA0),
+    Color(0xFF7FDDCC),
+    Color(0xFFFFAACF),
+  ];
+
+  static const _baseOffsets = <Offset>[
+    Offset(-12, -10),
+    Offset(13, -8),
+    Offset(10, 12),
+    Offset(-11, 13),
+  ];
+
+  // (freqX, freqY, phaseX, phaseY) — incommensurate frequencies so blob
+  // positions never realign across the 8s cycle.
+  static const _driftParams = <List<double>>[
+    [1.0, 1.3, 0.0, 0.0],
+    [0.7, 1.1, 1.2, 0.8],
+    [1.4, 0.9, 2.5, 1.7],
+    [0.9, 1.2, 3.8, 0.4],
+  ];
+
+  static const _amplitudes = <Offset>[
+    Offset(8, 7),
+    Offset(7, 9),
+    Offset(6, 8),
+    Offset(9, 6),
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = buttonSize / 44.0;
+    final center = size.center(Offset.zero);
+    const twoPi = math.pi * 2;
+
+    final amplBoost = 1.0 + hover * 0.4;
+    final burstEnvelope = burst > 0
+        ? math.sin(math.min(burst, 0.3) / 0.3 * math.pi) * (1.0 - burst)
+        : 0.0;
+
+    final blobRadius = (24.0 + burstEnvelope * 12.0 - press * 4.0) * scale;
+    final alphaBoost =
+        (1.0 + burstEnvelope * 0.6 - press * 0.15).clamp(0.0, 1.6);
+
+    for (int i = 0; i < 4; i++) {
+      final p = _driftParams[i];
+      final amp = _amplitudes[i];
+      final dx = math.sin(t * twoPi * p[0] + p[2]) * amp.dx * scale * amplBoost;
+      final dy = math.cos(t * twoPi * p[1] + p[3]) * amp.dy * scale * amplBoost;
+      final pos = center + _baseOffsets[i] * scale + Offset(dx, dy);
+
+      final color = _colors[i];
+      final paint = Paint()
+        ..shader = ui.Gradient.radial(
+          pos,
+          blobRadius,
+          [
+            color.withValues(alpha: (0.70 * alphaBoost).clamp(0.0, 1.0)),
+            color.withValues(alpha: 0.0),
+          ],
+          [0.0, 1.0],
+        )
+        ..blendMode = BlendMode.screen;
+      canvas.drawCircle(pos, blobRadius, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CloudDriftPainter oldDelegate) =>
+      oldDelegate.t != t ||
+      oldDelegate.hover != hover ||
+      oldDelegate.press != press ||
+      oldDelegate.burst != burst ||
+      oldDelegate.buttonSize != buttonSize;
 }

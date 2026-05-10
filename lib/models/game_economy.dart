@@ -1163,6 +1163,8 @@ const cosmeticCatalog = <CosmeticItem>[
   CosmeticItem(id: 'send_neon_pulse', type: CosmeticType.sendButtonStyle, name: 'Неоновий Пульс', cost: 6000, preview: '✺'),
   CosmeticItem(id: 'send_gold_rocket', type: CosmeticType.sendButtonStyle, name: 'Золота Ракета', cost: 12000, preview: '🚀'),
   CosmeticItem(id: 'send_pixel_arcade', type: CosmeticType.sendButtonStyle, name: 'Піксельна Аркада', cost: 20000, preview: '▶'),
+  CosmeticItem(id: 'send_liquid_glass', type: CosmeticType.sendButtonStyle, name: 'Рідке Скло', cost: 25000, preview: '🫧'),
+  CosmeticItem(id: 'send_cloud_drift', type: CosmeticType.sendButtonStyle, name: 'Хмарний Дрейф', cost: 18000, preview: '🌬'),
 ];
 
 CosmeticItem? cosmeticById(String id) {
