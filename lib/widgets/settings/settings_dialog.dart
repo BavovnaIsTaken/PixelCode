@@ -154,7 +154,6 @@ enum _SettingsCategory {
   network(Icons.hub_outlined, 'Мережа'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
   logo(Icons.memory, 'Лого'),
-  cheats(Icons.auto_awesome_outlined, 'Чіти'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
 
   const _SettingsCategory(this.icon, this.label);
@@ -211,8 +210,6 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return _buildErgonomics();
       case _SettingsCategory.logo:
         return _buildLogo();
-      case _SettingsCategory.cheats:
-        return _buildCheats();
       case _SettingsCategory.danger:
         return _buildDanger();
     }
@@ -225,7 +222,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         _SectionHeader(title: 'Енергія'),
         const SizedBox(height: 12),
         _desc('Денний ліміт токенів Claude API. '
-            'При вичерпанні модель автоматично понижується до Haiku. '
+            'Коли ліміт вичерпано, модель автоматично переходить на Haiku. '
             'Лічильники скидаються опівночі за локальним часом.'),
         const SizedBox(height: 18),
         const _EnergyDetails(),
@@ -449,18 +446,6 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             'швидкого запуску.'),
         const SizedBox(height: 14),
         const _DeployStatusSection(),
-      ],
-    );
-  }
-
-  Widget _buildCheats() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Чіти'),
-        const SizedBox(height: 12),
-        _desc('Швидкі дії для розробки та тестування.'),
-        const SizedBox(height: 14),
       ],
     );
   }

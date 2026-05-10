@@ -688,7 +688,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                         ),
                                       ),
                                       child: Text(
-                                        agentState.isActive ? 'Активен' : 'Вільен',
+                                        agentState.isActive ? 'Активний' : 'Вільний',
                                         style: TextStyle(
                                           color: agentState.isActive
                                               ? const Color(0xFF00C0D1)
@@ -1435,9 +1435,9 @@ class _DirectMsgHint extends StatelessWidget {
               const SizedBox(width: 6),
               const Expanded(
                 child: Text(
-                  'Краще писати Капітану — він розподілить роботу по команді. '
-                  'Пряме повідомлення конкретному робітнику — тонке керування: '
-                  'роби так лише якщо добре розумієш що й кому делегуєш.',
+                  'Краще писати Капітану — він розподілить роботу між командою. '
+                  'Пряме повідомлення конкретному колезі — тонке керування: '
+                  'роби так лише якщо добре розумієш, що й кому делегуєш.',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 11,
