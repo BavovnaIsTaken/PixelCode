@@ -159,4 +159,22 @@ void main() {
       expect(sonya.defaultProvider, AgentProviderType.local);
     });
   });
+
+  group('character-artist coverage', () {
+    test('Назар exists and covers the character-artist role', () {
+      final nazar = rosterCatalog.firstWhere((c) => c.id == 'nazar_artist');
+      expect(nazar.roleType, 'character-artist');
+      expect(nazar.name, 'Назар');
+      expect(nazar.signatureStat, SkillType.creativity);
+    });
+
+    test('rosterCatalog now covers 8 of 11 roleCatalog roles', () {
+      final rosterRoles = rosterCatalog.map((c) => c.roleType).toSet();
+      expect(rosterRoles.length, 8);
+      expect(rosterRoles.contains('character-artist'), isTrue);
+      expect(rosterRoles.contains('manager'), isFalse);
+      expect(rosterRoles.contains('game-designer'), isFalse);
+      expect(rosterRoles.contains('strategy-keeper'), isFalse);
+    });
+  });
 }
