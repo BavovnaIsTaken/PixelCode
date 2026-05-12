@@ -96,6 +96,10 @@ lands, redesign:
 - [ ] **Paddle hit** — squash by 1 sprite-row for 80 ms on impact.
 - [ ] **Powerup collect** — small flash of capsule color around the paddle
       when picked up.
+- [x] **Sticky-catch landing** — radial 8-direction pixel-burst, paddle
+      squish, animated glue strand, pulsing halo, dashed aim arrow
+      following paddle. (`arkanoid_catch_helpers.dart` + painter
+      overlays; tests in `test/widgets/easter_eggs/arkanoid_catch_helpers_test.dart`.)
 
 ## Phase 2 — beyond level 1 (deferred)
 

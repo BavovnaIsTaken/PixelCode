@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/settings_provider.dart';
 import '../canvas/arkanoid_sprites.dart';
+import 'arkanoid_catch_helpers.dart';
 
 // ─── Brick types ─────────────────────────────────────────────────────────────
 
@@ -54,8 +55,15 @@ class _Ball {
   double x, y, dx, dy;
   bool stuck;
   double stuckOffsetX = 0;
+  /// Frames since this ball became `stuck`. Drives the catch-splat
+  /// animation in the painter — clamped at [kCaptureSplatFrames].
+  int captureTick = 0;
+  /// Pre-computed launch angle for the on-screen aim arrow while stuck.
+  /// Re-derived from paddle hit-position each tick.
+  double aimAngle = -pi / 2;
   _Ball(this.x, this.y, this.dx, this.dy, {this.stuck = false});
 }
+
 
 class _FallingPU {
   double x, y;
@@ -254,6 +262,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   int _slowTicks = 0;
   int _blastTicks = 0;
   int _laserCooldown = 0;
+  /// Monotonically-increasing frame counter — drives pulsing/animated
+  /// painter effects (sticky halo, glue strand wobble).
+  int _animTick = 0;
 
   Timer? _ticker;
   final _focusNode = FocusNode();
@@ -418,8 +429,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     for (final ball in _balls) {
       if (!ball.stuck) continue;
       ball.stuck = false;
-      final hitPos = ((ball.x - _paddleX) / pw).clamp(0.0, 1.0);
-      final angle = -pi / 2 + (hitPos - 0.5) * 1.2;
+      ball.captureTick = 0;
+      final hitPos = (ball.x - _paddleX) / pw;
+      final angle = aimAngleForHit(hitPos);
       final spd = _effectiveSpeed;
       ball.dx = spd * cos(angle);
       ball.dy = spd * sin(angle);
@@ -532,6 +544,8 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
         if (ball.stuck) {
           ball.x = (_paddleX + _effectivePaddleW / 2 + ball.stuckOffsetX)
               .clamp(_ballR, _gameW - _ballR);
+          ball.aimAngle =
+              aimAngleForHit((ball.x - _paddleX) / _effectivePaddleW);
         }
       }
     });
@@ -542,6 +556,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   void _tick() {
     if (!mounted || _phase != _Phase.running) return;
     setState(() {
+      _animTick++;
       if (_expandTicks > 0) _expandTicks--;
       if (_stickyTicks > 0) _stickyTicks--;
       if (_laserTicks > 0) {
@@ -610,6 +625,10 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.x = (_paddleX + pw / 2 + ball.stuckOffsetX)
               .clamp(_ballR, _gameW - _ballR);
           ball.y = paddleTop - _ballR;
+          // Recompute aim angle from current paddle hit-position so the
+          // painter can render a live arrow that follows paddle movement.
+          ball.aimAngle = aimAngleForHit((ball.x - _paddleX) / pw);
+          ball.captureTick = advanceCaptureTick(ball.captureTick);
           continue;
         }
 
@@ -651,14 +670,14 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ball.x <= _paddleX + pw) {
           if (_isSticky) {
             ball.stuck = true;
+            ball.captureTick = 0;
             ball.stuckOffsetX = (ball.x - (_paddleX + pw / 2))
                 .clamp(-pw / 2, pw / 2);
             ball.y = paddleTop - _ballR;
             continue;
           }
           ball.y = paddleTop - _ballR;
-          final hit = (ball.x - _paddleX) / pw;
-          final angle = -pi / 2 + (hit - 0.5) * 1.2;
+          final angle = aimAngleForHit((ball.x - _paddleX) / pw);
           ball.dx = speed * cos(angle);
           ball.dy = speed * sin(angle);
           if (ball.dy > -1.0) ball.dy = -1.0;
@@ -872,6 +891,8 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                         isThru: _isThru,
                         isLaser: _isLaser,
                         isExpand: _expandTicks > 0,
+                        isSticky: _isSticky,
+                        animTick: _animTick,
                         score: _score,
                         highScore: _highScore,
                       ),
@@ -1047,8 +1068,10 @@ class _DxBallPainter extends CustomPainter {
   final List<_FallingPU> fallingPUs;
   final List<_Bullet> bullets;
   final _Phase phase;
-  final bool isBlast, isThru, isLaser, isExpand;
+  final bool isBlast, isThru, isLaser, isExpand, isSticky;
   final int score, highScore;
+  /// Frame counter for pulsing animations (sticky halo, glue wobble).
+  final int animTick;
 
   _DxBallPainter({
     required this.bricks,
@@ -1067,6 +1090,8 @@ class _DxBallPainter extends CustomPainter {
     required this.isThru,
     required this.isLaser,
     required this.isExpand,
+    required this.isSticky,
+    required this.animTick,
     required this.score,
     required this.highScore,
   });
@@ -1208,7 +1233,14 @@ class _DxBallPainter extends CustomPainter {
   // ── Paddle ───────────────────────────────────────────────────────────────
 
   void _drawPaddle(Canvas canvas, Size size) {
-    final py = size.height - bottomPad - _paddleH;
+    var py = size.height - bottomPad - _paddleH;
+
+    // ── Capture-squish: press paddle down 1px during the catch-splat window
+    // of any stuck ball, so the impact reads physically.
+    final freshCapture = balls.any(
+      (b) => b.stuck && b.captureTick < kCaptureSplatFrames,
+    );
+    if (freshCapture) py += 1;
 
     final spriteWidth = deskPaddleSprite[0].length.toDouble();
     final spriteHeight = deskPaddleSprite.length.toDouble();
@@ -1227,6 +1259,25 @@ class _DxBallPainter extends CustomPainter {
       pixelSize,
     );
 
+    // ── Sticky energy strip across the top of the paddle while any ball
+    // is held — pulses with animTick so it reads as "live energy".
+    final anyStuck = balls.any((b) => b.stuck);
+    if (anyStuck) {
+      final pulse = 0.55 + 0.25 * sin(animTick * 0.25);
+      final stripY = py - 1;
+      canvas.drawRect(
+        Rect.fromLTWH(paddleX + 2, stripY, paddleW - 4, 2),
+        Paint()..color = const Color(0xFFFFCC00).withValues(alpha: pulse),
+      );
+      // Outer soft glow
+      canvas.drawRect(
+        Rect.fromLTWH(paddleX, stripY - 2, paddleW, 6),
+        Paint()
+          ..color = const Color(0xFFFFCC00).withValues(alpha: 0.18)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+    }
+
     // Laser gun nozzles (positioned on top of sprite)
     if (isLaser) {
       final nozzleP = Paint()..color = const Color(0xFFFF4444);
@@ -1244,11 +1295,18 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawBalls(Canvas canvas) {
     for (final ball in balls) {
-      _drawSingleBall(canvas, ball.x, ball.y);
+      _drawSingleBall(canvas, ball);
     }
   }
 
-  void _drawSingleBall(Canvas canvas, double x, double y) {
+  void _drawSingleBall(Canvas canvas, _Ball ball) {
+    final x = ball.x;
+    final y = ball.y;
+    // Draw catch overlays UNDER the ball sprite so the sprite stays
+    // the visual focus.
+    if (ball.stuck) {
+      _drawCaptureOverlays(canvas, ball);
+    }
     // Choose sprite based on blast mode
     final sprite = isBlast ? fireExtinguisherSprite : coffeeBallSprite6x6;
 
@@ -1260,8 +1318,12 @@ class _DxBallPainter extends CustomPainter {
     final spriteX = x - (spriteWidth * pixelSize) / 2;
     final spriteY = y - (sprite.length * pixelSize) / 2;
 
-    // Draw halo glow based on mode
-    if (isBlast) {
+    // Draw halo glow based on mode. When stuck, the catch overlay
+    // already paints a pulsing yellow halo — skip the default halo so
+    // the colors don't muddy each other.
+    if (ball.stuck) {
+      // intentionally no default halo while caught
+    } else if (isBlast) {
       canvas.drawCircle(
         Offset(x, y),
         _ballR + 5,
@@ -1294,6 +1356,95 @@ class _DxBallPainter extends CustomPainter {
       spriteX,
       spriteY,
       pixelSize,
+    );
+
+    // Aim arrow goes ABOVE the ball so it's never occluded.
+    if (ball.stuck) {
+      _drawAimArrow(canvas, ball);
+    }
+  }
+
+  /// Halo + glue strand + splash-burst around a stuck ball. The first
+  /// [kCaptureSplatFrames] frames also paint a radial 8-direction
+  /// pixel-burst at the ball position for an "impact" punch.
+  void _drawCaptureOverlays(Canvas canvas, _Ball ball) {
+    final x = ball.x;
+    final y = ball.y;
+
+    // ── Pulsing yellow halo (telegraphs "tap to release") ──
+    final haloPulse = 0.32 + 0.18 * sin(animTick * 0.22);
+    canvas.drawCircle(
+      Offset(x, y),
+      _ballR + 5,
+      Paint()
+        ..color = const Color(0xFFFFCC00).withValues(alpha: haloPulse)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+
+    // ── Glue strand: zig-zag pixel column from paddle-top up to ball ──
+    final paddleTopY = y + _ballR; // ball sits at paddleTop - _ballR
+    final wobble = sin(animTick * 0.5) * 1.2;
+    final strandPaint = Paint()..color = const Color(0xFFFFCC00);
+    for (var i = 0; i < 4; i++) {
+      final t = i / 4.0;
+      final sx = x + sin(animTick * 0.4 + i * 1.1) * wobble * (1 - t);
+      final sy = paddleTopY - i * 1.5;
+      canvas.drawRect(
+        Rect.fromLTWH(sx - 0.75, sy - 0.75, 1.5, 1.5),
+        strandPaint,
+      );
+    }
+
+    // ── Capture splat: 8-direction pixel burst, fades over splat window ──
+    if (ball.captureTick < kCaptureSplatFrames) {
+      final t = ball.captureTick / kCaptureSplatFrames;
+      final radius = _ballR + 2 + t * 8;
+      final alpha = (1 - t).clamp(0.0, 1.0);
+      final burstPaint = Paint()
+        ..color = const Color(0xFFFFCC00).withValues(alpha: alpha);
+      for (var i = 0; i < 8; i++) {
+        final a = i * pi / 4 + pi / 8;
+        final px = x + cos(a) * radius;
+        final py = y + sin(a) * radius;
+        canvas.drawRect(
+          Rect.fromLTWH(px - 1, py - 1, 2, 2),
+          burstPaint,
+        );
+      }
+    }
+  }
+
+  /// Dashed launch-direction arrow drawn from the ball outward along the
+  /// current aim angle. Length pulses so it grabs the eye.
+  void _drawAimArrow(Canvas canvas, _Ball ball) {
+    final dx = cos(ball.aimAngle);
+    final dy = sin(ball.aimAngle);
+    final pulse = 0.85 + 0.15 * sin(animTick * 0.3);
+    final baseLen = _ballR + 4;
+    final dashPaint = Paint()..color = const Color(0xFFFFFFFF);
+    for (var i = 0; i < 4; i++) {
+      final dist = baseLen + i * 4 * pulse;
+      final px = ball.x + dx * dist;
+      final py = ball.y + dy * dist;
+      final alpha = (1 - i * 0.22).clamp(0.0, 1.0);
+      canvas.drawRect(
+        Rect.fromLTWH(px - 1, py - 1, 2, 2),
+        dashPaint..color = const Color(0xFFFFFFFF).withValues(alpha: alpha),
+      );
+    }
+    // Arrow tip — slightly larger pixel cluster at the far end
+    final tipDist = baseLen + 4 * 4 * pulse;
+    final tx = ball.x + dx * tipDist;
+    final ty = ball.y + dy * tipDist;
+    final tipPaint = Paint()..color = const Color(0xFFFFFFFF);
+    canvas.drawRect(Rect.fromLTWH(tx - 1.5, ty - 1.5, 3, 3), tipPaint);
+    // Soft outer glow
+    canvas.drawCircle(
+      Offset(tx, ty),
+      4,
+      Paint()
+        ..color = const Color(0xFFFFCC00).withValues(alpha: 0.35)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
   }
 
