@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/settings_provider.dart';
+import '../canvas/arkanoid_sprites.dart';
 
 // ─── Brick types ─────────────────────────────────────────────────────────────
 
@@ -34,18 +35,6 @@ const _puFallSpeed = 1.8;
 const _puChance = 0.20;
 const _laserSpeed = 9.0;
 const _laserFireInterval = 28; // ticks between auto-shots
-
-// DX-Ball classic row palette (top → bottom)
-const _rowColors = [
-  Color(0xFFFF2222),
-  Color(0xFFFF8800),
-  Color(0xFFDDDD00),
-  Color(0xFF22DD22),
-  Color(0xFF00CCCC),
-  Color(0xFF2266FF),
-  Color(0xFFAA44FF),
-  Color(0xFFFF44AA),
-];
 
 // ─── Persistence keys ────────────────────────────────────────────────────────
 
@@ -1093,6 +1082,37 @@ class _DxBallPainter extends CustomPainter {
     _drawOverlay(canvas, size);
   }
 
+  // ── Sprite rendering helper ────────────────────────────────────────────────
+
+  void _drawTextSprite(
+    Canvas canvas,
+    List<String> sprite,
+    double x,
+    double y,
+    double pixelSize,
+  ) {
+    for (int row = 0; row < sprite.length; row++) {
+      final line = sprite[row];
+      for (int col = 0; col < line.length; col++) {
+        final colorKey = line[col];
+        final color = resolveArkanoidSpriteColor(colorKey);
+
+        // Skip transparent pixels (alpha = 0)
+        if (color.a == 0) continue;
+
+        canvas.drawRect(
+          Rect.fromLTWH(
+            x + col * pixelSize,
+            y + row * pixelSize,
+            pixelSize,
+            pixelSize,
+          ),
+          Paint()..color = color,
+        );
+      }
+    }
+  }
+
   // ── Background ───────────────────────────────────────────────────────────
 
   void _drawBackground(Canvas canvas, Size size) {
@@ -1136,163 +1156,78 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawSingleBrick(
       Canvas canvas, double x, double y, int type, int row) {
-    final rect = Rect.fromLTWH(x, y, brickW, brickH);
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(2));
-
-    final Color base;
+    // Select sprite based on brick type
+    final List<String> sprite;
     switch (type) {
       case _bNormal:
-        base = _rowColors[row % _rowColors.length];
+        // Normal brick: use monitor sprite with row-based color variation
+        final monitorIndex = row % ArkanoidSprites.monitorBrickVariants.length;
+        sprite = ArkanoidSprites.monitorBrickVariants[monitorIndex];
       case _bGlass:
-        base = const Color(0xFF88CCFF);
+        // Glass brick (2-hit): glass partition sprite
+        sprite = ArkanoidSprites.glassPartition;
       case _bCracked:
-        base = const Color(0xFF5599BB);
+        // Cracked glass brick: cracked glass sprite
+        sprite = ArkanoidSprites.crackedGlass;
       case _bGold:
-        base = const Color(0xFFFFCC00);
+        // Gold brick: trophy sprite
+        sprite = ArkanoidSprites.trophy;
       case _bBlast:
-        base = const Color(0xFFFF4400);
+        // Blast brick: fire extinguisher sprite
+        sprite = ArkanoidSprites.fireExtinguisher;
       case _bSteel:
-        base = const Color(0xFF8899AA);
+        // Steel brick: filing cabinet sprite
+        sprite = ArkanoidSprites.filingCabinet;
       default:
-        base = Colors.white;
+        // Fallback to normal brick
+        sprite = ArkanoidSprites.monitorBrickVariants[0];
     }
 
-    // 3-stop gradient: lighter top → base mid → darker bottom (DX-Ball bevel)
-    final light = Color.lerp(base, Colors.white, 0.35)!;
-    final dark = Color.lerp(base, Colors.black, 0.30)!;
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(x, y),
-          Offset(x, y + brickH),
-          [light, base, dark],
-          [0.0, 0.45, 1.0],
-        ),
-    );
+    // Calculate pixel size to fit sprite in brick dimensions
+    final spriteWidth = sprite[0].length.toDouble();
+    final spriteHeight = sprite.length.toDouble();
+    final pixelSizeX = brickW / spriteWidth;
+    final pixelSizeY = brickH / spriteHeight;
+    // Use smaller value to maintain aspect ratio
+    final pixelSize = min(pixelSizeX, pixelSizeY);
 
-    // Top highlight strip
-    canvas.drawRect(
-      Rect.fromLTWH(x + 1, y + 1, brickW - 2, 2),
-      Paint()..color = Colors.white.withValues(alpha: 0.45),
-    );
+    // Center sprite within brick bounds
+    final centeredX = x + (brickW - spriteWidth * pixelSize) / 2;
+    final centeredY = y + (brickH - spriteHeight * pixelSize) / 2;
 
-    // Bottom shadow strip
-    canvas.drawRect(
-      Rect.fromLTWH(x + 1, y + brickH - 2, brickW - 2, 1),
-      Paint()..color = Colors.black.withValues(alpha: 0.45),
+    // Draw sprite
+    _drawTextSprite(
+      canvas,
+      sprite,
+      centeredX,
+      centeredY,
+      pixelSize,
     );
-
-    // Left edge highlight
-    canvas.drawRect(
-      Rect.fromLTWH(x, y + 2, 1, brickH - 4),
-      Paint()..color = Colors.white.withValues(alpha: 0.25),
-    );
-
-    // Type-specific details
-    switch (type) {
-      case _bGlass:
-        // Glassy sheen on right side
-        canvas.drawRect(
-          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
-          Paint()..color = Colors.white.withValues(alpha: 0.22),
-        );
-      case _bCracked:
-        // Cracks + dimmer sheen
-        canvas.drawRect(
-          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
-          Paint()..color = Colors.white.withValues(alpha: 0.10),
-        );
-        final cp = Paint()
-          ..color = Colors.black.withValues(alpha: 0.65)
-          ..strokeWidth = 0.8
-          ..style = PaintingStyle.stroke;
-        canvas.drawLine(Offset(x + brickW * 0.35, y),
-            Offset(x + brickW * 0.55, y + brickH), cp);
-        canvas.drawLine(Offset(x + brickW * 0.55, y + brickH * 0.15),
-            Offset(x + brickW * 0.28, y + brickH * 0.72), cp);
-      case _bGold:
-        // Sparkle dots
-        final sp = Paint()..color = Colors.white.withValues(alpha: 0.75);
-        canvas.drawCircle(Offset(x + brickW * 0.2, y + brickH * 0.4), 1, sp);
-        canvas.drawCircle(Offset(x + brickW * 0.5, y + brickH * 0.6), 1, sp);
-        canvas.drawCircle(Offset(x + brickW * 0.78, y + brickH * 0.35), 1, sp);
-      case _bBlast:
-        // Explosion asterisk
-        final starP = Paint()
-          ..color = Colors.white.withValues(alpha: 0.9)
-          ..strokeWidth = 1.2
-          ..style = PaintingStyle.stroke;
-        final cx = x + brickW / 2;
-        final cy = y + brickH / 2;
-        final r = brickH * 0.28;
-        for (var i = 0; i < 4; i++) {
-          final a = i * pi / 4;
-          canvas.drawLine(
-            Offset(cx - cos(a) * r, cy - sin(a) * r),
-            Offset(cx + cos(a) * r, cy + sin(a) * r),
-            starP,
-          );
-        }
-      case _bSteel:
-        // Rivet corners + border
-        canvas.drawRRect(
-          rrect,
-          Paint()
-            ..color = Colors.white.withValues(alpha: 0.30)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 0.5,
-        );
-        final rp = Paint()..color = Colors.white.withValues(alpha: 0.45);
-        canvas.drawCircle(Offset(x + 3, y + 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + brickW - 3, y + 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + 3, y + brickH - 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + brickW - 3, y + brickH - 3), 1.2, rp);
-    }
   }
 
   // ── Paddle ───────────────────────────────────────────────────────────────
 
   void _drawPaddle(Canvas canvas, Size size) {
     final py = size.height - bottomPad - _paddleH;
-    final baseColor =
-        isExpand ? const Color(0xFF33BB33) : const Color(0xFF2255CC);
-    final rect = Rect.fromLTWH(paddleX, py, paddleW, _paddleH);
-    final rrect =
-        RRect.fromRectAndRadius(rect, Radius.circular(_paddleH / 2));
 
-    // Metallic gradient
-    final light = Color.lerp(baseColor, Colors.white, 0.50)!;
-    final dark = Color.lerp(baseColor, Colors.black, 0.28)!;
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(paddleX, py),
-          Offset(paddleX, py + _paddleH),
-          [light, baseColor, dark],
-          [0.0, 0.50, 1.0],
-        ),
+    final spriteWidth = deskPaddleSprite[0].length.toDouble();
+    final spriteHeight = deskPaddleSprite.length.toDouble();
+    // Fit by the more-constraining axis so the sprite never overflows
+    // its hit-rect on tall/short paddles.
+    final pixelSize = min(paddleW / spriteWidth, _paddleH / spriteHeight);
+
+    final spriteX = paddleX + (paddleW - spriteWidth * pixelSize) / 2;
+    final spriteY = py + (_paddleH - spriteHeight * pixelSize) / 2;
+
+    _drawTextSprite(
+      canvas,
+      deskPaddleSprite,
+      spriteX,
+      spriteY,
+      pixelSize,
     );
 
-    // Outer glow
-    canvas.drawRRect(
-      rrect,
-      Paint()
-        ..color = baseColor.withValues(alpha: 0.30)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
-    );
-
-    // Bright top edge
-    canvas.drawLine(
-      Offset(paddleX + _paddleH / 2 + 1, py + 1.5),
-      Offset(paddleX + paddleW - _paddleH / 2 - 1, py + 1.5),
-      Paint()
-        ..color = Colors.white.withValues(alpha: 0.55)
-        ..strokeWidth = 1.5,
-    );
-
-    // Laser gun nozzles
+    // Laser gun nozzles (positioned on top of sprite)
     if (isLaser) {
       final nozzleP = Paint()..color = const Color(0xFFFF4444);
       final nozzleGlow = Paint()
@@ -1314,8 +1249,19 @@ class _DxBallPainter extends CustomPainter {
   }
 
   void _drawSingleBall(Canvas canvas, double x, double y) {
+    // Choose sprite based on blast mode
+    final sprite = isBlast ? fireExtinguisherSprite : coffeeBallSprite6x6;
+
+    // Calculate sprite dimensions and pixel size
+    final spriteWidth = sprite[0].length.toDouble();
+    final pixelSize = (_ballR * 2) / spriteWidth;
+
+    // Calculate top-left position to center the sprite at (x, y)
+    final spriteX = x - (spriteWidth * pixelSize) / 2;
+    final spriteY = y - (sprite.length * pixelSize) / 2;
+
+    // Draw halo glow based on mode
     if (isBlast) {
-      // Fireball glow
       canvas.drawCircle(
         Offset(x, y),
         _ballR + 5,
@@ -1323,23 +1269,7 @@ class _DxBallPainter extends CustomPainter {
           ..color = const Color(0xFFFF6600).withValues(alpha: 0.18)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
       );
-      canvas.drawCircle(
-        Offset(x, y),
-        _ballR,
-        Paint()
-          ..shader = ui.Gradient.radial(
-            Offset(x - _ballR * 0.3, y - _ballR * 0.35),
-            _ballR * 1.5,
-            [
-              const Color(0xFFFFEEAA),
-              const Color(0xFFFF8800),
-              const Color(0xFF882200),
-            ],
-            [0.0, 0.45, 1.0],
-          ),
-      );
     } else if (isThru) {
-      // Cyan thru-ball
       canvas.drawCircle(
         Offset(x, y),
         _ballR + 4,
@@ -1347,23 +1277,7 @@ class _DxBallPainter extends CustomPainter {
           ..color = const Color(0xFF00CCFF).withValues(alpha: 0.18)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
       );
-      canvas.drawCircle(
-        Offset(x, y),
-        _ballR,
-        Paint()
-          ..shader = ui.Gradient.radial(
-            Offset(x - _ballR * 0.3, y - _ballR * 0.35),
-            _ballR * 1.5,
-            [
-              Colors.white,
-              const Color(0xFF00CCFF),
-              const Color(0xFF003366),
-            ],
-            [0.0, 0.50, 1.0],
-          ),
-      );
     } else {
-      // Normal metallic sphere
       canvas.drawCircle(
         Offset(x, y),
         _ballR + 4,
@@ -1371,28 +1285,15 @@ class _DxBallPainter extends CustomPainter {
           ..color = const Color(0xFF6699FF).withValues(alpha: 0.14)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
       );
-      canvas.drawCircle(
-        Offset(x, y),
-        _ballR,
-        Paint()
-          ..shader = ui.Gradient.radial(
-            Offset(x - _ballR * 0.30, y - _ballR * 0.36),
-            _ballR * 1.6,
-            [
-              Colors.white,
-              const Color(0xFFCCDDFF),
-              const Color(0xFF4466AA),
-            ],
-            [0.0, 0.40, 1.0],
-          ),
-      );
     }
 
-    // Specular highlight (top-left)
-    canvas.drawCircle(
-      Offset(x - _ballR * 0.33, y - _ballR * 0.38),
-      _ballR * 0.30,
-      Paint()..color = Colors.white.withValues(alpha: 0.82),
+    // Draw sprite
+    _drawTextSprite(
+      canvas,
+      sprite,
+      spriteX,
+      spriteY,
+      pixelSize,
     );
   }
 
@@ -1417,76 +1318,44 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawFallingPowerUps(Canvas canvas) {
     for (final pu in fallingPUs) {
-      final Color color;
-      final String label;
+      // Select sprite based on powerup type
+      final List<String> sprite;
       switch (pu.type) {
         case _PUType.expand:
-          color = const Color(0xFF44CC44);
-          label = 'EXPAND';
+          sprite = ArkanoidSprites.expandPowerup;
         case _PUType.multiball:
-          color = const Color(0xFFAA44FF);
-          label = 'MULTI';
+          sprite = ArkanoidSprites.multiballPowerup;
         case _PUType.sticky:
-          color = const Color(0xFFFFCC00);
-          label = 'CATCH';
+          sprite = ArkanoidSprites.stickyPowerup;
         case _PUType.laser:
-          color = const Color(0xFFFF4444);
-          label = 'LASER';
+          sprite = ArkanoidSprites.laserPowerup;
         case _PUType.thru:
-          color = const Color(0xFF00CCFF);
-          label = 'THRU';
+          sprite = ArkanoidSprites.thruPowerup;
         case _PUType.life:
-          color = const Color(0xFFFF88AA);
-          label = '+LIFE';
+          sprite = ArkanoidSprites.lifePowerup;
         case _PUType.slow:
-          color = const Color(0xFF4488FF);
-          label = 'SLOW';
+          sprite = ArkanoidSprites.slowPowerup;
         case _PUType.blast:
-          color = const Color(0xFFFF8800);
-          label = 'BLAST';
+          sprite = ArkanoidSprites.blastPowerup;
       }
 
-      // Pill / capsule shape
-      final rect = Rect.fromCenter(
-          center: Offset(pu.x, pu.y), width: _puW, height: _puH);
-      final rrect =
-          RRect.fromRectAndRadius(rect, Radius.circular(_puH / 2));
+      final spriteWidth = sprite[0].length.toDouble();
+      final spriteHeight = sprite.length.toDouble();
+      // Fit by the more-constraining axis so the capsule stays inside
+      // the powerup hit-rect regardless of sprite aspect ratio.
+      final pixelSize = min(_puW / spriteWidth, _puH / spriteHeight);
 
-      // Dark pill body
-      canvas.drawRRect(rrect, Paint()..color = const Color(0xFF0A0A1A));
+      final spriteX = pu.x - (spriteWidth * pixelSize) / 2;
+      final spriteY = pu.y - (spriteHeight * pixelSize) / 2;
 
-      // Coloured border
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..color = color
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
+      // Draw sprite
+      _drawTextSprite(
+        canvas,
+        sprite,
+        spriteX,
+        spriteY,
+        pixelSize,
       );
-
-      // Inner glow fill
-      canvas.drawRRect(
-        rrect,
-        Paint()
-          ..color = color.withValues(alpha: 0.12)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-      );
-
-      // Label text
-      final tp = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: TextStyle(
-            color: color,
-            fontSize: 7,
-            fontWeight: FontWeight.w800,
-            fontFamily: 'monospace',
-            letterSpacing: 0.5,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(pu.x - tp.width / 2, pu.y - tp.height / 2));
     }
   }
 
