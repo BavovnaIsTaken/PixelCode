@@ -67,6 +67,7 @@
 | Shop panel (скіни, меблі, апгрейди) | `[DONE]` | [lib/widgets/shop/](../lib/widgets/shop/) |
 | Multi-project / session profiles | `[DONE]` | [lib/models/session_profile.dart](../lib/models/session_profile.dart) |
 | Easter eggs (Arkanoid, dungeon crawler) | `[DONE]` | [lib/widgets/easter_eggs/](../lib/widgets/easter_eggs/) |
+| Arkanoid — text-sprite migration + visual polish track | `[IN PROGRESS]` | Sprite catalog [lib/widgets/canvas/arkanoid_sprites.dart](../lib/widgets/canvas/arkanoid_sprites.dart) + smoke tests; Phase 1 (level-1 polish) tracked in [docs/ARKANOID_ROADMAP.md](ARKANOID_ROADMAP.md) |
 | Logo Path DSL (анімація логотипу) | `[DONE]` | [lib/services/logo_path_program.dart](../lib/services/logo_path_program.dart) |
 | **Room adjacency bonuses** (Workstation↔Server Room і т.д.) | `[DONE]` | Per-pair engine: `areRoomsAdjacent` + `computeAdjacencyBonusPercent` — [lib/models/game_economy.dart](../lib/models/game_economy.dart). `_buildRoomEffects()` застосовує глобальні модифікатори + adjacency пари. Ghost overlay `+N%` / `−N%` label — [lib/widgets/canvas/pixel_office_painter.dart](../lib/widgets/canvas/pixel_office_painter.dart) + [lib/widgets/canvas/agent_canvas.dart](../lib/widgets/canvas/agent_canvas.dart). 23 нових тести. |
 | **Break Room morale system** (+20% при відпочинку) | `[DONE]` | `seatRestMultiplier` — вбудовано у `_buildRoomEffects()`; breakRoom↔lounge synergy doubles multiplier |
