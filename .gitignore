@@ -57,6 +57,11 @@ app.*.map.json
 # Node
 node_modules/
 
+# Secrets — never commit. Keep .env.example tracked for onboarding.
+.env
+.env.*
+!.env.example
+
 # Git worktrees
 .worktrees/
 
