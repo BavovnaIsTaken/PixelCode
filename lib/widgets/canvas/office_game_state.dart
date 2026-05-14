@@ -603,19 +603,64 @@ class OfficeGameState {
   }
 
   void _buildExtraStations() {
-    _extraStations = [
-      for (final room in _placedRooms)
-        if (room.type == RoomType.workstation)
-          DeskStation(
-            agentId: 'ws_${room.id}',
-            deskCol: room.col,
-            deskRow: room.row,
-            seatCol: room.col,
-            seatRow: room.row + 1,
+    final stations = <DeskStation>[];
+    for (final room in _placedRooms) {
+      if (room.type == RoomType.workstation) {
+        stations.add(DeskStation(
+          agentId: 'ws_${room.id}',
+          deskCol: room.col,
+          deskRow: room.row,
+          seatCol: room.col,
+          seatRow: room.row + 1,
+          facingDir: CharDirection.up,
+          isExtra: true,
+        ));
+      } else if (room.type == RoomType.openSpace) {
+        // 5×4 open space: 6 desk pods in 3×2 grid (matches room_sprites
+        // `_kOpenSpacePodOrigins`). Each pod has its own desk station.
+        const podOriginsTiles = <List<int>>[
+          [0, 0], [2, 0], [3, 0],
+          [0, 2], [2, 2], [3, 2],
+        ];
+        for (var i = 0; i < podOriginsTiles.length; i++) {
+          final dx = podOriginsTiles[i][0];
+          final dy = podOriginsTiles[i][1];
+          stations.add(DeskStation(
+            agentId: 'os_${room.id}_$i',
+            deskCol: room.col + dx,
+            deskRow: room.row + dy,
+            seatCol: room.col + dx,
+            seatRow: room.row + dy + 1,
             facingDir: CharDirection.up,
             isExtra: true,
-          ),
-    ];
+          ));
+        }
+      } else if (room.type == RoomType.teamFloor) {
+        // 7×5 team floor: 12 desk pods in 4×3 grid (matches room_sprites
+        // `_kTeamFloorPodOrigins`).
+        const podOriginsTiles = <List<int>>[
+          [0, 0], [2, 0], [3, 0], [5, 0],
+          [0, 2], [2, 2], [3, 2], [5, 2],
+          [0, 3], [2, 3], [3, 3], [5, 3],
+        ];
+        for (var i = 0; i < podOriginsTiles.length; i++) {
+          final dx = podOriginsTiles[i][0];
+          final dy = podOriginsTiles[i][1];
+          // Seat is one row below desk; clamp inside the room footprint.
+          final seatRow = room.row + dy + 1;
+          stations.add(DeskStation(
+            agentId: 'tf_${room.id}_$i',
+            deskCol: room.col + dx,
+            deskRow: room.row + dy,
+            seatCol: room.col + dx,
+            seatRow: seatRow > room.row + 4 ? room.row + dy : seatRow,
+            facingDir: CharDirection.up,
+            isExtra: true,
+          ));
+        }
+      }
+    }
+    _extraStations = stations;
   }
 
   void _buildTileMap() {
@@ -704,6 +749,8 @@ class OfficeGameState {
   Iterable<TilePos> _roomInternalBlocks(PlacedRoom room) sync* {
     switch (room.type) {
       case RoomType.workstation:
+      case RoomType.openSpace:
+      case RoomType.teamFloor:
         // Desk/seat already blocked via _extraStations.
         break;
       case RoomType.breakRoom:

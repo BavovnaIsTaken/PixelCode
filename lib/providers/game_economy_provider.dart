@@ -852,18 +852,43 @@ class GameEconomyNotifier extends Notifier<GameState> {
   bool isRoomLimitReached(RoomType type) =>
       roomCount(type) >= type.maxPerOffice;
 
-  void placeRoom(RoomType type, int col, int row, {int rotation = 0}) {
-    if (!canPlaceRoom(type)) return;
+  /// Place a room into the office grid. If [expansionStepsToBuy] > 0 the
+  /// transaction first purchases that many sequential expansion steps and
+  /// then drops the room — a single atomic action so the ghost-in-buffer
+  /// UX commits one combined cost rather than two separate purchases.
+  void placeRoom(RoomType type, int col, int row,
+      {int rotation = 0, int expansionStepsToBuy = 0}) {
+    final plan = _planExpansion(expansionStepsToBuy);
+    if (plan == null) return;
+    final totalCost = type.cost + plan.totalCost;
+    if (state.grymni < totalCost) return;
     if (isRoomLimitReached(type)) return;
     final id = 'room_${DateTime.now().microsecondsSinceEpoch}';
     final rooms = List<PlacedRoom>.from(state.placedRooms)
       ..add(PlacedRoom(
           id: id, type: type, col: col, row: row, rotation: rotation));
     _updateStateAndSync(state.copyWith(
-      grymni: state.grymni - type.cost,
-      totalSpent: state.totalSpent + type.cost,
+      grymni: state.grymni - totalCost,
+      totalSpent: state.totalSpent + totalCost,
+      officeExpansions: state.officeExpansions + plan.extraSteps,
       placedRooms: rooms,
     ));
+  }
+
+  /// Resolves a requested expansion-step purchase into a concrete plan with
+  /// total cost. Returns null when [stepsToBuy] would exceed the tier cap.
+  _ExpansionPurchasePlan? _planExpansion(int stepsToBuy) {
+    if (stepsToBuy <= 0) {
+      return const _ExpansionPurchasePlan(extraSteps: 0, totalCost: 0);
+    }
+    final expansions = state.officeLevel.expansions;
+    final from = state.officeExpansions;
+    if (from + stepsToBuy > expansions.length) return null;
+    var cost = 0;
+    for (var i = from; i < from + stepsToBuy; i++) {
+      cost += expansions[i].cost;
+    }
+    return _ExpansionPurchasePlan(extraSteps: stepsToBuy, totalCost: cost);
   }
 
   /// Final price (after the bundle discount) of a room template.
@@ -882,9 +907,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
   /// included furniture items are also marked as owned so the player can
   /// later move or remove them via the Decor edit mode.
   void placeRoomTemplate(RoomTemplate template, int col, int row,
-      {int rotation = 0}) {
-    if (!canPlaceRoomTemplate(template)) return;
+      {int rotation = 0, int expansionStepsToBuy = 0}) {
+    final plan = _planExpansion(expansionStepsToBuy);
+    if (plan == null) return;
     final cost = templateCost(template);
+    final totalCost = cost + plan.totalCost;
+    if (state.grymni < totalCost) return;
+    if (isRoomLimitReached(template.baseRoom)) return;
     final roomId = 'room_${DateTime.now().microsecondsSinceEpoch}';
     final rooms = List<PlacedRoom>.from(state.placedRooms)
       ..add(PlacedRoom(
@@ -910,12 +939,45 @@ class GameEconomyNotifier extends Notifier<GameState> {
     }
 
     _updateStateAndSync(state.copyWith(
-      grymni: state.grymni - cost,
-      totalSpent: state.totalSpent + cost,
+      grymni: state.grymni - totalCost,
+      totalSpent: state.totalSpent + totalCost,
+      officeExpansions: state.officeExpansions + plan.extraSteps,
       placedRooms: rooms,
       placedFurniture: placed,
       furnitureInventory: inv,
     ));
+  }
+
+  /// Toggle a door between open (auto-formed from shared edge) and closed
+  /// (player-sealed). [tileCol] / [tileRow] must point to an interior border
+  /// tile of the room — the painter renders the toggle via
+  /// `computeRoomDoors`.
+  void toggleDoor(String roomId, int tileCol, int tileRow) {
+    final idx = state.placedRooms.indexWhere((r) => r.id == roomId);
+    if (idx < 0) return;
+    final room = state.placedRooms[idx];
+
+    final w = room.footprintWidth;
+    final h = room.footprintHeight;
+    final onBorder = (tileCol == room.col || tileCol == room.col + w - 1) ||
+        (tileRow == room.row || tileRow == room.row + h - 1);
+    final insideFootprint = tileCol >= room.col &&
+        tileCol < room.col + w &&
+        tileRow >= room.row &&
+        tileRow < room.row + h;
+    if (!onBorder || !insideFootprint) return;
+
+    final closed = Set<DoorTile>.from(room.closedDoors);
+    final key = (col: tileCol, row: tileRow);
+    if (closed.contains(key)) {
+      closed.remove(key);
+    } else {
+      closed.add(key);
+    }
+
+    final rooms = List<PlacedRoom>.from(state.placedRooms);
+    rooms[idx] = room.copyWith(closedDoors: closed);
+    _updateStateAndSync(state.copyWith(placedRooms: rooms));
   }
 
   void removeRoom(String roomId) {
@@ -1048,3 +1110,15 @@ final gameEconomyProvider =
 final hiredAgentIdsProvider = Provider<List<String>>((ref) {
   return ref.watch(gameEconomyProvider).hiredAgentIds;
 });
+
+/// Internal contract returned by `_planExpansion` — concrete expansion steps
+/// to apply and their ₲ cost. Private to the provider: callers express intent
+/// via the `expansionStepsToBuy` parameter, not by constructing this directly.
+class _ExpansionPurchasePlan {
+  final int extraSteps;
+  final int totalCost;
+  const _ExpansionPurchasePlan({
+    required this.extraSteps,
+    required this.totalCost,
+  });
+}

@@ -732,21 +732,48 @@ class BuildMenu extends ConsumerWidget {
     RoomType? selectedRoomType,
     int tick,
   ) {
-    final rooms = RoomType.values
+    final available = RoomType.values
         .where((rt) => _isRoomAvailable(rt, economy))
         .toList();
+    // Rooms first (enclosed units), then Zones (open feature areas) — so the
+    // user scans walls-with-doors before luxury venues.
+    final rooms =
+        available.where((rt) => rt.category == RoomCategory.room).toList();
+    final zones =
+        available.where((rt) => rt.category == RoomCategory.zone).toList();
+
+    final items = <Widget>[];
+    if (rooms.isNotEmpty) {
+      items.add(const _SectionLabel(label: 'Кімнати'));
+      for (final rt in rooms) {
+        items.add(_RoomCard(
+          type: rt,
+          economy: economy,
+          tick: tick,
+          isSelected: selectedRoomType == rt,
+          onTap: () => ref.read(buildModeProvider.notifier).toggleRoom(rt),
+        ));
+      }
+    }
+    if (zones.isNotEmpty) {
+      items.add(const SizedBox(height: 4));
+      items.add(const _SectionLabel(label: 'Зони'));
+      for (final rt in zones) {
+        items.add(_RoomCard(
+          type: rt,
+          economy: economy,
+          tick: tick,
+          isSelected: selectedRoomType == rt,
+          onTap: () => ref.read(buildModeProvider.notifier).toggleRoom(rt),
+        ));
+      }
+    }
+
     return ListView.separated(
       padding: const EdgeInsets.all(12),
-      itemCount: rooms.length,
+      itemCount: items.length,
       separatorBuilder: (_, _) => const SizedBox(height: 8),
-      itemBuilder: (context, i) => _RoomCard(
-        type: rooms[i],
-        economy: economy,
-        tick: tick,
-        isSelected: selectedRoomType == rooms[i],
-        onTap: () =>
-            ref.read(buildModeProvider.notifier).toggleRoom(rooms[i]),
-      ),
+      itemBuilder: (context, i) => items[i],
     );
   }
 
@@ -755,6 +782,28 @@ class BuildMenu extends ConsumerWidget {
     // them locked is more clutter than aspiration at the smallest grid.
     if (type.isLuxury && game.officeLevel == OfficeLevel.garage) return false;
     return true;
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  final String label;
+  const _SectionLabel({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.appColors;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          color: c.textLow,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
   }
 }
 
@@ -830,13 +879,40 @@ class _RoomCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      '${type.icon} ${type.nameUk}',
-                      style: TextStyle(
-                        color: c.textHigh,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${type.icon} ${type.nameUk}',
+                            style: TextStyle(
+                              color: c.textHigh,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (type.category == RoomCategory.zone)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: c.gold.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(3),
+                              border: Border.all(
+                                  color: c.gold.withValues(alpha: 0.5),
+                                  width: 0.6),
+                            ),
+                            child: Text(
+                              'Зона',
+                              style: TextStyle(
+                                color: c.gold,
+                                fontSize: 8,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(

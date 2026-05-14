@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../../models/game_economy.dart';
 import '../../models/resource_pack.dart';
 import 'office_game_state.dart';
+import 'room_doors.dart';
 
 void drawRoom(
   Canvas canvas,
@@ -16,11 +17,13 @@ void drawRoom(
   RoomTheme theme,
   int tick, {
   bool showWorkstationFurniture = true,
+  List<PlacedRoom> neighborRooms = const [],
+  List<PlacedCorridor> neighborCorridors = const [],
 }) {
   final x = room.col * kTileSize;
   final y = room.row * kTileSize;
-  final w = room.type.widthTiles * kTileSize;
-  final h = room.type.heightTiles * kTileSize;
+  final w = room.footprintWidth * kTileSize;
+  final h = room.footprintHeight * kTileSize;
 
   // Shared background fill — slightly distinct from floor to delineate the area.
   final bg = Paint()
@@ -28,14 +31,15 @@ void drawRoom(
     ..color = theme.floorDark.withValues(alpha: 0.5);
   canvas.drawRect(Rect.fromLTWH(x, y, w, h), bg);
 
-  // Thin border
-  canvas.drawRect(
-    Rect.fromLTWH(x + 0.5, y + 0.5, w - 1, h - 1),
-    Paint()
-      ..color = theme.wallBase.withValues(alpha: 0.4)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8,
-  );
+  // Thin border drawn per-edge-tile so we can leave gaps (doors) where the
+  // room shares an edge with another room or a corridor. The gap auto-forms
+  // from geometry — no separate "door" data model needed for MVP.
+  final doors = computeRoomDoors(room, neighborRooms, neighborCorridors);
+  final borderPaint = Paint()
+    ..color = theme.wallBase.withValues(alpha: 0.4)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 0.8;
+  _drawRoomBorder(canvas, room, borderPaint, doors);
 
   switch (room.type) {
     case RoomType.workstation:
@@ -46,6 +50,10 @@ void drawRoom(
       _drawMeetingRoom(canvas, x, y);
     case RoomType.serverRoom:
       _drawServerRoom(canvas, x, y, tick);
+    case RoomType.openSpace:
+      _drawOpenSpace(canvas, x, y, withFurniture: showWorkstationFurniture);
+    case RoomType.teamFloor:
+      _drawTeamFloor(canvas, x, y, withFurniture: showWorkstationFurniture);
     case RoomType.lounge:
       _drawLounge(canvas, x, y);
     case RoomType.gym:
@@ -107,6 +115,108 @@ void _drawWorkstation(
   canvas.drawRect(Rect.fromLTWH(chairX, chairY, chairW, chairH), p);
   p.color = const Color(0xFF3C3C52);
   canvas.drawRect(Rect.fromLTWH(chairX + 1, chairY + 1, chairW - 2, 2), p);
+}
+
+// ─── Open Space (5×4) ───────────────────────────────────────────────────────
+
+/// 6 desk pods arranged in a 3×2 grid inside the 5×4 footprint.
+/// Pods occupy 1.5 tiles wide × 2 tiles tall each.
+const _kOpenSpacePodOrigins = <List<double>>[
+  [0.0, 0.0], [1.7, 0.0], [3.4, 0.0],
+  [0.0, 2.0], [1.7, 2.0], [3.4, 2.0],
+];
+
+void _drawOpenSpace(
+  Canvas canvas,
+  double x,
+  double y, {
+  bool withFurniture = true,
+}) {
+  _drawDeskHall(canvas, x, y,
+      cols: 5,
+      rows: 4,
+      podOrigins: _kOpenSpacePodOrigins,
+      withFurniture: withFurniture);
+}
+
+// ─── Team Floor (7×5) ───────────────────────────────────────────────────────
+
+/// 12 desk pods arranged in a 3×4 grid (4 columns of pods × 3 rows) inside
+/// the 7×5 footprint. Each pod ≈ 1.7 tiles wide × 1.5 tiles tall.
+const _kTeamFloorPodOrigins = <List<double>>[
+  [0.0, 0.0], [1.7, 0.0], [3.4, 0.0], [5.1, 0.0],
+  [0.0, 1.7], [1.7, 1.7], [3.4, 1.7], [5.1, 1.7],
+  [0.0, 3.4], [1.7, 3.4], [3.4, 3.4], [5.1, 3.4],
+];
+
+void _drawTeamFloor(
+  Canvas canvas,
+  double x,
+  double y, {
+  bool withFurniture = true,
+}) {
+  _drawDeskHall(canvas, x, y,
+      cols: 7,
+      rows: 5,
+      podOrigins: _kTeamFloorPodOrigins,
+      withFurniture: withFurniture);
+}
+
+/// Shared painter for [openSpace] and [teamFloor] — large multi-pod desk
+/// halls. Pod origins are passed in tile units relative to the room top-left.
+void _drawDeskHall(
+  Canvas canvas,
+  double x,
+  double y, {
+  required int cols,
+  required int rows,
+  required List<List<double>> podOrigins,
+  required bool withFurniture,
+}) {
+  final p = Paint()..style = PaintingStyle.fill;
+
+  // Carpet tint covering the full footprint.
+  p.color = const Color(0xFF2A3A5C).withValues(alpha: 0.30);
+  canvas.drawRect(
+      Rect.fromLTWH(x + 1, y + 1, kTileSize * cols - 2, kTileSize * rows - 2),
+      p);
+
+  if (!withFurniture) return;
+
+  for (final pod in podOrigins) {
+    final px = x + pod[0] * kTileSize;
+    final py = y + pod[1] * kTileSize;
+
+    // Desk — narrower than 2-tile rooms so 3 pods fit across.
+    final deskLeft = px + 2;
+    final deskTop = py + kTileSize * 0.45;
+    final deskW = kTileSize * 1.4 - 4;
+    const deskH = 5.0;
+    p.color = const Color(0xFF6B4F2A);
+    canvas.drawRect(Rect.fromLTWH(deskLeft, deskTop, deskW, deskH), p);
+    p.color = const Color(0xFF8B6A3A);
+    canvas.drawRect(Rect.fromLTWH(deskLeft + 1, deskTop + 1, deskW - 2, 1), p);
+
+    // Monitor — kept readable at small scale.
+    const monW = 6.0;
+    const monH = 4.0;
+    final monX = deskLeft + (deskW - monW) / 2;
+    final monY = deskTop - monH + 1;
+    p.color = const Color(0xFF111418);
+    canvas.drawRect(Rect.fromLTWH(monX, monY, monW, monH), p);
+    p.color = const Color(0xFF4AE0B5);
+    canvas.drawRect(Rect.fromLTWH(monX + 1, monY + 1, monW - 2, monH - 3), p);
+
+    // Chair below the desk.
+    const chairW = 5.0;
+    const chairH = 4.0;
+    final chairX = px + kTileSize * 0.7 - chairW / 2;
+    final chairY = deskTop + deskH + 2;
+    p.color = const Color(0xFF2A2A3C);
+    canvas.drawRect(Rect.fromLTWH(chairX, chairY, chairW, chairH), p);
+    p.color = const Color(0xFF3C3C52);
+    canvas.drawRect(Rect.fromLTWH(chairX + 1, chairY + 1, chairW - 2, 1), p);
+  }
 }
 
 // ─── Break room (2×2) ───────────────────────────────────────────────────────
@@ -356,4 +466,50 @@ void _drawMiniGolf(Canvas canvas, double x, double y) {
   // Ball
   p.color = const Color(0xFFF0F0F0);
   canvas.drawRect(Rect.fromLTWH(x + 8, y + kTileSize + 4, 2, 2), p);
+}
+
+// ─── Border with doors ─────────────────────────────────────────────────────
+
+/// Draws the room's 4-side border as per-tile line segments, leaving a gap
+/// at every door tile from [doors]. The 0.5-tile inset matches the legacy
+/// single-rect stroke so room outlines align with prior visuals.
+void _drawRoomBorder(
+  Canvas canvas,
+  PlacedRoom room,
+  Paint paint,
+  RoomDoorSet doors,
+) {
+  final w = room.footprintWidth;
+  final h = room.footprintHeight;
+  final left = room.col * kTileSize + 0.5;
+  final top = room.row * kTileSize + 0.5;
+  final right = (room.col + w) * kTileSize - 0.5;
+  final bottom = (room.row + h) * kTileSize - 0.5;
+
+  for (int dc = 0; dc < w; dc++) {
+    final c = room.col + dc;
+    final segLeft = (c == room.col) ? left : c * kTileSize;
+    final segRight = (c == room.col + w - 1) ? right : (c + 1) * kTileSize;
+
+    if (!doors.top.contains(c)) {
+      canvas.drawLine(Offset(segLeft, top), Offset(segRight, top), paint);
+    }
+    if (!doors.bottom.contains(c)) {
+      canvas.drawLine(
+          Offset(segLeft, bottom), Offset(segRight, bottom), paint);
+    }
+  }
+
+  for (int dr = 0; dr < h; dr++) {
+    final r = room.row + dr;
+    final segTop = (r == room.row) ? top : r * kTileSize;
+    final segBottom = (r == room.row + h - 1) ? bottom : (r + 1) * kTileSize;
+
+    if (!doors.left.contains(r)) {
+      canvas.drawLine(Offset(left, segTop), Offset(left, segBottom), paint);
+    }
+    if (!doors.right.contains(r)) {
+      canvas.drawLine(Offset(right, segTop), Offset(right, segBottom), paint);
+    }
+  }
 }
