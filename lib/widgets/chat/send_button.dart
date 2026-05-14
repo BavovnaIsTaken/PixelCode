@@ -13,6 +13,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -78,7 +79,6 @@ class _SendButtonBodyState extends State<_SendButtonBody>
   late final AnimationController _press;
   late final AnimationController _hover;
   late final AnimationController _idle; // loops forever — drives shimmer/pulse
-  late final AnimationController _drift; // 8s loop — cloud-mass drift
   late final AnimationController _burst; // one-shot on tap
 
   bool _hovered = false;
@@ -99,10 +99,6 @@ class _SendButtonBodyState extends State<_SendButtonBody>
       vsync: this,
       duration: const Duration(milliseconds: 1600),
     )..repeat();
-    _drift = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 8000),
-    )..repeat();
     _burst = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 520),
@@ -114,7 +110,6 @@ class _SendButtonBodyState extends State<_SendButtonBody>
     _press.dispose();
     _hover.dispose();
     _idle.dispose();
-    _drift.dispose();
     _burst.dispose();
     super.dispose();
   }
@@ -147,12 +142,11 @@ class _SendButtonBodyState extends State<_SendButtonBody>
         onTapUp: _handleTapUp,
         child: AnimatedBuilder(
           animation:
-              Listenable.merge([_press, _hover, _idle, _drift, _burst]),
+              Listenable.merge([_press, _hover, _idle, _burst]),
           builder: (context, _) {
             final press = Curves.easeOut.transform(_press.value);
             final hover = Curves.easeInOut.transform(_hover.value);
             final idle = _idle.value;
-            final drift = _drift.value;
             final burst = _burst.value;
 
             return SizedBox(
@@ -198,7 +192,6 @@ class _SendButtonBodyState extends State<_SendButtonBody>
                 SendButtonVariant.cloudDrift => _CloudDriftPaint(
                     press: press,
                     hover: hover,
-                    drift: drift,
                     burst: burst,
                     size: widget.size,
                   ),
@@ -964,24 +957,129 @@ class _LiquidGlassPaint extends StatelessWidget {
 // mid-tone. Locked palette: identity-defining like Gold Rocket and Pixel
 // Arcade, does not follow the theme accent.
 
-class _CloudDriftPaint extends StatelessWidget {
+class _CloudDriftPaint extends StatefulWidget {
   const _CloudDriftPaint({
     required this.press,
     required this.hover,
-    required this.drift,
     required this.burst,
     required this.size,
   });
 
   final double press;
   final double hover;
-  final double drift;
   final double burst;
   final double size;
 
   @override
+  State<_CloudDriftPaint> createState() => _CloudDriftPaintState();
+}
+
+/// Minimal "air" engine: each blob is a point mass tethered to its anchor
+/// by a spring, dragged by air, and gently jostled by an ambient turbulence
+/// force. A tap injects an outward radial impulse; the spring then gathers
+/// the blobs back. No envelope, no pre-computed paths — the puff/return
+/// shape emerges from the dynamics.
+class _CloudDriftPaintState extends State<_CloudDriftPaint>
+    with SingleTickerProviderStateMixin {
+  // Spring k and damping c chosen so ζ = c/(2√k) ≈ 0.66 — slight overshoot,
+  // settles in ~1 s. Underdamped enough to feel like air, not jelly.
+  static const double _springK = 24.0;
+  static const double _damping = 6.5;
+  static const double _impulseSpeed = 95.0; // px/s @ scale=1
+
+  late final Ticker _ticker;
+  Duration _lastElapsed = Duration.zero;
+  double _ambientT = 0.0;
+  double _prevBurst = 0.0;
+  late final List<_CloudParticle> _particles;
+
+  @override
+  void initState() {
+    super.initState();
+    _particles = _spawnParticles();
+    _ticker = createTicker(_onTick)..start();
+  }
+
+  @override
+  void didUpdateWidget(_CloudDriftPaint oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_prevBurst <= 0 && widget.burst > 0) {
+      _applyTapImpulse();
+    }
+    _prevBurst = widget.burst;
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  void _onTick(Duration elapsed) {
+    final raw = (elapsed - _lastElapsed).inMicroseconds / 1e6;
+    _lastElapsed = elapsed;
+    if (raw <= 0) return;
+    // Clamp dt so a stalled frame can't blow up the integrator.
+    final dt = math.min(raw, 1.0 / 30.0);
+    _ambientT += dt;
+    _step(dt);
+    if (mounted) setState(() {});
+  }
+
+  void _step(double dt) {
+    final scale = widget.size / 44.0;
+    final ambBoost = 1.0 + widget.hover * 0.6;
+    for (final p in _particles) {
+      // Ambient turbulence as a force — drives the steady-state drift.
+      final fx = math.sin(_ambientT * p.ambFreqX + p.ambPhaseX) *
+          p.ambAmp *
+          ambBoost;
+      final fy = math.cos(_ambientT * p.ambFreqY + p.ambPhaseY) *
+          p.ambAmp *
+          ambBoost;
+      // Spring pulls toward anchor (in screen units, hence scale on anchor).
+      final ax = p.base.dx * scale;
+      final ay = p.base.dy * scale;
+      final accelX = fx - _springK * (p.pos.dx - ax) - _damping * p.vel.dx;
+      final accelY = fy - _springK * (p.pos.dy - ay) - _damping * p.vel.dy;
+      p.vel = Offset(p.vel.dx + accelX * dt, p.vel.dy + accelY * dt);
+      p.pos = Offset(p.pos.dx + p.vel.dx * dt, p.pos.dy + p.vel.dy * dt);
+    }
+  }
+
+  void _applyTapImpulse() {
+    final scale = widget.size / 44.0;
+    for (final p in _particles) {
+      final d = p.base.distance;
+      if (d <= 0.001) continue;
+      final dir = Offset(p.base.dx / d, p.base.dy / d);
+      p.vel = p.vel + dir * (_impulseSpeed * scale);
+    }
+  }
+
+  List<_CloudParticle> _spawnParticles() {
+    final scale = widget.size / 44.0;
+    final list = <_CloudParticle>[];
+    for (int i = 0; i < _CloudDriftPainter._basePositions.length; i++) {
+      final anchor = _CloudDriftPainter._basePositions[i];
+      list.add(_CloudParticle(
+        base: anchor,
+        colorIdx: _CloudDriftPainter._colorIdx[i],
+        baseRadius: _CloudDriftPainter._baseRadii[i],
+        pos: anchor * scale,
+        ambFreqX: _CloudDriftPainter._ambFreqs[i][0],
+        ambFreqY: _CloudDriftPainter._ambFreqs[i][1],
+        ambPhaseX: _CloudDriftPainter._ambFreqs[i][2],
+        ambPhaseY: _CloudDriftPainter._ambFreqs[i][3],
+        ambAmp: _CloudDriftPainter._ambAmps[i],
+      ));
+    }
+    return list;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final scale = 1.0 - press * 0.05;
+    final scale = 1.0 - widget.press * 0.05;
 
     return Transform.scale(
       scale: scale,
@@ -990,37 +1088,30 @@ class _CloudDriftPaint extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           SizedBox(
-            width: size * 2,
-            height: size * 2,
+            width: widget.size * 2,
+            height: widget.size * 2,
             child: CustomPaint(
               painter: _CloudDriftPainter(
-                t: drift,
-                hover: hover,
-                press: press,
-                burst: burst,
-                buttonSize: size,
+                particles: _particles,
+                press: widget.press,
+                buttonSize: widget.size,
               ),
             ),
           ),
-          Container(
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              color: const Color(0xFF05060A),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.10),
-                width: 1,
-              ),
-            ),
-            child: Center(
-              child: Icon(
-                Icons.send_rounded,
-                size: size * 0.44,
-                color: Colors.white.withValues(alpha: 0.95),
-                shadows: const [
-                  Shadow(color: Colors.black54, blurRadius: 4),
-                ],
+          SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: CustomPaint(
+              painter: _CloudDriftBodyPainter(),
+              child: Center(
+                child: Icon(
+                  Icons.send_rounded,
+                  size: widget.size * 0.44,
+                  color: Colors.white.withValues(alpha: 0.95),
+                  shadows: const [
+                    Shadow(color: Colors.black54, blurRadius: 4),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1030,94 +1121,232 @@ class _CloudDriftPaint extends StatelessWidget {
   }
 }
 
+class _CloudParticle {
+  _CloudParticle({
+    required this.base,
+    required this.colorIdx,
+    required this.baseRadius,
+    required this.pos,
+    required this.ambFreqX,
+    required this.ambFreqY,
+    required this.ambPhaseX,
+    required this.ambPhaseY,
+    required this.ambAmp,
+  }) : vel = Offset.zero;
+
+  final Offset base; // anchor in local units (relative to button center)
+  final int colorIdx;
+  final double baseRadius;
+  final double ambFreqX;
+  final double ambFreqY;
+  final double ambPhaseX;
+  final double ambPhaseY;
+  final double ambAmp;
+
+  Offset pos;
+  Offset vel;
+}
+
 class _CloudDriftPainter extends CustomPainter {
   _CloudDriftPainter({
-    required this.t,
-    required this.hover,
+    required this.particles,
     required this.press,
-    required this.burst,
     required this.buttonSize,
   });
 
-  final double t;
-  final double hover;
+  final List<_CloudParticle> particles;
   final double press;
-  final double burst;
   final double buttonSize;
 
+  // Muted accent palette — hue identity (lavender / peach / mint / rose) is
+  // preserved, but saturation is dialled back so the halo doesn't outshine
+  // the chat content sitting next to the button.
   static const _colors = <Color>[
-    Color(0xFFC4ACFF),
-    Color(0xFFFFBFA0),
-    Color(0xFF7FDDCC),
-    Color(0xFFFFAACF),
+    Color(0xFF7B63CC),
+    Color(0xFFCC7A55),
+    Color(0xFF2DAF96),
+    Color(0xFFCC6499),
   ];
 
-  static const _baseOffsets = <Offset>[
-    Offset(-12, -10),
-    Offset(13, -8),
-    Offset(10, 12),
-    Offset(-11, 13),
+  // Eight anchors arranged as four drift-masses — one per cardinal side, so
+  // every edge of the button is under a different hue simultaneously.
+  static const _basePositions = <Offset>[
+    Offset(-5.0, -14.0),   // N1 (lavender)
+    Offset(5.0, -14.0),    // N2
+    Offset(14.0, -5.0),    // E1 (peach)
+    Offset(14.0, 5.0),     // E2
+    Offset(5.0, 14.0),     // S1 (mint)
+    Offset(-5.0, 14.0),    // S2
+    Offset(-14.0, 5.0),    // W1 (rose)
+    Offset(-14.0, -5.0),   // W2
   ];
 
-  // (freqX, freqY, phaseX, phaseY) — incommensurate frequencies so blob
-  // positions never realign across the 8s cycle.
-  static const _driftParams = <List<double>>[
-    [1.0, 1.3, 0.0, 0.0],
-    [0.7, 1.1, 1.2, 0.8],
-    [1.4, 0.9, 2.5, 1.7],
-    [0.9, 1.2, 3.8, 0.4],
+  static const _colorIdx = <int>[0, 0, 1, 1, 2, 2, 3, 3];
+
+  static const _baseRadii = <double>[
+    16.0, 13.0, 17.0, 12.0, 15.0, 13.0, 16.0, 13.0,
   ];
 
-  static const _amplitudes = <Offset>[
-    Offset(8, 7),
-    Offset(7, 9),
-    Offset(6, 8),
-    Offset(9, 6),
+  // Ambient turbulence freq pairs + phases. Two blobs in the same mass share
+  // freq but offset phase, so they breathe together without overlapping
+  // exactly. Cross-mass freqs are incommensurate to avoid resolving into a
+  // single pattern.
+  static const _ambFreqs = <List<double>>[
+    [0.9, 1.1, 0.0, 0.0],   // N1
+    [0.9, 1.1, 0.4, 0.3],   // N2
+    [1.2, 0.8, 2.5, 1.7],   // E1
+    [1.2, 0.8, 2.9, 2.0],   // E2
+    [0.75, 1.0, 4.7, 2.3],  // S1
+    [0.75, 1.0, 5.1, 2.6],  // S2
+    [1.05, 0.85, 6.0, 4.4], // W1
+    [1.05, 0.85, 6.4, 4.7], // W2
+  ];
+
+  // Per-particle ambient force amplitude (px/s²). Steady-state displacement
+  // under the spring is roughly amp / springK ≈ 1.5–2 px @ scale=1.
+  static const _ambAmps = <double>[
+    50.0, 46.0, 56.0, 50.0, 54.0, 48.0, 50.0, 52.0,
   ];
 
   @override
   void paint(Canvas canvas, Size size) {
     final scale = buttonSize / 44.0;
     final center = size.center(Offset.zero);
-    const twoPi = math.pi * 2;
+    final radiusBoost = -press * 3.2;
 
-    final amplBoost = 1.0 + hover * 0.4;
-    final burstEnvelope = burst > 0
-        ? math.sin(math.min(burst, 0.3) / 0.3 * math.pi) * (1.0 - burst)
-        : 0.0;
+    for (final p in particles) {
+      final pos = center + p.pos;
+      final anchorScreen = p.base * scale;
+      // Alpha falls off with displacement from anchor — the further the
+      // blob is pushed (by impulse or turbulence), the more diffuse it
+      // reads, exactly like a real puff of air dispersing.
+      final disp = (p.pos - anchorScreen).distance;
+      final disperse = (disp / (18.0 * scale)).clamp(0.0, 1.0);
+      final alphaScale = (1.0 - disperse * 0.65 - press * 0.15)
+          .clamp(0.0, 1.0);
 
-    final blobRadius = (24.0 + burstEnvelope * 12.0 - press * 4.0) * scale;
-    final alphaBoost =
-        (1.0 + burstEnvelope * 0.6 - press * 0.15).clamp(0.0, 1.6);
-
-    for (int i = 0; i < 4; i++) {
-      final p = _driftParams[i];
-      final amp = _amplitudes[i];
-      final dx = math.sin(t * twoPi * p[0] + p[2]) * amp.dx * scale * amplBoost;
-      final dy = math.cos(t * twoPi * p[1] + p[3]) * amp.dy * scale * amplBoost;
-      final pos = center + _baseOffsets[i] * scale + Offset(dx, dy);
-
-      final color = _colors[i];
+      final color = _colors[p.colorIdx];
+      final blobRadius = (p.baseRadius + radiusBoost) * scale;
       final paint = Paint()
         ..shader = ui.Gradient.radial(
           pos,
           blobRadius,
           [
-            color.withValues(alpha: (0.70 * alphaBoost).clamp(0.0, 1.0)),
+            color.withValues(alpha: 0.62 * alphaScale),
+            color.withValues(alpha: 0.40 * alphaScale),
             color.withValues(alpha: 0.0),
           ],
-          [0.0, 1.0],
+          [0.0, 0.5, 1.0],
         )
         ..blendMode = BlendMode.screen;
       canvas.drawCircle(pos, blobRadius, paint);
     }
   }
 
+  // The painter is repainted from the Ticker via setState — list identity is
+  // stable but contents mutate, so we always need to repaint.
   @override
-  bool shouldRepaint(covariant _CloudDriftPainter oldDelegate) =>
-      oldDelegate.t != t ||
-      oldDelegate.hover != hover ||
-      oldDelegate.press != press ||
-      oldDelegate.burst != burst ||
-      oldDelegate.buttonSize != buttonSize;
+  bool shouldRepaint(covariant _CloudDriftPainter oldDelegate) => true;
+}
+
+/// Dark body of Cloud Drift with a thin "wire" stroke and a specular gloss,
+/// to read as a polished/glassy material rather than a flat painted card.
+class _CloudDriftBodyPainter extends CustomPainter {
+  _CloudDriftBodyPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final radius = Radius.circular(size.width * 0.28);
+    final rrect = RRect.fromRectAndRadius(rect, radius);
+
+    final fill = Paint()
+      ..shader = ui.Gradient.linear(
+        rect.topLeft,
+        rect.bottomRight,
+        const [Color(0xFF0A0C12), Color(0xFF030407)],
+      );
+    canvas.drawRRect(rrect, fill);
+
+    final innerShade = Paint()
+      ..shader = ui.Gradient.radial(
+        rect.bottomRight,
+        size.width,
+        [
+          Colors.black.withValues(alpha: 0.55),
+          Colors.black.withValues(alpha: 0.0),
+        ],
+      )
+      ..blendMode = BlendMode.multiply;
+    canvas.drawRRect(rrect, innerShade);
+
+    final glossRect = Rect.fromLTWH(
+      size.width * 0.08,
+      size.height * 0.06,
+      size.width * 0.84,
+      size.height * 0.46,
+    );
+    final glossPath = Path()
+      ..addRRect(RRect.fromRectAndRadius(glossRect, radius * 0.85));
+    final glossPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        glossRect.topCenter,
+        glossRect.bottomCenter,
+        [
+          Colors.white.withValues(alpha: 0.18),
+          Colors.white.withValues(alpha: 0.0),
+        ],
+      )
+      ..blendMode = BlendMode.screen;
+    canvas.save();
+    canvas.clipRRect(rrect);
+    canvas.drawPath(glossPath, glossPaint);
+    canvas.restore();
+
+    final wireStroke = (size.width * 0.045).clamp(1.2, 2.0);
+    final inset = wireStroke / 2;
+    final wireRRect = RRect.fromRectAndRadius(
+      rect.deflate(inset),
+      Radius.circular(radius.x - inset),
+    );
+
+    // Single-source chrome — one specular gradient from upper-left, with a
+    // faint lavender tint mid-stroke as a quiet nod to the halo. One light,
+    // one material.
+    final mirrorPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = wireStroke
+      ..shader = ui.Gradient.linear(
+        rect.topLeft,
+        rect.bottomRight,
+        [
+          Colors.white.withValues(alpha: 0.75),
+          _CloudDriftPainter._colors[0].withValues(alpha: 0.30),
+          Colors.white.withValues(alpha: 0.10),
+        ],
+        const [0.0, 0.55, 1.0],
+      );
+    canvas.drawRRect(wireRRect, mirrorPaint);
+
+    // Directional specular smear — same light source as above, kept subtle
+    // so it reinforces rather than competes with the wire highlight.
+    final smearPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = wireStroke
+      ..blendMode = BlendMode.screen
+      ..shader = ui.Gradient.linear(
+        rect.topLeft,
+        rect.bottomRight,
+        [
+          Colors.white.withValues(alpha: 0.38),
+          Colors.white.withValues(alpha: 0.12),
+          Colors.white.withValues(alpha: 0.0),
+        ],
+        const [0.0, 0.45, 1.0],
+      );
+    canvas.drawRRect(wireRRect, smearPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CloudDriftBodyPainter oldDelegate) => false;
 }
