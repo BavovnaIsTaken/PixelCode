@@ -112,6 +112,7 @@ sealed class ServerMessage {
       'subagent_start' => SubagentStartMessage.fromJson(json),
       'subagent_stop' => SubagentStopMessage.fromJson(json),
       'tool_use' => ToolUseMessage.fromJson(json),
+      'subagent_thread_event' => SubagentThreadEventMessage.fromJson(json),
       'tool_done' => ToolDoneMessage.fromJson(json),
       'result' => ResultMessage.fromJson(json),
       'team_metrics' => TeamMetricsMessage.fromJson(json),
@@ -278,6 +279,35 @@ class ToolUseMessage implements ServerMessage {
         toolName: json['toolName'] as String,
         status: json['status'] as String,
         threadId: json['threadId'] as String?,
+      );
+}
+
+/// Thread-only mirror of a sub-agent's tool use, surfaced under the captain's
+/// chat so the user can follow the dispatched work as a nested thread.
+///
+/// Distinct from [ToolUseMessage] on purpose: this message MUST NOT touch the
+/// agent status indicator. The captain isn't running the tool — the sub-agent
+/// is. The captain's status reflects only their own activity.
+class SubagentThreadEventMessage implements ServerMessage {
+  final String agentId;
+  final String toolUseId;
+  final String toolName;
+  final String status;
+  final String threadId;
+  SubagentThreadEventMessage({
+    required this.agentId,
+    required this.toolUseId,
+    required this.toolName,
+    required this.status,
+    required this.threadId,
+  });
+  factory SubagentThreadEventMessage.fromJson(Map<String, dynamic> json) =>
+      SubagentThreadEventMessage(
+        agentId: json['agentId'] as String,
+        toolUseId: json['toolUseId'] as String,
+        toolName: json['toolName'] as String,
+        status: json['status'] as String,
+        threadId: json['threadId'] as String,
       );
 }
 

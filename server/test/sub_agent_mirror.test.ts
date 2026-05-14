@@ -11,9 +11,9 @@ const THREAD = "dispatch-abc";
 
 // ─── subAgentMirrorToolUse ────────────────────────────────────────────────────
 
-test("subAgentMirrorToolUse — type is tool_use", () => {
+test("subAgentMirrorToolUse — type is subagent_thread_event (thread-only, does not update agent status)", () => {
   const p = subAgentMirrorToolUse(MGR, "tu_1", "Read", "читаю файл", THREAD);
-  assert.equal(p.type, "tool_use");
+  assert.equal(p.type, "subagent_thread_event");
 });
 
 test("subAgentMirrorToolUse — agentId is manager", () => {

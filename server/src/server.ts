@@ -1584,7 +1584,14 @@ export function subAgentMirrorToolUse(
   status: string,
   threadId: string,
 ) {
-  return { type: "tool_use" as const, agentId: managerAgentId, toolUseId: toolUseId + "_m", toolName, status, threadId };
+  return {
+    type: "subagent_thread_event" as const,
+    agentId: managerAgentId,
+    toolUseId: toolUseId + "_m",
+    toolName,
+    status,
+    threadId,
+  };
 }
 
 /** Payload sent to the manager's chat to surface a sub-agent final message in a thread. */

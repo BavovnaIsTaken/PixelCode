@@ -307,6 +307,14 @@ export type ServerMessage =
       threadId?: string;
     }
   | {
+      type: "subagent_thread_event";
+      agentId: string;
+      toolUseId: string;
+      toolName: string;
+      status: string;
+      threadId: string;
+    }
+  | {
       type: "tool_done";
       agentId: string;
       toolUseId: string;

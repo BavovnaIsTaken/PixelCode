@@ -269,6 +269,22 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           ),
         ]);
 
+      case SubagentThreadEventMessage(
+          :final agentId,
+          :final status,
+          :final threadId,
+        ):
+        _setAgentMessages(agentId, [
+          ..._agentMessages(agentId),
+          ChatMessage(
+            role: ChatRole.assistant,
+            agentId: agentId,
+            text: status,
+            category: MessageCategory.status,
+            threadId: threadId,
+          ),
+        ]);
+
       case ErrorMessage(:final message):
         final agentId = _activeStreamAgent ?? _selectedAgent;
         _setAgentMessages(agentId, [
