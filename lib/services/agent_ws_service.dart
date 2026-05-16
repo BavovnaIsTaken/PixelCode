@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
+import 'agent_ws_messages.dart' as msg;
 
 class AgentWsService {
   WebSocket? _ws;
@@ -233,36 +234,20 @@ class AgentWsService {
     String content, {
     String agentId = 'manager',
     List<String>? images,
-  }) {
-    _send({
-      'type': 'send_message',
-      'content': content,
-      'agentId': agentId,
-      if (images != null && images.isNotEmpty) 'images': images,
-    });
-  }
+  }) =>
+      _send(msg.buildSendMessage(content, agentId: agentId, images: images));
 
-  void newChat() {
-    _send({'type': 'new_chat'});
-  }
+  void newChat() => _send(msg.buildNewChat());
 
-  void clearSessions() {
-    _send({'type': 'clear_sessions'});
-  }
+  void clearSessions() => _send(msg.buildClearSessions());
 
-  void interrupt() {
-    _send({'type': 'interrupt'});
-  }
+  void interrupt() => _send(msg.buildInterrupt());
 
-  void getStatus() {
-    _send({'type': 'get_status'});
-  }
+  void getStatus() => _send(msg.buildGetStatus());
 
   // ─── Task board ──────────────────────────────────────────────────────────
 
-  void boardGetState() {
-    _send({'type': 'board_get_state'});
-  }
+  void boardGetState() => _send(msg.buildBoardGetState());
 
   void boardCreateTask({
     required String title,
@@ -272,46 +257,39 @@ class AgentWsService {
     int? difficulty,
     List<String>? allowedRoles,
     String? taskType,
-  }) {
-    _send({
-      'type': 'board_create_task',
-      'title': title,
-      'description': ?description,
-      'color': ?color,
-      'priority': ?priority,
-      'difficulty': ?difficulty,
-      'allowedRoles': ?allowedRoles,
-      'taskType': ?taskType,
-    });
-  }
+  }) =>
+      _send(msg.buildBoardCreateTask(
+        title: title,
+        description: description,
+        color: color,
+        priority: priority,
+        difficulty: difficulty,
+        allowedRoles: allowedRoles,
+        taskType: taskType,
+      ));
 
-  void boardMoveTask({required String taskId, required String column}) {
-    _send({'type': 'board_move_task', 'taskId': taskId, 'column': column});
-  }
+  void boardMoveTask({required String taskId, required String column}) =>
+      _send(msg.buildBoardMoveTask(taskId: taskId, column: column));
 
   void boardUpdateTask({
     required String taskId,
     required Map<String, dynamic> updates,
-  }) {
-    _send({'type': 'board_update_task', 'taskId': taskId, 'updates': updates});
-  }
+  }) =>
+      _send(msg.buildBoardUpdateTask(taskId: taskId, updates: updates));
 
-  void boardDeleteTask({required String taskId}) {
-    _send({'type': 'board_delete_task', 'taskId': taskId});
-  }
+  void boardDeleteTask({required String taskId}) =>
+      _send(msg.buildBoardDeleteTask(taskId: taskId));
 
   void boardAssignAgent({
     required String taskId,
     required String agentId,
     required bool assign,
-  }) {
-    _send({
-      'type': 'board_assign_agent',
-      'taskId': taskId,
-      'agentId': agentId,
-      'assign': assign,
-    });
-  }
+  }) =>
+      _send(msg.buildBoardAssignAgent(
+        taskId: taskId,
+        agentId: agentId,
+        assign: assign,
+      ));
 
   void boardAddAttachment({
     required String taskId,
@@ -319,41 +297,32 @@ class AgentWsService {
     required String mimeType,
     required int sizeBytes,
     required String dataBase64,
-  }) {
-    _send({
-      'type': 'board_add_attachment',
-      'taskId': taskId,
-      'name': name,
-      'mimeType': mimeType,
-      'sizeBytes': sizeBytes,
-      'dataBase64': dataBase64,
-    });
-  }
+  }) =>
+      _send(msg.buildBoardAddAttachment(
+        taskId: taskId,
+        name: name,
+        mimeType: mimeType,
+        sizeBytes: sizeBytes,
+        dataBase64: dataBase64,
+      ));
 
   void boardRemoveAttachment({
     required String taskId,
     required String attachmentId,
-  }) {
-    _send({
-      'type': 'board_remove_attachment',
-      'taskId': taskId,
-      'attachmentId': attachmentId,
-    });
-  }
+  }) =>
+      _send(msg.buildBoardRemoveAttachment(
+        taskId: taskId,
+        attachmentId: attachmentId,
+      ));
 
   // ─── Project management ───────────────────────────────────────────────────
 
-  void setProject(String path) {
-    _send({'type': 'set_project', 'path': path});
-  }
+  void setProject(String path) => _send(msg.buildSetProject(path));
 
-  void setProjectContext(String memories) {
-    _send({'type': 'set_project_context', 'memories': memories});
-  }
+  void setProjectContext(String memories) =>
+      _send(msg.buildSetProjectContext(memories));
 
-  void generateSummary() {
-    _send({'type': 'generate_summary'});
-  }
+  void generateSummary() => _send(msg.buildGenerateSummary());
 
   // ─── Game economy ────────────────────────────────────────────────────────
 
@@ -368,27 +337,23 @@ class AgentWsService {
     int? stateUpdatedAt,
     String? deepseekApiKey,
     String? kimiApiKey,
-  }) {
-    _send({
-      'type': 'set_game_state',
-      'instances': instances,
-      'fullState': fullState,
-      'stateUpdatedAt': stateUpdatedAt,
-      'deepseekApiKey': deepseekApiKey,
-      'kimiApiKey': kimiApiKey,
-    });
-  }
+  }) =>
+      _send(msg.buildSetGameState(
+        instances: instances,
+        fullState: fullState,
+        stateUpdatedAt: stateUpdatedAt,
+        deepseekApiKey: deepseekApiKey,
+        kimiApiKey: kimiApiKey,
+      ));
 
   // ─── Session presence ────────────────────────────────────────────────────
 
-  void claimSession() => _send({'type': 'session_claim'});
-  void releaseSession() => _send({'type': 'session_release'});
+  void claimSession() => _send(msg.buildClaimSession());
+  void releaseSession() => _send(msg.buildReleaseSession());
 
   // ─── Agent traits ────────────────────────────────────────────────────────
 
-  void getTraits() {
-    _send({'type': 'get_traits'});
-  }
+  void getTraits() => _send(msg.buildGetTraits());
 
   void recordLesson({
     required String agentId,
@@ -396,20 +361,16 @@ class AgentWsService {
     required String category,
     required String tag,
     required String lesson,
-  }) {
-    _send({
-      'type': 'record_lesson',
-      'agentId': agentId,
-      'lessonType': lessonType,
-      'category': category,
-      'tag': tag,
-      'lesson': lesson,
-    });
-  }
+  }) =>
+      _send(msg.buildRecordLesson(
+        agentId: agentId,
+        lessonType: lessonType,
+        category: category,
+        tag: tag,
+        lesson: lesson,
+      ));
 
-  void removeLesson(String lessonId) {
-    _send({'type': 'remove_lesson', 'lessonId': lessonId});
-  }
+  void removeLesson(String lessonId) => _send(msg.buildRemoveLesson(lessonId));
 
   // ─── Dungeon training ────────────────────────────────────────────────────
 
@@ -417,14 +378,12 @@ class AgentWsService {
     required String agentId,
     required int skillType,
     required int difficulty,
-  }) {
-    _send({
-      'type': 'start_dungeon',
-      'agentId': agentId,
-      'skillType': skillType,
-      'difficulty': difficulty.clamp(1, 3),
-    });
-  }
+  }) =>
+      _send(msg.buildStartDungeon(
+        agentId: agentId,
+        skillType: skillType,
+        difficulty: difficulty,
+      ));
 
   // ─── Facilitator System ──────────────────────────────────────────────────
 
@@ -439,116 +398,83 @@ class AgentWsService {
     required FacilitatorStyle style,
     required String projectDescription,
     required Map<String, String> answers,
-  }) {
-    _send({
-      'type': 'facilitator_start',
-      'style': style.toJson(),
-      'projectDescription': projectDescription,
-      'answers': answers,
-    });
-  }
+  }) =>
+      _send(msg.buildFacilitatorStart(
+        style: style,
+        projectDescription: projectDescription,
+        answers: answers,
+      ));
 
   /// Ask the server for its persisted facilitator output.
   /// Server replies with `facilitator_output_sync` if one exists.
-  void sendGetFacilitatorOutput() {
-    _send({'type': 'get_facilitator_output'});
-  }
+  void sendGetFacilitatorOutput() => _send(msg.buildGetFacilitatorOutput());
 
   /// Upload local facilitator output to the server so other devices can sync.
   /// Server only stores it if it has nothing yet (safe to call unconditionally).
   void sendPushFacilitatorOutput({
     required String outputFormat,
     required String outputJson,
-  }) {
-    _send({
-      'type': 'push_facilitator_output',
-      'outputFormat': outputFormat,
-      'outputJson': outputJson,
-    });
-  }
+  }) =>
+      _send(msg.buildPushFacilitatorOutput(
+        outputFormat: outputFormat,
+        outputJson: outputJson,
+      ));
 
   // ─── Character position sync ─────────────────────────────────────────────
 
-  void syncPositions(Map<String, Map<String, dynamic>> positions) {
-    _send({'type': 'sync_positions', 'positions': positions});
-  }
+  void syncPositions(Map<String, Map<String, dynamic>> positions) =>
+      _send(msg.buildSyncPositions(positions));
 
   // ─── Live input sync ─────────────────────────────────────────────────────
 
-  void sendInputText(String text) {
-    _send({'type': 'input_text', 'text': text});
-  }
+  void sendInputText(String text) => _send(msg.buildInputText(text));
 
-  void sendInputImages(List<String> images) {
-    _send({'type': 'input_images', 'images': images});
-  }
+  void sendInputImages(List<String> images) =>
+      _send(msg.buildInputImages(images));
 
   // ─── iOS deploy ──────────────────────────────────────────────────────────
 
-  void iosDeployCheck() {
-    _send({'type': 'ios_deploy_check'});
-  }
+  void iosDeployCheck() => _send(msg.buildIosDeployCheck());
 
-  void iosDeployStart() {
-    _send({'type': 'ios_deploy_start'});
-  }
+  void iosDeployStart() => _send(msg.buildIosDeployStart());
 
-  void iosDeployCancel() {
-    _send({'type': 'ios_deploy_cancel'});
-  }
+  void iosDeployCancel() => _send(msg.buildIosDeployCancel());
 
   // ─── Android deploy ──────────────────────────────────────────────────────
 
-  void androidDeployCheck() {
-    _send({'type': 'android_deploy_check'});
-  }
+  void androidDeployCheck() => _send(msg.buildAndroidDeployCheck());
 
-  void androidDeployListDevices() {
-    _send({'type': 'android_deploy_list_devices'});
-  }
+  void androidDeployListDevices() =>
+      _send(msg.buildAndroidDeployListDevices());
 
-  void androidDeployStart({String? deviceSerial}) {
-    _send({
-      'type': 'android_deploy_start',
-      'deviceSerial': ?deviceSerial,
-    });
-  }
+  void androidDeployStart({String? deviceSerial}) =>
+      _send(msg.buildAndroidDeployStart(deviceSerial: deviceSerial));
 
-  void androidDeployCancel() {
-    _send({'type': 'android_deploy_cancel'});
-  }
+  void androidDeployCancel() => _send(msg.buildAndroidDeployCancel());
 
   // ─── Device screenshot ───────────────────────────────────────────────────
 
-  void captureScreenshot({required String platform, String? deviceSerial}) {
-    _send({
-      'type': 'screenshot_capture',
-      'platform': platform,
-      'deviceSerial': ?deviceSerial,
-    });
-  }
+  void captureScreenshot({required String platform, String? deviceSerial}) =>
+      _send(msg.buildCaptureScreenshot(
+        platform: platform,
+        deviceSerial: deviceSerial,
+      ));
 
   // ─── Tailscale setup ─────────────────────────────────────────────────────
 
-  void tailscaleConnect() {
-    _send({'type': 'tailscale_connect'});
-  }
+  void tailscaleConnect() => _send(msg.buildTailscaleConnect());
 
   // ─── Network diagnostics ────────────────────────────────────────────────
 
-  void healthCheckRequest() {
-    _send({'type': 'health_check_request'});
-  }
+  void healthCheckRequest() => _send(msg.buildHealthCheckRequest());
 
-  void healthFixRequest(String itemId) {
-    _send({'type': 'health_fix_request', 'id': itemId});
-  }
+  void healthFixRequest(String itemId) =>
+      _send(msg.buildHealthFixRequest(itemId));
 
   // ─── Permissions bypass ───────────────────────────────────────────────────
 
-  void setBypassPermissions(bool enabled) {
-    _send({'type': 'set_bypass_permissions', 'enabled': enabled});
-  }
+  void setBypassPermissions(bool enabled) =>
+      _send(msg.buildSetBypassPermissions(enabled));
 
   // ─── Client identification ───────────────────────────────────────────────
 
@@ -563,14 +489,11 @@ class AgentWsService {
     if (_isConnected) _sendClientInfo();
   }
 
-  void _sendClientInfo() {
-    _send({
-      'type': 'client_info',
-      'clientId': clientId,
-      'deviceName': _deviceName,
-      'platform': currentPlatformName(),
-    });
-  }
+  void _sendClientInfo() => _send(msg.buildClientInfo(
+        clientId: clientId,
+        deviceName: _deviceName,
+        platform: currentPlatformName(),
+      ));
 
   /// Force-close the current connection and reconnect immediately.
   Future<void> reconnect({required String url}) async {
