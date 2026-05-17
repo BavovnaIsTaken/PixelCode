@@ -35,11 +35,13 @@ const double kWalkSpeedPxPerSec = 48.0;
 const double kWalkFrameDuration = 0.15;
 const double kTypeFrameDuration = 0.3;
 
-// Wander AI
-const double kWanderPauseMin = 3.0;
-const double kWanderPauseMax = 15.0;
-const int kWanderMovesMin = 3;
-const int kWanderMovesMax = 6;
+// Wander AI — paused-feel tuning: idle-sim readability comes from decision
+// frequency, not walk speed. Longer pauses + fewer hops before returning to
+// the desk halve perceived activity without making walking look underwater.
+const double kWanderPauseMin = 8.0;
+const double kWanderPauseMax = 25.0;
+const int kWanderMovesMin = 2;
+const int kWanderMovesMax = 4;
 const double kSeatRestMin = 30.0;
 const double kSeatRestMax = 90.0;
 
@@ -77,7 +79,7 @@ const double kCoffeeBrewDuration = 6.0;
 
 // Skateboard
 const double kSkateboardSpeed = 96.0;
-const double kSkateboardChance = 0.2;
+const double kSkateboardChance = 0.07;
 const double kSkateMountDuration = 0.8;
 const double kSkateDismountDuration = 0.6;
 const double kSkateRideFrameDuration = 0.25;

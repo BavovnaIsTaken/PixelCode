@@ -985,7 +985,7 @@ class _CloudDriftPaintState extends State<_CloudDriftPaint>
   // settles in ~1 s. Underdamped enough to feel like air, not jelly.
   static const double _springK = 24.0;
   static const double _damping = 6.5;
-  static const double _impulseSpeed = 95.0; // px/s @ scale=1
+  static const double _impulseSpeed = 23.5; // px/s @ scale=1
 
   late final Ticker _ticker;
   Duration _lastElapsed = Duration.zero;
@@ -1109,7 +1109,7 @@ class _CloudDriftPaintState extends State<_CloudDriftPaint>
                   size: widget.size * 0.44,
                   color: Colors.white.withValues(alpha: 0.95),
                   shadows: const [
-                    Shadow(color: Colors.black54, blurRadius: 4),
+                    Shadow(color: Colors.black, blurRadius: 6, offset: Offset(0, 1)),
                   ],
                 ),
               ),
@@ -1158,39 +1158,69 @@ class _CloudDriftPainter extends CustomPainter {
   final double press;
   final double buttonSize;
 
-  // Muted accent palette — hue identity (lavender / peach / mint / rose) is
-  // preserved, but saturation is dialled back so the halo doesn't outshine
-  // the chat content sitting next to the button.
+  // Six-hue ambient palette: cool dominant (lavender / ice-sky / rose-lilac /
+  // blush-rose) with two accent hues (mint-aqua / peach-gold) sprinkled in
+  // for chromatic depth without breaking the WWDC-glass feel.
   static const _colors = <Color>[
-    Color(0xFF7B63CC),
-    Color(0xFFCC7A55),
-    Color(0xFF2DAF96),
-    Color(0xFFCC6499),
+    Color(0xFF7A66F0), // lavender-air (saturated)
+    Color(0xFF42B5F5), // ice-sky (saturated)
+    Color(0xFFBE6FE0), // rose-lilac (saturated)
+    Color(0xFFFF6F8E), // blush-rose (saturated)
+    Color(0xFF50E8C5), // mint-aqua (saturated)
+    Color(0xFFFFA85F), // peach-gold (saturated)
   ];
 
-  // Eight anchors arranged as four drift-masses — one per cardinal side, so
-  // every edge of the button is under a different hue simultaneously.
+  // 22 blob layout: 8 cardinal ring + 4 corner anchors + 8 mid-side fills
+  // (two per side) + 2 inner wisps. Each side has two fills positioned to
+  // close the gap between corner and cardinals, producing a continuous halo
+  // without visible voids along the rim.
   static const _basePositions = <Offset>[
-    Offset(-5.0, -14.0),   // N1 (lavender)
-    Offset(5.0, -14.0),    // N2
-    Offset(14.0, -5.0),    // E1 (peach)
-    Offset(14.0, 5.0),     // E2
-    Offset(5.0, 14.0),     // S1 (mint)
-    Offset(-5.0, 14.0),    // S2
-    Offset(-14.0, 5.0),    // W1 (rose)
-    Offset(-14.0, -5.0),   // W2
+    Offset(-1.75, -12.0),  // N1 (lavender)
+    Offset(1.75, -12.0),   // N2 (mint-aqua)
+    Offset(12.5, -1.75),   // E1 (ice-sky)
+    Offset(12.5, 1.75),    // E2 (rose-lilac)
+    Offset(1.75, 12.5),    // S1 (peach-gold)
+    Offset(-1.75, 12.5),   // S2 (blush-rose)
+    Offset(-12.5, 1.75),   // W1 (rose-lilac)
+    Offset(-12.5, -1.75),  // W2 (lavender)
+    Offset(11.75, -11.75), // NE corner (ice-sky)
+    Offset(11.75, 11.75),  // SE corner (peach-gold)
+    Offset(-11.75, 11.75), // SW corner (blush-rose)
+    Offset(-11.75, -11.75),// NW corner (mint-aqua)
+    Offset(-8.0, -11.75),  // N-W fill (rose-lilac)
+    Offset(11.75, -8.0),   // E-N fill (mint-aqua)
+    Offset(8.0, 11.75),    // S-E fill (lavender)
+    Offset(-11.75, 8.0),   // W-S fill (ice-sky)
+    Offset(8.0, -11.75),   // N-E fill (peach-gold)
+    Offset(11.75, 8.0),    // E-S fill (lavender)
+    Offset(-8.0, 11.75),   // S-W fill (ice-sky)
+    Offset(-11.75, -8.0),  // W-N fill (rose-lilac)
+    Offset(0.0, -7.0),     // inner top (lavender)
+    Offset(0.0, 7.0),      // inner bottom (mint-aqua)
   ];
 
-  static const _colorIdx = <int>[0, 0, 1, 1, 2, 2, 3, 3];
+  static const _colorIdx = <int>[
+    0, 4, 1, 2, 5, 3, 2, 0,
+    1, 5, 3, 4,
+    2, 4, 0, 1,
+    5, 0, 1, 2,
+    0, 4,
+  ];
 
+  // Per-particle radii tuned for hue-luminance balance: corners with bright
+  // warm/cool hues (peach, blush, mint, ice) are shrunk to stop them screaming
+  // through screen blend; cardinals with low-luminance hues (lavender) are
+  // grown to compete; fills are widened to bridge gaps along each edge.
   static const _baseRadii = <double>[
-    16.0, 13.0, 17.0, 12.0, 15.0, 13.0, 16.0, 13.0,
+    17.5,  15.25, 15.75, 14.5,  14.5,  14.0,  15.75, 13.5,
+    15.5,  15.0,  15.0,  15.5,
+    13.0,  11.75, 14.0,  11.75,
+    12.75, 13.0,  14.0,  11.75,
+    9.5,   7.5,
   ];
 
-  // Ambient turbulence freq pairs + phases. Two blobs in the same mass share
-  // freq but offset phase, so they breathe together without overlapping
-  // exactly. Cross-mass freqs are incommensurate to avoid resolving into a
-  // single pattern.
+  // Ambient turbulence freq pairs + phases. Per-particle incommensurate so the
+  // collective drift never resolves into a visible repeating pattern.
   static const _ambFreqs = <List<double>>[
     [0.9, 1.1, 0.0, 0.0],   // N1
     [0.9, 1.1, 0.4, 0.3],   // N2
@@ -1200,12 +1230,30 @@ class _CloudDriftPainter extends CustomPainter {
     [0.75, 1.0, 5.1, 2.6],  // S2
     [1.05, 0.85, 6.0, 4.4], // W1
     [1.05, 0.85, 6.4, 4.7], // W2
+    [1.35, 0.95, 1.2, 3.8], // NE corner
+    [0.85, 1.25, 3.6, 5.5], // SE corner
+    [0.95, 1.2, 2.4, 0.6],  // SW corner
+    [1.15, 0.7, 5.7, 1.1],  // NW corner
+    [0.8, 1.3, 1.5, 4.8],   // N-W fill
+    [1.25, 0.9, 2.7, 0.4],  // E-N fill
+    [0.95, 1.1, 4.1, 5.2],  // S-E fill
+    [1.1, 0.95, 5.9, 2.7],  // W-S fill
+    [1.3, 0.85, 0.9, 5.6],  // N-E fill
+    [0.9, 1.2, 3.1, 1.9],   // E-S fill
+    [1.05, 1.0, 4.5, 3.3],  // S-W fill
+    [0.85, 1.15, 2.2, 5.0], // W-N fill
+    [1.5, 0.6, 3.3, 2.1],   // inner top
+    [0.65, 1.45, 5.4, 3.7], // inner bottom
   ];
 
-  // Per-particle ambient force amplitude (px/s²). Steady-state displacement
-  // under the spring is roughly amp / springK ≈ 1.5–2 px @ scale=1.
+  // Per-particle ambient force amplitude (px/s²). Corners drift the slowest
+  // to act as visual anchors; cardinal ring breathes more lively.
   static const _ambAmps = <double>[
-    50.0, 46.0, 56.0, 50.0, 54.0, 48.0, 50.0, 52.0,
+    15.5,  14.5,  14.75, 14.0,  13.5,  13.0,  14.0,  14.0,
+    14.5,  14.0,  14.0,  14.5,
+    12.5,  11.75, 13.5,  11.75,
+    12.0,  12.5,  13.5,  11.75,
+    9.0,   7.5,
   ];
 
   @override
@@ -1221,7 +1269,7 @@ class _CloudDriftPainter extends CustomPainter {
       // blob is pushed (by impulse or turbulence), the more diffuse it
       // reads, exactly like a real puff of air dispersing.
       final disp = (p.pos - anchorScreen).distance;
-      final disperse = (disp / (18.0 * scale)).clamp(0.0, 1.0);
+      final disperse = (disp / (4.5 * scale)).clamp(0.0, 1.0);
       final alphaScale = (1.0 - disperse * 0.65 - press * 0.15)
           .clamp(0.0, 1.0);
 
@@ -1233,7 +1281,7 @@ class _CloudDriftPainter extends CustomPainter {
           blobRadius,
           [
             color.withValues(alpha: 0.62 * alphaScale),
-            color.withValues(alpha: 0.40 * alphaScale),
+            color.withValues(alpha: 0.32 * alphaScale),
             color.withValues(alpha: 0.0),
           ],
           [0.0, 0.5, 1.0],
@@ -1303,48 +1351,74 @@ class _CloudDriftBodyPainter extends CustomPainter {
     canvas.drawPath(glossPath, glossPaint);
     canvas.restore();
 
-    final wireStroke = (size.width * 0.045).clamp(1.2, 2.0);
+    // Apple-style metallic rim — bilateral bevel lit from world-up.
+    // Three passes on the same RRect: dark anchor, top specular highlight,
+    // bottom shadow rim. Plus a faint lavender inner radial glow for depth.
+    final wireStroke = (size.width * 0.038).clamp(1.0, 1.7);
     final inset = wireStroke / 2;
-    final wireRRect = RRect.fromRectAndRadius(
+    final rimRRect = RRect.fromRectAndRadius(
       rect.deflate(inset),
       Radius.circular(radius.x - inset),
     );
 
-    // Single-source chrome — one specular gradient from upper-left, with a
-    // faint lavender tint mid-stroke as a quiet nod to the halo. One light,
-    // one material.
-    final mirrorPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = wireStroke
-      ..shader = ui.Gradient.linear(
-        rect.topLeft,
-        rect.bottomRight,
-        [
-          Colors.white.withValues(alpha: 0.75),
-          _CloudDriftPainter._colors[0].withValues(alpha: 0.30),
-          Colors.white.withValues(alpha: 0.10),
-        ],
-        const [0.0, 0.55, 1.0],
-      );
-    canvas.drawRRect(wireRRect, mirrorPaint);
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..color = const Color(0xFF1A1D26).withValues(alpha: 0.70),
+    );
 
-    // Directional specular smear — same light source as above, kept subtle
-    // so it reinforces rather than competes with the wire highlight.
-    final smearPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = wireStroke
-      ..blendMode = BlendMode.screen
-      ..shader = ui.Gradient.linear(
-        rect.topLeft,
-        rect.bottomRight,
-        [
-          Colors.white.withValues(alpha: 0.38),
-          Colors.white.withValues(alpha: 0.12),
-          Colors.white.withValues(alpha: 0.0),
-        ],
-        const [0.0, 0.45, 1.0],
-      );
-    canvas.drawRRect(wireRRect, smearPaint);
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..blendMode = BlendMode.screen
+        ..shader = ui.Gradient.linear(
+          Offset(rect.center.dx, rect.top),
+          Offset(rect.center.dx, rect.top + size.height * 0.38),
+          [
+            Colors.white.withValues(alpha: 0.88),
+            Colors.white.withValues(alpha: 0.55),
+            Colors.white.withValues(alpha: 0.0),
+          ],
+          const [0.0, 0.30, 1.0],
+        ),
+    );
+
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..shader = ui.Gradient.linear(
+          Offset(rect.center.dx, rect.bottom),
+          Offset(rect.center.dx, rect.bottom - size.height * 0.45),
+          [
+            const Color(0xFF4A4F5C).withValues(alpha: 0.85),
+            const Color(0xFF2E323C).withValues(alpha: 0.55),
+            const Color(0xFF2E323C).withValues(alpha: 0.0),
+          ],
+          const [0.0, 0.5, 1.0],
+        ),
+    );
+
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke * 1.4
+        ..blendMode = BlendMode.screen
+        ..shader = ui.Gradient.radial(
+          rect.center,
+          size.width * 0.72,
+          [
+            const Color(0xFF8B7AE8).withValues(alpha: 0.18),
+            const Color(0xFF8B7AE8).withValues(alpha: 0.0),
+          ],
+        ),
+    );
   }
 
   @override
