@@ -567,6 +567,23 @@ agentRunStore.load();
   if (orphaned.length > 0) {
     dbg("warn", "session",
       `Boot sweep: ${orphaned.length} run(s) orphaned by previous process — marked interrupted`);
+    // Surface the partial text of each orphan into chatHistory so the
+    // chat flow itself shows what the agent had typed before the crash,
+    // not just the banner. Idempotent on re-boot via chatHistory.add's
+    // id dedupe (key = runId).
+    for (const r of orphaned) {
+      if (r.partialOutput && r.partialOutput.length > 0) {
+        chatHistory.add({
+          role: "assistant",
+          text: r.partialOutput,
+          agentId: r.agentId,
+          timestamp: r.completedAt ?? new Date().toISOString(),
+          id: r.runId,
+        });
+      }
+    }
+    // Persist once after the loop — avoids N writes for N orphans.
+    if (orphaned.length > 0) chatHistory.save(historyFilePath(PROJECT_CWD));
   }
 }
 
@@ -1913,6 +1930,46 @@ function broadcastActiveAgents(ws: WebSocket): void {
   send(ws, buildActiveAgentsMessage(ws));
 }
 
+/**
+ * C.2 — persist a run's partial assistant text into `chatHistory` so it
+ * shows up in the chat flow itself (not just the interrupted-banner)
+ * on reconnect. Keyed by runId — idempotent if called twice for the
+ * same run (boot sweep + runtime catch can both fire). No-op for empty
+ * partials and explicit user cancels.
+ *
+ * Side-effects: appends to chatHistory, persists to disk, and broadcasts
+ * the new snapshot to every connected client so a still-online peer also
+ * sees the message land. Failures swallowed — losing one partial flush
+ * is acceptable; breaking a live error path is not.
+ */
+function commitPartialToChatHistory(
+  runId: string,
+  agentId: string,
+  partial: string | undefined,
+  status: "interrupted" | "failed" | "cancelled",
+  completedAt: string,
+): void {
+  if (!partial || partial.length === 0) return;
+  // Cancelled = explicit user action; they don't need to see what was
+  // being typed at the moment they hit stop. Interrupted / failed are
+  // the cases where the partial is genuinely useful.
+  if (status === "cancelled") return;
+  try {
+    chatHistory.add({
+      role: "assistant",
+      text: partial,
+      agentId,
+      timestamp: completedAt,
+      id: runId,
+    });
+    chatHistory.save(historyFilePath(PROJECT_CWD));
+    broadcastAll(chatHistory.snapshot());
+  } catch (e) {
+    dbg("warn", "session",
+      `commitPartialToChatHistory failed for run ${runId}: ${(e as Error).message}`);
+  }
+}
+
 // ─── Run query for a client ─────────────────────────────────────────────────
 
 /**
@@ -2396,10 +2453,12 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
           ? "interrupted"
           : "failed";
       const snap = _breaker?.snapshot();
+      const completedAt = new Date().toISOString();
       agentRunStore.update(_runId, {
         status,
         reason: errMsg,
         partialOutput: _runFinalText || undefined,
+        completedAt,
         usage: snap
           ? {
               inputTokens: snap.inputTokens,
@@ -2412,6 +2471,13 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             }
           : undefined,
       });
+      commitPartialToChatHistory(
+        _runId,
+        targetAgentId,
+        _runFinalText,
+        status,
+        completedAt,
+      );
     }
     // If the persisted session is unrecoverable (binary deleted the JSONL,
     // version drift, etc.), drop it so the next query starts fresh. We detect
