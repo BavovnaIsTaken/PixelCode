@@ -189,7 +189,12 @@ export type ClientMessage =
   | { type: "list_active_agents" }
   | { type: "cancel_dispatch_agent"; dispatchId: string }
   | { type: "cancel_chat_query"; queryId: string }
-  | { type: "cancel_all_active" };
+  | { type: "cancel_all_active" }
+  // C.2 run history — client requests runs that landed after `sinceRunId`.
+  // `null` cursor returns every run the server knows about. Used on
+  // reconnect / boot so the UI can surface runs that finished offline
+  // (especially status=interrupted from a server respawn).
+  | { type: "list_runs_since"; sinceRunId?: string | null };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -209,6 +214,54 @@ export interface AgentInfo {
 
 /** Agent activity status */
 export type AgentStatus = "idle" | "thinking" | "typing" | "reading" | "running" | "waiting";
+
+// ─── Run history wire shape (C.2 runs?since= API) ─────────────────────────────
+//
+// Mirror of server/src/agent_run.ts `AgentRun` — duplicated here so the
+// protocol module stays standalone (no runtime dep on the store). If a
+// field changes shape there, this type must change in lockstep; the
+// agent_run_protocol_shape test pins the equivalence.
+
+export type AgentRunStatusWire =
+  | "running"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "cancelled";
+
+export type AgentRunTaskTypeWire = "chat" | "dispatch";
+
+export interface AgentRunUsageWire {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  numTurns: number;
+  numToolCalls: number;
+}
+
+export interface AgentRunToolCallWire {
+  name: string;
+  id: string;
+  at: string;
+}
+
+export interface AgentRunSnapshot {
+  runId: string;
+  agentId: string;
+  taskType: AgentRunTaskTypeWire;
+  status: AgentRunStatusWire;
+  userMessageId?: string;
+  userMessageSnippet?: string;
+  partialOutput?: string;
+  finalOutput?: string;
+  toolCalls: AgentRunToolCallWire[];
+  startedAt: string;
+  completedAt?: string;
+  usage?: AgentRunUsageWire;
+  reason?: string;
+}
 
 /** Tool activity within an agent */
 export interface ToolActivity {
@@ -302,6 +355,11 @@ export type ServerMessage =
         task: string;
         elapsedMs: number;
       }>;
+    }
+  | {
+      type: "runs_since";
+      /** Snapshots of every run that started after the cursor. Chronological. */
+      runs: AgentRunSnapshot[];
     }
   | {
       type: "subagent_start";

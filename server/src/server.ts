@@ -4970,6 +4970,16 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        // C.2 — client reconnect picks up runs that landed offline.
+        // `sinceRunId === null/undefined` returns every known run; otherwise
+        // only the strictly newer suffix. Reply is bounded by the store's
+        // in-memory size, so the client should sliding-window if it grows.
+        case "list_runs_since": {
+          const runs = agentRunStore.since(msg.sinceRunId ?? null);
+          send(ws, { type: "runs_since", runs } as ServerMessage);
+          break;
+        }
+
         // ─── Character position sync ──────────────────────────────────────
         case "sync_positions": {
           broadcastExcept(ws, { type: "positions_sync", positions: msg.positions } as any);

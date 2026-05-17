@@ -461,6 +461,18 @@ class AgentWsService {
       _send({'type': 'cancel_chat_query', 'queryId': queryId});
   void cancelAllActive() => _send({'type': 'cancel_all_active'});
 
+  // ─── Run history ─────────────────────────────────────────────────────────
+
+  /// Ask the server for every run that started after [sinceRunId]. A null
+  /// cursor returns everything the server knows about — used on first connect
+  /// and after server respawn so the UI can show interrupted runs.
+  void listRunsSince(String? sinceRunId) {
+    _send({
+      'type': 'list_runs_since',
+      'sinceRunId': ?sinceRunId,
+    });
+  }
+
   // ─── Agent traits ────────────────────────────────────────────────────────
 
   void getTraits() {

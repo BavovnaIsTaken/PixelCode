@@ -110,6 +110,7 @@ sealed class ServerMessage {
       'assistant_message_done' => AssistantDoneMessage.fromJson(json),
       'agent_status' => AgentStatusMessage.fromJson(json),
       'active_agents' => ActiveAgentsMessage.fromJson(json),
+      'runs_since' => RunsSinceMessage.fromJson(json),
       'subagent_start' => SubagentStartMessage.fromJson(json),
       'subagent_stop' => SubagentStopMessage.fromJson(json),
       'tool_use' => ToolUseMessage.fromJson(json),
@@ -269,6 +270,135 @@ class ActiveAgentsMessage implements ServerMessage {
         entries: (json['entries'] as List)
             .map((e) => ActiveAgentEntry.fromJson(e as Map<String, dynamic>))
             .toList(),
+      );
+}
+
+/// Run lifecycle states — mirrors `AgentRunStatusWire` in server/src/protocol.ts.
+/// Order is significant for filtering ("everything that isn't running is
+/// terminal"); do not reorder without also updating [AgentRunSnapshot.isTerminal].
+enum AgentRunStatus { running, completed, failed, interrupted, cancelled }
+
+AgentRunStatus _agentRunStatusFromJson(String raw) => switch (raw) {
+      'running' => AgentRunStatus.running,
+      'completed' => AgentRunStatus.completed,
+      'failed' => AgentRunStatus.failed,
+      'interrupted' => AgentRunStatus.interrupted,
+      'cancelled' => AgentRunStatus.cancelled,
+      _ => AgentRunStatus.failed,
+    };
+
+enum AgentRunTaskType { chat, dispatch }
+
+class AgentRunUsage {
+  final int inputTokens;
+  final int outputTokens;
+  final int cacheCreationTokens;
+  final int cacheReadTokens;
+  final double costUsd;
+  final int numTurns;
+  final int numToolCalls;
+  const AgentRunUsage({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.cacheCreationTokens,
+    required this.cacheReadTokens,
+    required this.costUsd,
+    required this.numTurns,
+    required this.numToolCalls,
+  });
+  factory AgentRunUsage.fromJson(Map<String, dynamic> json) => AgentRunUsage(
+        inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+        outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+        cacheCreationTokens:
+            (json['cacheCreationTokens'] as num?)?.toInt() ?? 0,
+        cacheReadTokens: (json['cacheReadTokens'] as num?)?.toInt() ?? 0,
+        costUsd: (json['costUsd'] as num?)?.toDouble() ?? 0,
+        numTurns: (json['numTurns'] as num?)?.toInt() ?? 0,
+        numToolCalls: (json['numToolCalls'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class AgentRunToolCall {
+  final String name;
+  final String id;
+  final String at;
+  const AgentRunToolCall({required this.name, required this.id, required this.at});
+  factory AgentRunToolCall.fromJson(Map<String, dynamic> json) =>
+      AgentRunToolCall(
+        name: json['name'] as String,
+        id: json['id'] as String,
+        at: (json['at'] as String?) ?? '',
+      );
+}
+
+/// Wire snapshot of an `AgentRun` from the server — used by reconnect /
+/// `runs?since=` flow to surface what happened while the client was offline.
+class AgentRunSnapshot {
+  final String runId;
+  final String agentId;
+  final AgentRunTaskType taskType;
+  final AgentRunStatus status;
+  final String? userMessageId;
+  final String? userMessageSnippet;
+  final String? partialOutput;
+  final String? finalOutput;
+  final List<AgentRunToolCall> toolCalls;
+  final String startedAt;
+  final String? completedAt;
+  final AgentRunUsage? usage;
+  final String? reason;
+
+  const AgentRunSnapshot({
+    required this.runId,
+    required this.agentId,
+    required this.taskType,
+    required this.status,
+    required this.toolCalls,
+    required this.startedAt,
+    this.userMessageId,
+    this.userMessageSnippet,
+    this.partialOutput,
+    this.finalOutput,
+    this.completedAt,
+    this.usage,
+    this.reason,
+  });
+
+  bool get isTerminal => status != AgentRunStatus.running;
+
+  factory AgentRunSnapshot.fromJson(Map<String, dynamic> json) {
+    return AgentRunSnapshot(
+      runId: json['runId'] as String,
+      agentId: json['agentId'] as String,
+      taskType: (json['taskType'] as String) == 'dispatch'
+          ? AgentRunTaskType.dispatch
+          : AgentRunTaskType.chat,
+      status: _agentRunStatusFromJson(json['status'] as String),
+      userMessageId: json['userMessageId'] as String?,
+      userMessageSnippet: json['userMessageSnippet'] as String?,
+      partialOutput: json['partialOutput'] as String?,
+      finalOutput: json['finalOutput'] as String?,
+      toolCalls: ((json['toolCalls'] as List?) ?? const [])
+          .map((e) => AgentRunToolCall.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false),
+      startedAt: json['startedAt'] as String,
+      completedAt: json['completedAt'] as String?,
+      usage: json['usage'] is Map<String, dynamic>
+          ? AgentRunUsage.fromJson(json['usage'] as Map<String, dynamic>)
+          : null,
+      reason: json['reason'] as String?,
+    );
+  }
+}
+
+class RunsSinceMessage implements ServerMessage {
+  final List<AgentRunSnapshot> runs;
+  const RunsSinceMessage({required this.runs});
+  factory RunsSinceMessage.fromJson(Map<String, dynamic> json) =>
+      RunsSinceMessage(
+        runs: ((json['runs'] as List?) ?? const [])
+            .map((e) => AgentRunSnapshot.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
       );
 }
 

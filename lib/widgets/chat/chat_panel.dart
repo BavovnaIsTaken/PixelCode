@@ -22,6 +22,7 @@ import '../../services/facilitator_session_service.dart';
 import '../team_pulse_strip.dart';
 import 'board_added_bubble.dart';
 import 'chat_grouping.dart';
+import 'interrupted_runs_banner.dart';
 import 'message_decorations.dart';
 import 'send_button.dart';
 import 'thread_widget.dart';
@@ -997,6 +998,11 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
               ],
             ),
           ),
+          // C.2 — runs interrupted by server respawn / breaker / timeout
+          // surface as a dismissable banner above the chat. Filters to the
+          // currently-selected agent so the affordance lands where the user
+          // expects to continue the conversation. Hidden when nothing applies.
+          const InterruptedRunsBanner(),
           // Team pulse — most recent task completion. Returns SizedBox.shrink
           // when the digest is empty so first-time users see no clutter.
           const TeamPulseStrip(),
