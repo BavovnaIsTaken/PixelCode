@@ -19,6 +19,7 @@ import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/office_simulation_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
+import '../../services/agent_id_format.dart';
 import 'build_menu.dart';
 import 'character_sprites.dart';
 import 'snap_logic.dart';
@@ -2248,17 +2249,6 @@ class _TeamMetricsBar extends StatelessWidget {
 
   const _TeamMetricsBar({required this.metrics});
 
-  static const _agentLabels = <String, String>{
-    'manager': 'MGR',
-    'tech-lead': 'TL',
-    'coder': 'DEV',
-    'reviewer': 'REV',
-    'tester': 'QA',
-    'security': 'SEC',
-    'ui-ux-designer': 'UI',
-    'llm-specialist': 'LLM',
-  };
-
   @override
   Widget build(BuildContext context) {
     final c = context.appColors;
@@ -2295,17 +2285,21 @@ class _TeamMetricsBar extends StatelessWidget {
             runSpacing: 6,
             children: [
               for (final entry in metrics.entries)
-                _MetricChip(
-                  label: _agentLabels[entry.key] ?? entry.key,
-                  color: agentAccentColor(entry.key),
-                  assigned: entry.value.tasksAssigned,
-                  completed: entry.value.tasksCompleted,
-                  rework: entry.value.reworkCount,
-                ),
+                _buildChip(entry.key, entry.value),
             ],
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildChip(String agentId, AgentMetrics m) {
+    return _MetricChip(
+      label: shortAgentLabel(agentId),
+      color: agentAccentColor(agentRoleOf(agentId)),
+      assigned: m.tasksAssigned,
+      completed: m.tasksCompleted,
+      rework: m.reworkCount,
     );
   }
 }
