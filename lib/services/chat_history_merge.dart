@@ -19,7 +19,13 @@ import '../models/agent_message.dart';
 ///  * Messages present on the server (with an id) are the canonical versions.
 ///    Local messages with matching ids are dropped.
 ///  * Local-only streaming messages (still being streamed from assistant) are
-///    preserved in a "tail" because the server hasn't persisted them yet.
+///    preserved in a "tail" because the server hasn't persisted them yet —
+///    UNLESS the snapshot already contains an authoritative assistant entry
+///    with the same `threadId` whose timestamp is at-or-after the streaming
+///    one, in which case the server has caught up and the streaming local is
+///    a stale duplicate. This closes the reconnect race where the disconnect
+///    happens between the final stream chunk and the `AssistantDoneMessage`
+///    that would otherwise stamp the id.
 ///  * Local-only non-streaming messages with an id not in the server snapshot
 ///    are dropped — treated as orphaned optimistic writes pending server echo.
 ///  * Local messages without an id and not streaming are dropped — no identity
@@ -53,11 +59,28 @@ Map<String, List<ChatMessage>> mergeChatHistory(
         if (m.id != null) m.id!,
     };
     // Keep local messages only if:
-    //   * still streaming (server hasn't persisted yet), OR
-    //   * have an id not yet in the server (optimistic, pending echo)
-    final tail = localList.where((m) =>
-        m.isStreaming || (m.id != null && !serverIds.contains(m.id)));
-    final entry = [...serverList, ...tail];
+    //   * still streaming AND the server snapshot does NOT yet contain an
+    //     authoritative assistant entry for the same threadId at-or-after the
+    //     streaming timestamp (if it does, server has caught up — drop), OR
+    //   * have an id not yet in the server (optimistic, pending echo).
+    final tail = localList.where((m) {
+      if (m.isStreaming) {
+        final supersededByServer = serverList.any((s) =>
+            s.role == ChatRole.assistant &&
+            s.id != null &&
+            s.threadId == m.threadId &&
+            !s.timestamp.isBefore(m.timestamp));
+        return !supersededByServer;
+      }
+      return m.id != null && !serverIds.contains(m.id);
+    });
+    // Concatenate then sort by timestamp so orphan-tail items don't get
+    // visually appended *after* server-canonical messages they actually
+    // precede chronologically. Stable insertion order is preserved within
+    // identical timestamps by using a stable sort key (timestamp microseconds
+    // — DateTime equality at us-precision is effectively unique per source).
+    final entry = [...serverList, ...tail]
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     if (entry.isNotEmpty) {
       merged[agentId] = entry;
     }

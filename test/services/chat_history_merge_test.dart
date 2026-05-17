@@ -39,6 +39,7 @@ ChatMessage _assistant(
   DateTime ts, {
   bool isStreaming = false,
   String? threadId,
+  String? idOverride,
 }) =>
     ChatMessage(
       role: ChatRole.assistant,
@@ -47,6 +48,7 @@ ChatMessage _assistant(
       timestamp: ts,
       isStreaming: isStreaming,
       threadId: threadId,
+      id: idOverride,
     );
 
 /// Compact projection used to compare lists across "devices" — strips the
@@ -274,7 +276,7 @@ void main() {
       final merged = mergeChatHistory(local, serverMessages);
 
       expect(merged[agent]!.length, 2);
-      expect(merged[agent]!.last.isStreaming, isTrue);
+      expect(merged[agent]!.any((m) => m.isStreaming), isTrue);
     });
 
     test('streaming local message on an agent absent from snapshot survives',
@@ -382,6 +384,211 @@ void main() {
       expect(merged['coder#1']!.single.text, 'from iPhone');
       expect(merged['manager#1']!.length, 1,
           reason: 'matching id must NOT duplicate');
+    });
+  });
+
+  // Regression for the "freshly-sent user msg appears buried in the middle of
+  // the chat" bug reported on macOS 2026-05-16. The server snapshot is
+  // incomplete (e.g. server-side history was trimmed across a restart) and
+  // does NOT contain 8 older local messages. The merge keeps those locals as
+  // orphan-tail — which is correct — but, before the fix, it appended them
+  // *after* the server list, pushing the newly-echoed user msg into the
+  // middle. With a reverse:true ListView auto-scrolling to bottom, the user
+  // sees an unrelated old conversation and concludes the bubble "didn't
+  // appear".
+  group('mergeChatHistory — chronological order preservation', () {
+    const agent = 'manager#1';
+
+    test('orphan-tail locals must not jump ahead of newer server messages',
+        () {
+      final t0 = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      DateTime at(int minutes) => t0.add(Duration(minutes: minutes));
+
+      // Local: 3 ancient orphan ids the server has lost + the optimistic
+      // just-sent user msg (which the server WILL echo back).
+      final local = {
+        agent: [
+          _user(agent, 'old A', at(0), idOverride: 'orphan-a'),
+          _user(agent, 'old B', at(1), idOverride: 'orphan-b'),
+          _user(agent, 'old C', at(2), idOverride: 'orphan-c'),
+          _user(agent, 'fresh send', at(10), idOverride: 'fresh'),
+        ],
+      };
+      // Server snapshot: trimmed history that only retains the fresh echo.
+      final server = [
+        _user(agent, 'fresh send', at(10), idOverride: 'fresh'),
+      ];
+
+      final merged = mergeChatHistory(local, server);
+
+      // Orphans preserved.
+      expect(merged[agent]!.length, 4);
+      // The freshly-sent message must end up at the bottom (latest by ts) so
+      // the auto-scrolled chat surfaces it.
+      expect(merged[agent]!.last.id, 'fresh',
+          reason: 'newest by timestamp must be last');
+      // And the orphan-tail must keep its own chronological order.
+      expect(merged[agent]!.map((m) => m.id).toList(),
+          ['orphan-a', 'orphan-b', 'orphan-c', 'fresh']);
+    });
+
+    test('thread messages stay contiguous after sort (no thread split)', () {
+      // Realistic scenario: server snapshot contains a complete thread
+      // (user prompt → tool_use → assistant text → done). An ancient orphan
+      // local lives in front. Sort must NOT interleave the orphan into the
+      // thread block — chat_grouping.buildChatItems groups *consecutive*
+      // messages by threadId, so any interleave splits the thread into two
+      // separate ThreadGroup tiles in the UI.
+      final t0 = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      DateTime at(int seconds) => t0.add(Duration(seconds: seconds));
+
+      final local = {
+        agent: [
+          _user(agent, 'orphan from prior session', at(0),
+              idOverride: 'orphan'),
+        ],
+      };
+      final server = [
+        _user(agent, 'thread prompt', at(10), idOverride: 't-prompt'),
+        ChatMessage(
+          role: ChatRole.assistant,
+          text: 'searching codebase',
+          agentId: agent,
+          timestamp: at(11),
+          threadId: 'thread-X',
+          category: MessageCategory.status,
+        ),
+        ChatMessage(
+          role: ChatRole.assistant,
+          text: 'here is the answer',
+          agentId: agent,
+          timestamp: at(12),
+          threadId: 'thread-X',
+          id: 't-answer',
+        ),
+      ];
+
+      final merged = mergeChatHistory(local, server);
+
+      expect(merged[agent]!.length, 4);
+      // Orphan first, then the thread block — contiguous, in original order.
+      expect(merged[agent]!.map((m) => m.text).toList(),
+          ['orphan from prior session', 'thread prompt', 'searching codebase', 'here is the answer']);
+      // Both thread msgs share threadId and sit next to each other.
+      final threadIds = merged[agent]!.map((m) => m.threadId).toList();
+      expect(threadIds, [null, null, 'thread-X', 'thread-X']);
+    });
+  });
+
+  // Reconnect race: disconnect lands between the last AssistantTextMessage
+  // (streaming chunk) and the AssistantDoneMessage that would have stamped
+  // the id. The local copy stays `isStreaming=true, id=null`; on reconnect
+  // the server snapshot already contains the authoritative final entry for
+  // the same thread. The pre-fix merge kept BOTH (streaming preserved in
+  // tail + server canonical) and the user saw a duplicate bubble.
+  group('mergeChatHistory — streaming-vs-snapshot reconnect race', () {
+    const ag = 'manager#1';
+
+    test('streaming local is dropped when server snapshot has a final '
+        'asst with matching threadId at-or-after the streaming timestamp',
+        () {
+      final streamingTs = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      final serverDoneTs = streamingTs.add(const Duration(milliseconds: 300));
+      final local = {
+        ag: [
+          _assistant(ag, 'partial answer…', streamingTs,
+              isStreaming: true, threadId: 't1'),
+        ],
+      };
+      final server = [
+        _assistant(ag, 'final answer.', serverDoneTs,
+            threadId: 't1', idOverride: 'S1'),
+      ];
+      final merged = mergeChatHistory(local, server);
+      expect(merged[ag]!.length, 1, reason: 'no duplicate after reconnect');
+      expect(merged[ag]!.single.id, 'S1');
+      expect(merged[ag]!.single.isStreaming, isFalse);
+      expect(merged[ag]!.single.text, 'final answer.');
+    });
+
+    test('streaming local survives if the server has NO final entry yet '
+        '(SDK is still generating; reconnect happened mid-stream)', () {
+      final streamingTs = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      final earlierAsstTs = streamingTs.subtract(const Duration(seconds: 5));
+      final local = {
+        ag: [
+          _assistant(ag, 'partial…', streamingTs,
+              isStreaming: true, threadId: 't2'),
+        ],
+      };
+      // The snapshot has an OLDER final entry on a different thread —
+      // does not represent "this stream finished".
+      final server = [
+        _assistant(ag, 'prev turn', earlierAsstTs,
+            threadId: 't1', idOverride: 'S-prev'),
+      ];
+      final merged = mergeChatHistory(local, server);
+      expect(merged[ag]!.length, 2);
+      expect(merged[ag]!.any((m) => m.isStreaming), isTrue,
+          reason: 'mid-flight stream must not be dropped when server '
+              'snapshot has not caught up to this thread');
+    });
+
+    test('streaming with no threadId (top-level manager) deduplicates '
+        'against a snapshot final that also lacks threadId', () {
+      // Manager streaming at top level has threadId=null. Both sides null
+      // must still match — `null == null` is true in Dart.
+      final streamingTs = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      final serverDoneTs = streamingTs.add(const Duration(milliseconds: 50));
+      final local = {
+        ag: [_assistant(ag, 'in flight', streamingTs, isStreaming: true)],
+      };
+      final server = [
+        _assistant(ag, 'final', serverDoneTs, idOverride: 'M1'),
+      ];
+      final merged = mergeChatHistory(local, server);
+      expect(merged[ag]!.length, 1);
+      expect(merged[ag]!.single.id, 'M1');
+    });
+
+    test('streaming on thread A is NOT dropped by a server final on thread B',
+        () {
+      final t = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      final local = {
+        ag: [
+          _assistant(ag, 'A in flight', t,
+              isStreaming: true, threadId: 'A'),
+        ],
+      };
+      final server = [
+        _assistant(ag, 'B done', t.add(const Duration(seconds: 1)),
+            threadId: 'B', idOverride: 'B1'),
+      ];
+      final merged = mergeChatHistory(local, server);
+      expect(merged[ag]!.length, 2);
+      expect(merged[ag]!.any((m) => m.isStreaming && m.threadId == 'A'),
+          isTrue);
+    });
+
+    test('server snapshot WITHOUT an id (legacy) does not falsely dedupe '
+        'a live stream — only id-bearing canonical entries supersede', () {
+      // Defensive: if a server-side bug emits an asst without id, the merge
+      // must not treat it as "server caught up" and silently kill the stream.
+      final t = DateTime.utc(2026, 5, 16, 12, 0, 0);
+      final local = {
+        ag: [
+          _assistant(ag, 'streaming', t, isStreaming: true, threadId: 't'),
+        ],
+      };
+      final server = [
+        _assistant(ag, 'looks final but no id', t.add(const Duration(seconds: 1)),
+            threadId: 't'),
+      ];
+      final merged = mergeChatHistory(local, server);
+      // Streaming still alive AND the id-less server entry comes through too.
+      // The contract isn't to be smart about id-less ghosts — just to refuse
+      // to use them as a kill signal for a live stream.
+      expect(merged[ag]!.any((m) => m.isStreaming), isTrue);
     });
   });
 }
