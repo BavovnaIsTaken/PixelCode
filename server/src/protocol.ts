@@ -184,7 +184,12 @@ export type ClientMessage =
   | { type: "push_facilitator_output"; outputFormat: string; outputJson: string }
   // Session presence — multi-device coordination
   | { type: "session_claim" }   // viewer requests to become primary
-  | { type: "session_release" }; // primary voluntarily yields (or after takeover prompt)
+  | { type: "session_release" } // primary voluntarily yields (or after takeover prompt)
+  // Active-agents control — UI Settings → "Активні агенти" tab
+  | { type: "list_active_agents" }
+  | { type: "cancel_dispatch_agent"; dispatchId: string }
+  | { type: "cancel_chat_query"; queryId: string }
+  | { type: "cancel_all_active" };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -286,6 +291,17 @@ export type ServerMessage =
       agentId: string;
       status: AgentStatus;
       tools: ToolActivity[];
+    }
+  | {
+      type: "active_agents";
+      /** All active work owned by this ws — sub-agent dispatches and main chat queries. */
+      entries: Array<{
+        kind: "dispatch" | "chat";
+        id: string; // dispatchId for sub-agents, queryId for chat
+        agentId: string;
+        task: string;
+        elapsedMs: number;
+      }>;
     }
   | {
       type: "subagent_start";

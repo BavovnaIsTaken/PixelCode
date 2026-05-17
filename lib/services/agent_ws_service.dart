@@ -140,6 +140,12 @@ class AgentWsService {
           .timeout(const Duration(seconds: 10));
       // dispose() may have been called while we were awaiting the connection.
       if (_disposed) { await _ws?.close(); return; }
+      // Heartbeat: dart:io's WebSocket sends a Ping every [pingInterval] and
+      // expects a Pong within the same window — if the peer is silent the
+      // socket closes with 1006, which fires onDone and triggers reconnect.
+      // Pairs with the server-side ping cycle in server.ts: either side can
+      // notice a half-open socket within ~30 s on mobile Wi-Fi↔LTE handoffs.
+      _ws!.pingInterval = const Duration(seconds: 30);
       _isConnected = true;
       _reconnectAttempt = 0;
       if (!_connectionController.isClosed) _connectionController.add(true);
@@ -445,6 +451,15 @@ class AgentWsService {
 
   void claimSession() => _send({'type': 'session_claim'});
   void releaseSession() => _send({'type': 'session_release'});
+
+  // ─── Active agents ───────────────────────────────────────────────────────
+
+  void listActiveAgents() => _send({'type': 'list_active_agents'});
+  void cancelDispatchAgent(String dispatchId) =>
+      _send({'type': 'cancel_dispatch_agent', 'dispatchId': dispatchId});
+  void cancelChatQuery(String queryId) =>
+      _send({'type': 'cancel_chat_query', 'queryId': queryId});
+  void cancelAllActive() => _send({'type': 'cancel_all_active'});
 
   // ─── Agent traits ────────────────────────────────────────────────────────
 

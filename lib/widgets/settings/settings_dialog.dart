@@ -11,9 +11,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/session_profile.dart';
+import '../../models/agent_message.dart' show ActiveAgentEntry, ActiveAgentKind;
+import '../../providers/active_agents_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/claude_auth_provider.dart';
-import '../../providers/energy_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/session_provider.dart';
 import '../../providers/ios_deploy_provider.dart';
@@ -148,10 +149,10 @@ class _SettingsDialog extends ConsumerWidget {
 
 enum _SettingsCategory {
   account(Icons.person_outline, 'Обліковий запис'),
-  energy(Icons.bolt_outlined, 'Енергія'),
   themes(Icons.palette_outlined, 'Теми'),
   sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
   network(Icons.hub_outlined, 'Мережа'),
+  activeAgents(Icons.flash_on_outlined, 'Активні агенти'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
   logo(Icons.memory, 'Лого'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
@@ -198,14 +199,14 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
     switch (cat) {
       case _SettingsCategory.account:
         return const _AccountSection();
-      case _SettingsCategory.energy:
-        return _buildEnergy();
       case _SettingsCategory.themes:
         return _buildThemes();
       case _SettingsCategory.sendButton:
         return _buildSendButton();
       case _SettingsCategory.network:
         return _buildNetwork();
+      case _SettingsCategory.activeAgents:
+        return _buildActiveAgents();
       case _SettingsCategory.ergonomics:
         return _buildErgonomics();
       case _SettingsCategory.logo:
@@ -213,21 +214,6 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
       case _SettingsCategory.danger:
         return _buildDanger();
     }
-  }
-
-  Widget _buildEnergy() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Енергія'),
-        const SizedBox(height: 12),
-        _desc('Денний ліміт токенів Claude API. '
-            'Коли ліміт вичерпано, модель автоматично переходить на Haiku. '
-            'Лічильники скидаються опівночі за локальним часом.'),
-        const SizedBox(height: 18),
-        const _EnergyDetails(),
-      ],
-    );
   }
 
   Widget _buildThemes() {
@@ -316,6 +302,21 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             ),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _buildActiveAgents() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: 'Активні агенти'),
+        const SizedBox(height: 12),
+        _desc('Делеговані задачі суб-агентам та відкриті бесіди з менеджером. '
+            'Зупиніть конкретну задачу або всі одразу — звільнить слот, '
+            'але історія чату залишається.'),
+        const SizedBox(height: 14),
+        const _ActiveAgentsList(),
       ],
     );
   }
@@ -2364,6 +2365,267 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+// ─── Active agents list ────────────────────────────────────────────────────
+
+class _ActiveAgentsList extends ConsumerWidget {
+  const _ActiveAgentsList();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final entries = ref.watch(activeAgentsProvider);
+    final agents = ref.watch(agentsProvider);
+
+    if (entries.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Center(
+          child: Text(
+            'Зараз ніхто не працює',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.4),
+              fontSize: 13,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final e in entries) ...[
+          _ActiveAgentTile(
+            entry: e,
+            characterName: agents[e.agentId]?.info.name ?? e.agentId,
+            roleLabel: agents[e.agentId]?.info.role ?? '',
+            onCancel: () {
+              final notifier = ref.read(activeAgentsProvider.notifier);
+              if (e.kind == ActiveAgentKind.dispatch) {
+                notifier.cancelDispatch(e.id);
+              } else {
+                notifier.cancelChat(e.id);
+              }
+            },
+          ),
+          const SizedBox(height: 6),
+        ],
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          height: 44,
+          child: _CancelAllActiveButton(
+            onPressed: () =>
+                ref.read(activeAgentsProvider.notifier).cancelAll(),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActiveAgentTile extends StatelessWidget {
+  final ActiveAgentEntry entry;
+  final String characterName;
+  final String roleLabel;
+  final VoidCallback onCancel;
+
+  const _ActiveAgentTile({
+    required this.entry,
+    required this.characterName,
+    required this.roleLabel,
+    required this.onCancel,
+  });
+
+  String _formatElapsed(int ms) {
+    final s = (ms / 1000).floor();
+    if (s < 60) return '$s с';
+    final m = (s / 60).floor();
+    if (m < 60) return '$m хв';
+    final h = (m / 60).floor();
+    final rem = m - h * 60;
+    return rem == 0 ? '$h г' : '$h г $rem хв';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isChat = entry.kind == ActiveAgentKind.chat;
+    final accent = isChat
+        ? const Color(0xFF00C0D1)
+        : const Color(0xFFFFB020);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isChat
+                ? Icons.chat_bubble_outline_rounded
+                : Icons.flash_on_outlined,
+            size: 16,
+            color: accent.withValues(alpha: 0.8),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        characterName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (roleLabel.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        '· $roleLabel',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.4),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatElapsed(entry.elapsedMs),
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.35),
+                        fontSize: 11,
+                        fontFeatures: const [ui.FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+                if (entry.task.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    entry.task,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.55),
+                      fontSize: 12,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: 'Зупинити',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: onCancel,
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Icon(
+                  Icons.stop_circle_outlined,
+                  size: 18,
+                  color: const Color(0xFFFF3B3B).withValues(alpha: 0.7),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CancelAllActiveButton extends StatefulWidget {
+  final VoidCallback onPressed;
+  const _CancelAllActiveButton({required this.onPressed});
+
+  @override
+  State<_CancelAllActiveButton> createState() => _CancelAllActiveButtonState();
+}
+
+class _CancelAllActiveButtonState extends State<_CancelAllActiveButton> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color baseColor;
+    final Color borderColor;
+    final Color fgColor;
+
+    if (_pressed) {
+      baseColor = const Color(0xFF5A1A1E);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.7);
+      fgColor = const Color(0xFFFF5252);
+    } else if (_hovered) {
+      baseColor = const Color(0xFF4A1619);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.55);
+      fgColor = const Color(0xFFFF4D4D);
+    } else {
+      baseColor = const Color(0xFF3D1518);
+      borderColor = const Color(0xFFFF3B3B).withValues(alpha: 0.4);
+      fgColor = const Color(0xFFFF3B3B);
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() {
+        _hovered = false;
+        _pressed = false;
+      }),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) {
+          setState(() => _pressed = false);
+          widget.onPressed();
+        },
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: baseColor,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: borderColor),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.stop_circle_outlined, size: 16, color: fgColor),
+              const SizedBox(width: 6),
+              Text(
+                'Зупинити всіх',
+                style: TextStyle(
+                  color: fgColor,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ─── Stop all agents button ────────────────────────────────────────────────
 
 class _StopAllButton extends ConsumerStatefulWidget {
@@ -2537,134 +2799,3 @@ class _DirtOverlayPainter extends CustomPainter {
   bool shouldRepaint(covariant _DirtOverlayPainter old) => false;
 }
 
-class _EnergyDetails extends ConsumerWidget {
-  const _EnergyDetails();
-
-  static String _fmtK(int v) {
-    if (v >= 1000) {
-      return '${(v / 1000).toStringAsFixed(v % 1000 == 0 ? 0 : 1)}k';
-    }
-    return v.toString();
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final e = ref.watch(energyProvider);
-    final ratio = e.tokenUsageRatio;
-    final tokenColor = ratio > 0.9
-        ? Colors.redAccent
-        : ratio > 0.7
-            ? Colors.orangeAccent
-            : Colors.greenAccent;
-    final labelStyle = TextStyle(
-      color: Colors.white.withValues(alpha: 0.7),
-      fontSize: 13,
-      fontWeight: FontWeight.w500,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text('🪫', style: TextStyle(fontSize: 16)),
-            const SizedBox(width: 8),
-            Text('Токени сьогодні', style: labelStyle),
-            const Spacer(),
-            Text(
-              '${_fmtK(e.tokensUsedToday)} / ${_fmtK(e.dailyTokenCap)}',
-              style: TextStyle(
-                color: tokenColor,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: ratio,
-            minHeight: 6,
-            backgroundColor: Colors.white.withValues(alpha: 0.06),
-            valueColor: AlwaysStoppedAnimation(tokenColor),
-          ),
-        ),
-        const SizedBox(height: 20),
-        _ModelTierRow(
-          label: 'Opus',
-          used: e.opusTasksUsedToday,
-          cap: e.opusCapPerDay,
-          color: const Color(0xFFFFD54F),
-        ),
-        const SizedBox(height: 10),
-        _ModelTierRow(
-          label: 'Sonnet',
-          used: e.sonnetTasksUsedToday,
-          cap: e.sonnetCapPerDay,
-          color: const Color(0xFF81D4FA),
-        ),
-      ],
-    );
-  }
-}
-
-class _ModelTierRow extends StatelessWidget {
-  final String label;
-  final int used;
-  final int cap;
-  final Color color;
-
-  const _ModelTierRow({
-    required this.label,
-    required this.used,
-    required this.cap,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final exhausted = used >= cap;
-    final ratio = cap == 0 ? 1.0 : (used / cap).clamp(0.0, 1.0);
-    final effective =
-        exhausted ? Colors.white.withValues(alpha: 0.35) : color;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: effective,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const Spacer(),
-            Text(
-              '$used / $cap',
-              style: TextStyle(
-                color: effective,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: ratio,
-            minHeight: 4,
-            backgroundColor: Colors.white.withValues(alpha: 0.06),
-            valueColor: AlwaysStoppedAnimation(
-              exhausted ? color.withValues(alpha: 0.3) : color,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}

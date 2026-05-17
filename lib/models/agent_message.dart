@@ -109,6 +109,7 @@ sealed class ServerMessage {
       'assistant_text' => AssistantTextMessage.fromJson(json),
       'assistant_message_done' => AssistantDoneMessage.fromJson(json),
       'agent_status' => AgentStatusMessage.fromJson(json),
+      'active_agents' => ActiveAgentsMessage.fromJson(json),
       'subagent_start' => SubagentStartMessage.fromJson(json),
       'subagent_stop' => SubagentStopMessage.fromJson(json),
       'tool_use' => ToolUseMessage.fromJson(json),
@@ -229,6 +230,44 @@ class AgentStatusMessage implements ServerMessage {
         status: parseAgentStatus(json['status'] as String),
         tools: (json['tools'] as List)
             .map((t) => ToolActivity.fromJson(t as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+enum ActiveAgentKind { dispatch, chat }
+
+class ActiveAgentEntry {
+  final ActiveAgentKind kind;
+  final String id;
+  final String agentId;
+  final String task;
+  final int elapsedMs;
+  const ActiveAgentEntry({
+    required this.kind,
+    required this.id,
+    required this.agentId,
+    required this.task,
+    required this.elapsedMs,
+  });
+  factory ActiveAgentEntry.fromJson(Map<String, dynamic> json) =>
+      ActiveAgentEntry(
+        kind: (json['kind'] as String) == 'chat'
+            ? ActiveAgentKind.chat
+            : ActiveAgentKind.dispatch,
+        id: json['id'] as String,
+        agentId: json['agentId'] as String,
+        task: (json['task'] as String?) ?? '',
+        elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class ActiveAgentsMessage implements ServerMessage {
+  final List<ActiveAgentEntry> entries;
+  const ActiveAgentsMessage({required this.entries});
+  factory ActiveAgentsMessage.fromJson(Map<String, dynamic> json) =>
+      ActiveAgentsMessage(
+        entries: (json['entries'] as List)
+            .map((e) => ActiveAgentEntry.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
 }

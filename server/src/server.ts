@@ -64,6 +64,7 @@ import {
 } from "./facilitator/ws_handler.js";
 import { generateTeamReactions } from "./facilitator/team_reactions.js";
 import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
+import { UsageLogger, usageLogFile, newRunId } from "./usage_log.js";
 import {
   applyReactionsToChat,
   deriveProjectMemoryFromBrief,
@@ -78,6 +79,9 @@ import {
 } from "./trait_memory.js";
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
+import { ChatQueryRegistry } from "./chat_query_registry.js";
+import { CircuitBreaker } from "./circuit_breaker.js";
+import { HeartbeatMonitor } from "./heartbeat.js";
 import { ChatHistory } from "./chat_history.js";
 import { AgentContextPreparer } from "./agent_context.js";
 import { injectLearnedContext, applyLlmLessons, type LlmLesson } from "./personalization.js";
@@ -541,6 +545,13 @@ chatHistory.load(historyFilePath(PROJECT_CWD));
 const techLeadDigest = new TechLeadDigest(digestFile(PROJECT_CWD));
 techLeadDigest.loadFromDisk();
 
+// C.2 — Per-role usage log. Records {runId, role, taskType, agentId,
+// tokens, cost, duration, numTurns, numToolCalls, startedAt, completedAt}
+// per SDK query. Append-only JSONL, no in-memory aggregation; a future
+// analyzer reads the file to compute empirical baselines (median / p95
+// per `{role, taskType}`) for outlier detection in the facilitator UI.
+const usageLogger = new UsageLogger(usageLogFile(PROJECT_CWD));
+
 // Personalization layer (Phase 4.5.1) — extends each query's system prompt
 // with the agent's learned-context fragment. Kill-switch via env var.
 const agentContextPreparer = new AgentContextPreparer(chatHistory);
@@ -792,6 +803,33 @@ const taskQueue = new TaskQueue();
 
 /** Global agent runner — manages independent sub-agent query() calls. */
 const agentRunner = new AgentRunner();
+
+/** Global chat query registry — tracks main manager queries so the UI
+ *  can list/cancel them. Disconnect cleanup goes through cancelForWs. */
+const chatQueryRegistry = new ChatQueryRegistry();
+
+// ─── Heartbeat ──────────────────────────────────────────────────────────────
+//
+// Server-driven WS ping cycle. TCP keep-alive isn't enough on mobile networks:
+// a Wi-Fi↔LTE handoff or NAT timeout can leave a half-open socket where neither
+// side notices the peer is gone. The monitor pings every HEARTBEAT_INTERVAL_MS,
+// and any client that misses MAX_MISSED_PINGS in a row gets terminated — fast
+// enough that "Active agents" UI doesn't lie about a long-dead peer, slow
+// enough to survive the occasional dropped packet.
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const heartbeatMonitor = new HeartbeatMonitor<WebSocket>({ maxMissedPings: 3 });
+const heartbeatTimer = setInterval(() => {
+  const { terminate, ping } = heartbeatMonitor.tick();
+  for (const ws of terminate) {
+    const info = connectedClients.get(ws);
+    dbg("warn", "ws", `Heartbeat timeout — terminating ${info?.deviceName ?? "unknown"} (${info?.platform ?? "?"})`);
+    try { ws.terminate(); } catch { /* socket already dead */ }
+  }
+  for (const ws of ping) {
+    try { ws.ping(); } catch { /* will be picked up on next tick */ }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+heartbeatTimer.unref?.();
 
 /** Per-client flag: whether the manager is currently processing a query. */
 const managerBusy = new WeakMap<WebSocket, boolean>();
@@ -1336,6 +1374,8 @@ function createDispatchServer(ws: WebSocket) {
         traitStore,
         bypassPermissions,
         techLeadDigest: techLeadDigest.renderForPrompt(15),
+        usageLogger,
+        role: roleTypeOf(agentId, gameState),
         onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
         onComplete: (result) => handleSubAgentComplete(ws, result),
         onError: (agId, dId, error) => handleSubAgentError(ws, agId, dId, error),
@@ -1349,6 +1389,7 @@ function createDispatchServer(ws: WebSocket) {
         task: taskDesc,
         priority,
       } as ServerMessage);
+      broadcastActiveAgents(ws);
 
       // Set agent status to running
       send(ws, {
@@ -1617,7 +1658,11 @@ export function subAgentMirrorDelta(
 
 /** Handle real-time messages from independently running sub-agents. */
 function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, dispatchId: string): void {
-  if (ws.readyState !== WebSocket.OPEN) return;
+  // Do NOT gate on ws.readyState: a sub-agent dispatch survives client
+  // disconnect (C.2.1), but its final assistant message must still land in
+  // chatHistory and reach any other connected device via broadcastAll().
+  // Direct send(ws, ...) calls below are already individually no-ops when
+  // the owning ws is closed (see send() at the top of this file).
   const managerAgentId = resolveRoleInstance(ws, "manager");
 
   try {
@@ -1689,6 +1734,9 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
 function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
   dbg("info", "dispatch", `Agent ${result.agentId} completed (${result.dispatchId}): ${result.text.slice(0, 100)}`);
 
+  // Refresh "Active agents" UI — dispatch has left the runner.
+  broadcastActiveAgents(ws);
+
   // Set agent back to idle
   send(ws, {
     type: "agent_status",
@@ -1739,6 +1787,9 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
 /** Handle sub-agent error. */
 function handleSubAgentError(ws: WebSocket, agentId: string, dispatchId: string, error: string): void {
   dbg("error", "dispatch", `Agent ${agentId} error (${dispatchId}): ${error}`);
+
+  // Refresh "Active agents" UI — dispatch has left the runner.
+  broadcastActiveAgents(ws);
 
   send(ws, {
     type: "agent_status",
@@ -1820,6 +1871,29 @@ function sendQueueStatus(ws: WebSocket): void {
   } as ServerMessage);
 }
 
+/** Build the active_agents payload for a single ws — union of sub-agent
+ *  dispatches and main chat queries owned by this socket. */
+function buildActiveAgentsMessage(ws: WebSocket): ServerMessage {
+  const entries: Array<{
+    kind: "dispatch" | "chat";
+    id: string;
+    agentId: string;
+    task: string;
+    elapsedMs: number;
+  }> = [];
+  for (const r of agentRunner.getStatus()) {
+    entries.push({ kind: "dispatch", id: r.dispatchId, agentId: r.agentId, task: r.task, elapsedMs: r.elapsedMs });
+  }
+  for (const q of chatQueryRegistry.list({ ws })) {
+    entries.push({ kind: "chat", id: q.queryId, agentId: q.agentId, task: q.userMessage, elapsedMs: q.elapsedMs });
+  }
+  return { type: "active_agents", entries };
+}
+
+function broadcastActiveAgents(ws: WebSocket): void {
+  send(ws, buildActiveAgentsMessage(ws));
+}
+
 // ─── Run query for a client ─────────────────────────────────────────────────
 
 /**
@@ -1836,6 +1910,18 @@ function detectImageMimeType(base64: string): "image/jpeg" | "image/png" | "imag
 
 async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string, images?: string[]): Promise<void> {
   let _queryTimedOut = false;
+  // C.2.4 hoisted so the catch block can read trip state when the SDK
+  // throws an AbortError after we tripped the breaker.
+  let _breaker: CircuitBreaker | null = null;
+  let _breakerTripped = false;
+  // C.2 usage log — captured at top of the function so both the success
+  // path (after the for-await loop) and the catch can write a usage entry
+  // for the same runId.
+  const _runId = newRunId("chat");
+  const _startedAt = new Date().toISOString();
+  let _resultDurationMs = 0;
+  let _resultCostUsd = 0;
+  let _resultNumTurns = 0;
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -1943,7 +2029,9 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       cwd: PROJECT_CWD,
       includePartialMessages: true,
       permissionMode: "bypassPermissions" as const,
-      maxTurns: 50,
+      // C.2.4 circuit breaker iteration cap. Was 50; lowered to 30 to match
+      // the documented safety-net policy ($5 cost cap + 30 turn cap).
+      maxTurns: 30,
       persistSession: true,
       continue: false,
       abortController: queryAbort,
@@ -2073,6 +2161,21 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       queryAbort.abort();
     }, 5 * 60_000);
 
+    // Register in chat query registry so the "Active agents" UI can cancel
+    // this externally. Unregistered in finally.
+    const _chatQueryId = chatQueryRegistry.register({
+      ws,
+      agentId: targetAgentId,
+      userMessage,
+      abortController: queryAbort,
+    });
+    broadcastActiveAgents(ws);
+
+    // C.2.4 circuit breaker — safety net for runaway loops. Tracks
+    // cumulative cost + tool-call count from `assistant` SDK messages and
+    // aborts the AbortController if either cap is crossed.
+    _breaker = new CircuitBreaker(targetModel);
+
     try {
     let messageCount = 0;
     for await (const message of q) {
@@ -2115,6 +2218,29 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             trackComm(ws, delegateFrom, delegateTo);
           }
         }
+        // C.2.4 circuit breaker — observe usage + tool_use counts.
+        const trip = _breaker.observeAssistantMessage(
+          asst.message.usage as unknown as
+            | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+            | null
+            | undefined,
+          asst.message.content,
+        );
+        if (trip) {
+          _breakerTripped = true;
+          dbg("warn", "breaker", `Circuit breaker tripped: ${trip.message}`);
+          sendDebug(ws, "warn", "breaker", `Aborted: ${trip.message}`);
+          queryAbort.abort();
+        }
+      }
+
+      // C.2 usage log — capture totals from the SDK's terminating result
+      // message before handleSDKMessage forwards it to the client.
+      if (message.type === "result") {
+        const r = message as SDKResultMessage;
+        _resultDurationMs = r.duration_ms ?? 0;
+        _resultCostUsd = r.total_cost_usd ?? 0;
+        _resultNumTurns = r.num_turns ?? 0;
       }
 
       handleSDKMessage(ws, message, targetAgentId);
@@ -2128,15 +2254,67 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     sendDebug(ws, "info", "session",
       `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${currentSessionId?.slice(0, 12) ?? "?"}…`
     );
+
+    // C.2 usage log — append a completed-run entry. Breaker snapshot
+    // gives us cumulative tokens / tool-calls; result message gives us
+    // cost / duration / num_turns. Disk failures are swallowed inside
+    // the logger so a full disk never breaks a live query.
+    if (_breaker) {
+      const snap = _breaker.snapshot();
+      usageLogger.record({
+        runId: _runId,
+        role: roleTypeOf(targetAgentId, clientGameState.get(ws)),
+        taskType: "chat",
+        agentId: targetAgentId,
+        inputTokens: snap.inputTokens,
+        outputTokens: snap.outputTokens,
+        cacheCreationTokens: snap.cacheCreateTokens,
+        cacheReadTokens: snap.cacheReadTokens,
+        costUsd: _resultCostUsd || snap.costUsd,
+        durationMs: _resultDurationMs,
+        numTurns: _resultNumTurns,
+        numToolCalls: snap.toolCalls,
+        startedAt: _startedAt,
+        completedAt: new Date().toISOString(),
+      });
+    }
     } finally {
       clearTimeout(_queryTimeoutId);
+      chatQueryRegistry.unregister(_chatQueryId);
+      broadcastActiveAgents(ws);
     }
   } catch (err) {
-    const errMsg = _queryTimedOut
-      ? `Manager query timed out after 5 minutes — API may be unresponsive`
-      : err instanceof Error ? err.message : String(err);
+    const breakerTrip = _breakerTripped ? _breaker?.snapshot().tripped ?? null : null;
+    const errMsg = breakerTrip
+      ? `Circuit breaker — ${breakerTrip.message}. Перезапустіть запит або змініть scope.`
+      : _queryTimedOut
+        ? `Manager query timed out after 5 minutes — API may be unresponsive`
+        : err instanceof Error ? err.message : String(err);
     dbg("error", "session", `Query failed: ${errMsg}`);
     sendDebug(ws, "error", "session", `Query FAILED: ${errMsg}`);
+
+    // C.2 usage log — interrupted runs still consume tokens and belong
+    // in the baseline distribution. Skip if the breaker never spun up
+    // (failure before the SDK loop even started, no usage to record).
+    if (_breaker) {
+      const snap = _breaker.snapshot();
+      usageLogger.record({
+        runId: _runId,
+        role: roleTypeOf(targetAgentId, clientGameState.get(ws)),
+        taskType: "chat",
+        agentId: targetAgentId,
+        inputTokens: snap.inputTokens,
+        outputTokens: snap.outputTokens,
+        cacheCreationTokens: snap.cacheCreateTokens,
+        cacheReadTokens: snap.cacheReadTokens,
+        costUsd: snap.costUsd,
+        durationMs: Date.now() - new Date(_startedAt).getTime(),
+        numTurns: _resultNumTurns,
+        numToolCalls: snap.toolCalls,
+        startedAt: _startedAt,
+        completedAt: new Date().toISOString(),
+      });
+    }
     // If the persisted session is unrecoverable (binary deleted the JSONL,
     // version drift, etc.), drop it so the next query starts fresh. We detect
     // this by message text since the SDK doesn't expose a typed error.
@@ -3762,6 +3940,9 @@ wss.on("connection", (ws, request) => {
   const remoteAddress = request.socket.remoteAddress ?? "unknown";
   dbg("info", "ws", `Client connected from ${remoteAddress}`);
 
+  heartbeatMonitor.onConnect(ws);
+  ws.on("pong", () => heartbeatMonitor.onPong(ws));
+
   // Register with placeholder info until client_info arrives
   connectedClients.set(ws, {
     clientId: `anon-${Date.now()}`,
@@ -4663,6 +4844,34 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        // ─── Active-agents control (Settings → "Активні агенти") ─────────
+        case "list_active_agents": {
+          send(ws, buildActiveAgentsMessage(ws));
+          break;
+        }
+
+        case "cancel_dispatch_agent": {
+          const ok = agentRunner.cancel(msg.dispatchId);
+          dbg("info", "cancel", `cancel_dispatch_agent ${msg.dispatchId} → ${ok}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
+        case "cancel_chat_query": {
+          const ok = chatQueryRegistry.cancel(msg.queryId);
+          dbg("info", "cancel", `cancel_chat_query ${msg.queryId} → ${ok}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
+        case "cancel_all_active": {
+          const sub = agentRunner.cancelAll(ws);
+          const chat = chatQueryRegistry.cancelForWs(ws);
+          dbg("info", "cancel", `cancel_all_active: sub=${sub ?? "?"} chat=${chat}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
         // ─── Character position sync ──────────────────────────────────────
         case "sync_positions": {
           broadcastExcept(ws, { type: "positions_sync", positions: msg.positions } as any);
@@ -4709,10 +4918,16 @@ wss.on("connection", (ws, request) => {
     const clientInfo = connectedClients.get(ws);
     const disconnectLabel = clientInfo?.deviceName || "unknown";
     dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Shared session: ${currentSessionId ?? "none"}`);
-    // Clean up task queue and running agents for this client
+    // Drop NOT-YET-STARTED queued tasks for this client. Tasks that haven't
+    // hit `runQuery` yet are pure intent and lose nothing by being cancelled
+    // — the user can resubmit on reconnect with current context.
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
-    agentRunner.cancelAll(ws);
+    // C.2.1: do NOT cancel in-flight agents or chat queries on disconnect.
+    // The work runs server-side and persists via chatHistory; on reconnect
+    // the client receives the full snapshot via sendChatHistory(). Explicit
+    // cancel stays available through the "Активні агенти" Settings tab
+    // (cancel_dispatch_agent / cancel_chat_query / cancel_all_active).
     androidDeployUnwatchDevices(ws);
     // Disconnecting client may have an iOS/Android deploy in flight; the
     // child process is keyed on this ws and there's nobody left to cancel
@@ -4720,6 +4935,7 @@ wss.on("connection", (ws, request) => {
     // its temp artifacts pile up under ~/.pixelcode until next restart.
     iosDeployCancel(ws);
     androidDeployCancel(ws);
+    heartbeatMonitor.onDisconnect(ws);
     connectedClients.delete(ws);
     // Session presence: if primary disconnected, promote a viewer
     if (activeSession?.ws === ws) handlePrimaryDisconnect();
