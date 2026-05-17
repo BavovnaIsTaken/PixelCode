@@ -295,7 +295,7 @@ class _CurrentTierCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$playableTiles / ${level.maxPlayableTiles} клітинок',
+                      'Сітка ${level.effectiveCols(expansions) - 2}×${level.effectiveRows(expansions) - 2} • $playableTiles / ${level.maxPlayableTiles} клітинок',
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.45),
                         fontSize: 10,

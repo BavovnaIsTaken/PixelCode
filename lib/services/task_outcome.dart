@@ -70,12 +70,27 @@ const double kMaxSpecializationCritBonusInRoll = 0.30;
 /// Mirrors `kMaxLessonSuccessBonus` in game_economy.dart. Keep in sync.
 const double kMaxLessonSuccessBonusInRoll = 0.10;
 
+/// Hard cap on the project memory depth bonus applied inside [rollOutcome].
+/// Mirrors `kMaxProjectMemoryBonus` in game_economy.dart. Keep in sync.
+const double kMaxProjectMemoryBonusInRoll = 0.15;
+
+
 /// `kLessonSuccessBonusPerLesson * lessonCount`, clamped to
 /// `[0, kMaxLessonSuccessBonusInRoll]`.
 /// * 0 lessons → no bonus.
 /// * 20 lessons → +10% success (= −10% incomplete rate).
 double lessonSuccessBonus({required int lessonCount}) =>
     (0.005 * lessonCount).clamp(0.0, kMaxLessonSuccessBonusInRoll);
+
+/// `0.01 * (totalTasksCompleted / 5)`, clamped to
+/// `[0, kMaxProjectMemoryBonusInRoll]`.
+/// * 0 tasks → no bonus.
+/// * 75+ tasks → +15% crit on architecture rolls.
+/// Applied only to `architecture` divergent tasks. Represents accumulated
+/// project knowledge translating to better architectural insights.
+double projectMemoryDepthBonus({required int totalTasksCompleted}) =>
+    (0.01 * (totalTasksCompleted / 5)).clamp(0.0, kMaxProjectMemoryBonusInRoll);
+
 
 /// Rolls the final outcome for a task at the `testing → done` transition.
 ///
@@ -87,6 +102,7 @@ double lessonSuccessBonus({required int lessonCount}) =>
 ///    partially offsetting the base incomplete rate.
 /// 2. Bug check (Precision).
 /// 3. Crit check (Creativity + specialization, divergent tasks only).
+///    [projectMemoryBonus] is added for `architecture` tasks specifically.
 /// 4. Otherwise `clean`.
 ///
 /// [specializationCritBonus] is the additive crit bonus from this agent's
@@ -97,6 +113,11 @@ double lessonSuccessBonus({required int lessonCount}) =>
 /// [lessonBonus] is the additive success-chance bonus from accumulated lessons
 /// (see [lessonSuccessBonus]). Caller computes it; clamped defensively here.
 ///
+/// [projectMemoryBonus] is the additive crit bonus from accumulated project
+/// knowledge (tasks completed). Applied only to `architecture` divergent tasks
+/// (see [projectMemoryDepthBonus]). Caller computes it; clamped here.
+///
+
 /// [rng] is injectable for deterministic tests.
 TaskOutcome rollOutcome({
   required Random rng,
@@ -108,6 +129,7 @@ TaskOutcome rollOutcome({
   String taskType = '',
   double specializationCritBonus = 0.0,
   double lessonBonus = 0.0,
+  double projectMemoryBonus = 0.0,
 }) {
   final baseSuccess = completionSuccessChance(reliabilitySkill: reliabilitySkill);
   final needsDesk = isUnassigned && workstationTaskTypes.contains(taskType);
@@ -124,9 +146,12 @@ TaskOutcome rollOutcome({
   }
   if (isDivergentTask) {
     final base = critChance(creativitySkill: creativitySkill);
-    final bonus =
+    final specBonus =
         specializationCritBonus.clamp(0.0, kMaxSpecializationCritBonusInRoll);
-    if (rng.nextDouble() < (base + bonus).clamp(0.0, 1.0)) {
+    final memoryBonus = taskType == 'architecture'
+        ? projectMemoryBonus.clamp(0.0, kMaxProjectMemoryBonusInRoll)
+        : 0.0;
+    if (rng.nextDouble() < (base + specBonus + memoryBonus).clamp(0.0, 1.0)) {
       return TaskOutcome.crit;
     }
   }

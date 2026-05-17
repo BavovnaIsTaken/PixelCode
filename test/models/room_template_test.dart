@@ -38,6 +38,20 @@ void main() {
       expect(roomTemplateCatalog.length, greaterThanOrEqualTo(6));
     });
 
+    test('new Stage 3a work-themed templates exist with a workstation/meetingRoom base', () {
+      const expectedIds = ['tpl_starter_cube', 'tpl_deep_focus', 'tpl_team_hub'];
+      for (final id in expectedIds) {
+        final tpl = roomTemplateById(id);
+        expect(tpl, isNotNull, reason: 'expected template $id to exist');
+        expect(
+            [RoomType.workstation, RoomType.meetingRoom].contains(tpl!.baseRoom),
+            isTrue,
+            reason: '$id should be a work-focused base (workstation or meetingRoom)');
+        expect(tpl.furniture, isNotEmpty,
+            reason: '$id should ship at least one piece of furniture');
+      }
+    });
+
     test('roomTemplateById finds known and rejects unknown', () {
       final first = roomTemplateCatalog.first;
       expect(roomTemplateById(first.id), same(first));

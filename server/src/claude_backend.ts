@@ -35,7 +35,7 @@ export class ClaudeAgentSdkBackend implements AgentBackend {
         allowedTools: [],
         cwd: this.projectCwd,
         includePartialMessages: false,
-        permissionMode: "acceptEdits",
+        permissionMode: "bypassPermissions",
         maxTurns: 3,
         persistSession: false,
       },

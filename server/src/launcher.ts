@@ -25,10 +25,23 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 
 const RESTART_EXIT_CODE = 75;
-const READINESS_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 30_000;
 const READINESS_POLL_MS = 200;
 const STOP_GRACE_MS = 5_000;
 const BOOT_LOG_CAP = 400;
+
+/**
+ * Returns the workspace root for a given `server.ts` entry path. Used to pin
+ * the spawned server's cwd so its `process.cwd()` matches the project the
+ * user opened — and not the `server/` subdir (which would silently reroute
+ * chat history to a sibling key under `~/.claude/projects/`).
+ *
+ * Contract: `serverEntry` is `<workspace>/server/src/server.ts` →
+ * `<workspace>`. Exported for unit-testing without spawning a real child.
+ */
+export function workspaceRootFromServerEntry(serverEntry: string): string {
+  return dirname(dirname(dirname(serverEntry)));
+}
 
 export interface LauncherOptions {
   /** Port the launcher's HTTP API binds to. */
@@ -144,9 +157,23 @@ export function runLauncher(opts: LauncherOptions): void {
     state.lastExitCode = null;
     state.lastSignal = null;
 
+    // Pin the child's cwd to the *workspace root* (parent of `server/`).
+    // Two requirements stacked here:
+    //   1. The cwd must be a directory that's guaranteed to exist — if the
+    //      launcher's own cwd was deleted (e.g. legacy `launcher/` dir wiped
+    //      during the PixelDock merge), inheriting it crashes esbuild on
+    //      `process.cwd()` with ENOENT before the server can boot. The
+    //      workspace root contains `server/` so it's just as guaranteed.
+    //   2. The server's `projectCwd` default reads `process.cwd()` — so the
+    //      cwd we pin here becomes the agents' working directory and the
+    //      key under `~/.claude/projects/<cwd>/chat_history.json`. Pinning
+    //      to `server/` (the previous behaviour) silently rerouted chat
+    //      history to a sibling project key (`…-PixelCode-server`) and
+    //      pointed agents at the `server/` subtree, not the workspace.
     const child = spawn(opts.tsxBin, [opts.serverEntry, ...opts.serverArgs], {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
+      cwd: workspaceRootFromServerEntry(opts.serverEntry),
     });
 
     state.child = child;

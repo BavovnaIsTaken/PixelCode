@@ -1,16 +1,19 @@
 /// The chat "send" button — the single most-clicked element in the app.
 ///
-/// Renders one of four hand-crafted designs selected via the cosmetic
+/// Renders one of five hand-crafted designs selected via the cosmetic
 /// catalog (see [SendButtonVariant]). Interaction states (idle / hover /
 /// pressed / tapped) are tuned per-variant so each design feels physically
 /// distinct — the classic button is flat and responsive, Gold Rocket is
-/// weighty with a shimmer, Neon Pulse breathes, and Pixel Arcade snaps
-/// into its drop-shadow like a real arcade cabinet key.
+/// weighty with a shimmer, Neon Pulse breathes, Pixel Arcade snaps into its
+/// drop-shadow like a real arcade cabinet key, and Liquid Glass refracts
+/// the surface beneath with an engraved pixel arrow.
 library;
 
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -177,6 +180,19 @@ class _SendButtonBodyState extends State<_SendButtonBody>
                     hover: hover,
                     burst: burst,
                     accent: widget.accent,
+                    size: widget.size,
+                  ),
+                SendButtonVariant.liquidGlass => _LiquidGlassPaint(
+                    press: press,
+                    hover: hover,
+                    burst: burst,
+                    accent: widget.accent,
+                    size: widget.size,
+                  ),
+                SendButtonVariant.cloudDrift => _CloudDriftPaint(
+                    press: press,
+                    hover: hover,
+                    burst: burst,
                     size: widget.size,
                   ),
               },
@@ -432,11 +448,17 @@ class _BurstRingsPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Stagger: each ring starts later, but all three must finish by t=1.0
+    // (the burst controller stops there). Divide by (1 - maxOffset) so the
+    // last ring also completes — otherwise its alpha never reaches 0 and the
+    // ring stays drawn until the next tap.
+    const maxOffset = 2 * 0.18;
+    const span = 1.0 - maxOffset;
     final center = size.center(Offset.zero);
     for (int i = 0; i < 3; i++) {
       final offset = i * 0.18;
-      final local = (t - offset).clamp(0.0, 1.0);
-      if (local <= 0) continue;
+      final local = ((t - offset) / span).clamp(0.0, 1.0);
+      if (local <= 0 || local >= 1) continue;
       final alpha = (1.0 - local) * 0.6;
       final radius = baseSize / 2 + local * baseSize * 0.9;
       final paint = Paint()
@@ -673,7 +695,7 @@ class _PixelArcadePaint extends StatelessWidget {
                 // Pixel arrow
                 Center(
                   child: CustomPaint(
-                    size: Size.square(size * 0.55),
+                    size: Size.square(size * 0.66),
                     painter: _PixelArrowPainter(
                       color: Colors.black.withValues(alpha: 0.82),
                     ),
@@ -712,14 +734,17 @@ class _PixelArrowPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // Pixel grid: 7x7 cells, draw a right-pointing arrow.
+    // Triangle fills the full grid width with the tip at the right edge so
+    // the symbol reads as a balanced, centered play glyph rather than a
+    // sliver pinned to the left.
     // 1 = filled, 0 = empty.
     const grid = <List<int>>[
       [0, 1, 0, 0, 0, 0, 0],
-      [0, 1, 1, 0, 0, 0, 0],
       [0, 1, 1, 1, 0, 0, 0],
-      [0, 1, 1, 1, 1, 0, 0],
+      [0, 1, 1, 1, 1, 1, 0],
+      [0, 1, 1, 1, 1, 1, 1],
+      [0, 1, 1, 1, 1, 1, 0],
       [0, 1, 1, 1, 0, 0, 0],
-      [0, 1, 1, 0, 0, 0, 0],
       [0, 1, 0, 0, 0, 0, 0],
     ];
     final cell = size.width / 7;
@@ -741,4 +766,661 @@ class _PixelArrowPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _PixelArrowPainter oldDelegate) =>
       oldDelegate.color != color;
+}
+
+// ─── Variant 5: Liquid Glass ──────────────────────────────────────────────
+// Apple iOS 26 / macOS Tahoe design language. Translucent glass surface
+// with backdrop blur, rim highlight and a subtle accent tint. The
+// pixel-art arrow is engraved (deboss + emboss layers, no fill) so the
+// PixelCode identity reads through as etched glass instead of a sticker.
+
+class _LiquidGlassPaint extends StatelessWidget {
+  const _LiquidGlassPaint({
+    required this.press,
+    required this.hover,
+    required this.burst,
+    required this.accent,
+    required this.size,
+  });
+
+  final double press;
+  final double hover;
+  final double burst;
+  final Color accent;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = 1.0 + hover * 0.04 - press * 0.06;
+    final tintAlpha = 0.08 + hover * 0.05 + press * 0.10;
+    final specularAlpha = 0.30 - press * 0.18;
+    final rimAlpha = 0.28 + hover * 0.04;
+    final borderRadius = BorderRadius.circular(12);
+
+    final rimColor = Color.lerp(Colors.white, accent, 0.4)!
+        .withValues(alpha: rimAlpha);
+    final tintColor = accent.withValues(alpha: tintAlpha);
+
+    final shadowOffset = Offset(0, 4 - press * 3);
+    final shadowBlur = 16.0 - press * 10;
+
+    final specularBegin = Alignment(-0.3 + hover * 0.6, -1.0);
+
+    final arrowDim = size * 0.594;
+
+    return Transform.scale(
+      scale: scale,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: borderRadius,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: shadowBlur,
+              offset: shadowOffset,
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 4,
+              spreadRadius: -2,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: borderRadius,
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: Stack(
+              children: [
+                // Pixel arrow — sits underneath the glass layers so the tint
+                // and specular wash over it like a refracted shape beneath
+                // the surface. Wrapped in ImageFiltered so the pixel edges
+                // soften, reading as a refracted shape under glass rather
+                // than a crisp sticker.
+                Center(
+                  child: SizedBox.square(
+                    dimension: arrowDim,
+                    child: ImageFiltered(
+                      imageFilter:
+                          ui.ImageFilter.blur(sigmaX: 3.6, sigmaY: 3.6),
+                      child: CustomPaint(
+                        size: Size.square(arrowDim),
+                        painter: _PixelArrowPainter(
+                          color: Color.lerp(Colors.white, accent, 0.20)!
+                              .withValues(alpha: 0.92),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                // Glass tint — rosy wash over the arrow + blurred backdrop.
+                Positioned.fill(
+                  child: ColoredBox(color: tintColor),
+                ),
+                // Specular highlight (top slab of light, slides on hover)
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: specularBegin,
+                        end: Alignment.bottomCenter,
+                        stops: const [0.0, 0.35, 1.0],
+                        colors: [
+                          Colors.white.withValues(alpha: specularAlpha),
+                          Colors.white.withValues(alpha: specularAlpha * 0.2),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Engraved pixel arrow on the glass surface — deboss shadow
+                // + emboss highlight, layered on top of the wash so the same
+                // shape reads twice: once as a refracted form beneath the
+                // surface, once as an etched glyph on it.
+                Center(
+                  child: SizedBox.square(
+                    dimension: arrowDim,
+                    child: ImageFiltered(
+                      imageFilter:
+                          ui.ImageFilter.blur(sigmaX: 1.12, sigmaY: 1.12),
+                      child: Stack(
+                        children: [
+                          Transform.translate(
+                            offset: const Offset(0.5, 1.0),
+                            child: CustomPaint(
+                              size: Size.square(arrowDim),
+                              painter: _PixelArrowPainter(
+                                color: Colors.black.withValues(alpha: 0.25),
+                              ),
+                            ),
+                          ),
+                          Transform.translate(
+                            offset: const Offset(-0.5, -0.5),
+                            child: CustomPaint(
+                              size: Size.square(arrowDim),
+                              painter: _PixelArrowPainter(
+                                color: Color.lerp(Colors.white, accent, 0.15)!
+                                    .withValues(alpha: 0.75),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                // Inner rim border — last so it stays crisp on top of the
+                // glass wash.
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: borderRadius,
+                      border: Border.all(color: rimColor, width: 1.0),
+                    ),
+                  ),
+                ),
+                // Tap ripple — radial expansion from center
+                if (burst > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: RadialGradient(
+                            radius: 0.5 + burst * 1.2,
+                            colors: [
+                              Colors.white.withValues(
+                                alpha: (1.0 - burst).clamp(0.0, 1.0) * 0.35,
+                              ),
+                              Colors.transparent,
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Variant 6: Cloud Drift ───────────────────────────────────────────────
+// Four pastel cloud-masses (lavender, peach, mint, fuchsia) drift slowly
+// across the glow halo around a dark core. Each blob follows its own
+// incommensurate sinusoid so the pattern never resolves — masses softly
+// mix at the edges via BlendMode.screen but never collapse into a single
+// mid-tone. Locked palette: identity-defining like Gold Rocket and Pixel
+// Arcade, does not follow the theme accent.
+
+class _CloudDriftPaint extends StatefulWidget {
+  const _CloudDriftPaint({
+    required this.press,
+    required this.hover,
+    required this.burst,
+    required this.size,
+  });
+
+  final double press;
+  final double hover;
+  final double burst;
+  final double size;
+
+  @override
+  State<_CloudDriftPaint> createState() => _CloudDriftPaintState();
+}
+
+/// Minimal "air" engine: each blob is a point mass tethered to its anchor
+/// by a spring, dragged by air, and gently jostled by an ambient turbulence
+/// force. A tap injects an outward radial impulse; the spring then gathers
+/// the blobs back. No envelope, no pre-computed paths — the puff/return
+/// shape emerges from the dynamics.
+class _CloudDriftPaintState extends State<_CloudDriftPaint>
+    with SingleTickerProviderStateMixin {
+  // Spring k and damping c chosen so ζ = c/(2√k) ≈ 0.66 — slight overshoot,
+  // settles in ~1 s. Underdamped enough to feel like air, not jelly.
+  static const double _springK = 24.0;
+  static const double _damping = 6.5;
+  static const double _impulseSpeed = 23.5; // px/s @ scale=1
+
+  late final Ticker _ticker;
+  Duration _lastElapsed = Duration.zero;
+  double _ambientT = 0.0;
+  double _prevBurst = 0.0;
+  late final List<_CloudParticle> _particles;
+
+  @override
+  void initState() {
+    super.initState();
+    _particles = _spawnParticles();
+    _ticker = createTicker(_onTick)..start();
+  }
+
+  @override
+  void didUpdateWidget(_CloudDriftPaint oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_prevBurst <= 0 && widget.burst > 0) {
+      _applyTapImpulse();
+    }
+    _prevBurst = widget.burst;
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  void _onTick(Duration elapsed) {
+    final raw = (elapsed - _lastElapsed).inMicroseconds / 1e6;
+    _lastElapsed = elapsed;
+    if (raw <= 0) return;
+    // Clamp dt so a stalled frame can't blow up the integrator.
+    final dt = math.min(raw, 1.0 / 30.0);
+    _ambientT += dt;
+    _step(dt);
+    if (mounted) setState(() {});
+  }
+
+  void _step(double dt) {
+    final scale = widget.size / 44.0;
+    final ambBoost = 1.0 + widget.hover * 0.6;
+    for (final p in _particles) {
+      // Ambient turbulence as a force — drives the steady-state drift.
+      final fx = math.sin(_ambientT * p.ambFreqX + p.ambPhaseX) *
+          p.ambAmp *
+          ambBoost;
+      final fy = math.cos(_ambientT * p.ambFreqY + p.ambPhaseY) *
+          p.ambAmp *
+          ambBoost;
+      // Spring pulls toward anchor (in screen units, hence scale on anchor).
+      final ax = p.base.dx * scale;
+      final ay = p.base.dy * scale;
+      final accelX = fx - _springK * (p.pos.dx - ax) - _damping * p.vel.dx;
+      final accelY = fy - _springK * (p.pos.dy - ay) - _damping * p.vel.dy;
+      p.vel = Offset(p.vel.dx + accelX * dt, p.vel.dy + accelY * dt);
+      p.pos = Offset(p.pos.dx + p.vel.dx * dt, p.pos.dy + p.vel.dy * dt);
+    }
+  }
+
+  void _applyTapImpulse() {
+    final scale = widget.size / 44.0;
+    for (final p in _particles) {
+      final d = p.base.distance;
+      if (d <= 0.001) continue;
+      final dir = Offset(p.base.dx / d, p.base.dy / d);
+      p.vel = p.vel + dir * (_impulseSpeed * scale);
+    }
+  }
+
+  List<_CloudParticle> _spawnParticles() {
+    final scale = widget.size / 44.0;
+    final list = <_CloudParticle>[];
+    for (int i = 0; i < _CloudDriftPainter._basePositions.length; i++) {
+      final anchor = _CloudDriftPainter._basePositions[i];
+      list.add(_CloudParticle(
+        base: anchor,
+        colorIdx: _CloudDriftPainter._colorIdx[i],
+        baseRadius: _CloudDriftPainter._baseRadii[i],
+        pos: anchor * scale,
+        ambFreqX: _CloudDriftPainter._ambFreqs[i][0],
+        ambFreqY: _CloudDriftPainter._ambFreqs[i][1],
+        ambPhaseX: _CloudDriftPainter._ambFreqs[i][2],
+        ambPhaseY: _CloudDriftPainter._ambFreqs[i][3],
+        ambAmp: _CloudDriftPainter._ambAmps[i],
+      ));
+    }
+    return list;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = 1.0 - widget.press * 0.05;
+
+    return Transform.scale(
+      scale: scale,
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          SizedBox(
+            width: widget.size * 2,
+            height: widget.size * 2,
+            child: CustomPaint(
+              painter: _CloudDriftPainter(
+                particles: _particles,
+                press: widget.press,
+                buttonSize: widget.size,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: widget.size,
+            height: widget.size,
+            child: CustomPaint(
+              painter: _CloudDriftBodyPainter(),
+              child: Center(
+                child: Icon(
+                  Icons.send_rounded,
+                  size: widget.size * 0.44,
+                  color: Colors.white.withValues(alpha: 0.95),
+                  shadows: const [
+                    Shadow(color: Colors.black, blurRadius: 6, offset: Offset(0, 1)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CloudParticle {
+  _CloudParticle({
+    required this.base,
+    required this.colorIdx,
+    required this.baseRadius,
+    required this.pos,
+    required this.ambFreqX,
+    required this.ambFreqY,
+    required this.ambPhaseX,
+    required this.ambPhaseY,
+    required this.ambAmp,
+  }) : vel = Offset.zero;
+
+  final Offset base; // anchor in local units (relative to button center)
+  final int colorIdx;
+  final double baseRadius;
+  final double ambFreqX;
+  final double ambFreqY;
+  final double ambPhaseX;
+  final double ambPhaseY;
+  final double ambAmp;
+
+  Offset pos;
+  Offset vel;
+}
+
+class _CloudDriftPainter extends CustomPainter {
+  _CloudDriftPainter({
+    required this.particles,
+    required this.press,
+    required this.buttonSize,
+  });
+
+  final List<_CloudParticle> particles;
+  final double press;
+  final double buttonSize;
+
+  // Six-hue ambient palette: cool dominant (lavender / ice-sky / rose-lilac /
+  // blush-rose) with two accent hues (mint-aqua / peach-gold) sprinkled in
+  // for chromatic depth without breaking the WWDC-glass feel.
+  static const _colors = <Color>[
+    Color(0xFF7A66F0), // lavender-air (saturated)
+    Color(0xFF42B5F5), // ice-sky (saturated)
+    Color(0xFFBE6FE0), // rose-lilac (saturated)
+    Color(0xFFFF6F8E), // blush-rose (saturated)
+    Color(0xFF50E8C5), // mint-aqua (saturated)
+    Color(0xFFFFA85F), // peach-gold (saturated)
+  ];
+
+  // 22 blob layout: 8 cardinal ring + 4 corner anchors + 8 mid-side fills
+  // (two per side) + 2 inner wisps. Each side has two fills positioned to
+  // close the gap between corner and cardinals, producing a continuous halo
+  // without visible voids along the rim.
+  static const _basePositions = <Offset>[
+    Offset(-1.75, -12.0),  // N1 (lavender)
+    Offset(1.75, -12.0),   // N2 (mint-aqua)
+    Offset(12.5, -1.75),   // E1 (ice-sky)
+    Offset(12.5, 1.75),    // E2 (rose-lilac)
+    Offset(1.75, 12.5),    // S1 (peach-gold)
+    Offset(-1.75, 12.5),   // S2 (blush-rose)
+    Offset(-12.5, 1.75),   // W1 (rose-lilac)
+    Offset(-12.5, -1.75),  // W2 (lavender)
+    Offset(11.75, -11.75), // NE corner (ice-sky)
+    Offset(11.75, 11.75),  // SE corner (peach-gold)
+    Offset(-11.75, 11.75), // SW corner (blush-rose)
+    Offset(-11.75, -11.75),// NW corner (mint-aqua)
+    Offset(-8.0, -11.75),  // N-W fill (rose-lilac)
+    Offset(11.75, -8.0),   // E-N fill (mint-aqua)
+    Offset(8.0, 11.75),    // S-E fill (lavender)
+    Offset(-11.75, 8.0),   // W-S fill (ice-sky)
+    Offset(8.0, -11.75),   // N-E fill (peach-gold)
+    Offset(11.75, 8.0),    // E-S fill (lavender)
+    Offset(-8.0, 11.75),   // S-W fill (ice-sky)
+    Offset(-11.75, -8.0),  // W-N fill (rose-lilac)
+    Offset(0.0, -7.0),     // inner top (lavender)
+    Offset(0.0, 7.0),      // inner bottom (mint-aqua)
+  ];
+
+  static const _colorIdx = <int>[
+    0, 4, 1, 2, 5, 3, 2, 0,
+    1, 5, 3, 4,
+    2, 4, 0, 1,
+    5, 0, 1, 2,
+    0, 4,
+  ];
+
+  // Per-particle radii tuned for hue-luminance balance: corners with bright
+  // warm/cool hues (peach, blush, mint, ice) are shrunk to stop them screaming
+  // through screen blend; cardinals with low-luminance hues (lavender) are
+  // grown to compete; fills are widened to bridge gaps along each edge.
+  static const _baseRadii = <double>[
+    17.5,  15.25, 15.75, 14.5,  14.5,  14.0,  15.75, 13.5,
+    15.5,  15.0,  15.0,  15.5,
+    13.0,  11.75, 14.0,  11.75,
+    12.75, 13.0,  14.0,  11.75,
+    9.5,   7.5,
+  ];
+
+  // Ambient turbulence freq pairs + phases. Per-particle incommensurate so the
+  // collective drift never resolves into a visible repeating pattern.
+  static const _ambFreqs = <List<double>>[
+    [0.9, 1.1, 0.0, 0.0],   // N1
+    [0.9, 1.1, 0.4, 0.3],   // N2
+    [1.2, 0.8, 2.5, 1.7],   // E1
+    [1.2, 0.8, 2.9, 2.0],   // E2
+    [0.75, 1.0, 4.7, 2.3],  // S1
+    [0.75, 1.0, 5.1, 2.6],  // S2
+    [1.05, 0.85, 6.0, 4.4], // W1
+    [1.05, 0.85, 6.4, 4.7], // W2
+    [1.35, 0.95, 1.2, 3.8], // NE corner
+    [0.85, 1.25, 3.6, 5.5], // SE corner
+    [0.95, 1.2, 2.4, 0.6],  // SW corner
+    [1.15, 0.7, 5.7, 1.1],  // NW corner
+    [0.8, 1.3, 1.5, 4.8],   // N-W fill
+    [1.25, 0.9, 2.7, 0.4],  // E-N fill
+    [0.95, 1.1, 4.1, 5.2],  // S-E fill
+    [1.1, 0.95, 5.9, 2.7],  // W-S fill
+    [1.3, 0.85, 0.9, 5.6],  // N-E fill
+    [0.9, 1.2, 3.1, 1.9],   // E-S fill
+    [1.05, 1.0, 4.5, 3.3],  // S-W fill
+    [0.85, 1.15, 2.2, 5.0], // W-N fill
+    [1.5, 0.6, 3.3, 2.1],   // inner top
+    [0.65, 1.45, 5.4, 3.7], // inner bottom
+  ];
+
+  // Per-particle ambient force amplitude (px/s²). Corners drift the slowest
+  // to act as visual anchors; cardinal ring breathes more lively.
+  static const _ambAmps = <double>[
+    15.5,  14.5,  14.75, 14.0,  13.5,  13.0,  14.0,  14.0,
+    14.5,  14.0,  14.0,  14.5,
+    12.5,  11.75, 13.5,  11.75,
+    12.0,  12.5,  13.5,  11.75,
+    9.0,   7.5,
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = buttonSize / 44.0;
+    final center = size.center(Offset.zero);
+    final radiusBoost = -press * 3.2;
+
+    for (final p in particles) {
+      final pos = center + p.pos;
+      final anchorScreen = p.base * scale;
+      // Alpha falls off with displacement from anchor — the further the
+      // blob is pushed (by impulse or turbulence), the more diffuse it
+      // reads, exactly like a real puff of air dispersing.
+      final disp = (p.pos - anchorScreen).distance;
+      final disperse = (disp / (4.5 * scale)).clamp(0.0, 1.0);
+      final alphaScale = (1.0 - disperse * 0.65 - press * 0.15)
+          .clamp(0.0, 1.0);
+
+      final color = _colors[p.colorIdx];
+      final blobRadius = (p.baseRadius + radiusBoost) * scale;
+      final paint = Paint()
+        ..shader = ui.Gradient.radial(
+          pos,
+          blobRadius,
+          [
+            color.withValues(alpha: 0.62 * alphaScale),
+            color.withValues(alpha: 0.32 * alphaScale),
+            color.withValues(alpha: 0.0),
+          ],
+          [0.0, 0.5, 1.0],
+        )
+        ..blendMode = BlendMode.screen;
+      canvas.drawCircle(pos, blobRadius, paint);
+    }
+  }
+
+  // The painter is repainted from the Ticker via setState — list identity is
+  // stable but contents mutate, so we always need to repaint.
+  @override
+  bool shouldRepaint(covariant _CloudDriftPainter oldDelegate) => true;
+}
+
+/// Dark body of Cloud Drift with a thin "wire" stroke and a specular gloss,
+/// to read as a polished/glassy material rather than a flat painted card.
+class _CloudDriftBodyPainter extends CustomPainter {
+  _CloudDriftBodyPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final radius = Radius.circular(size.width * 0.28);
+    final rrect = RRect.fromRectAndRadius(rect, radius);
+
+    final fill = Paint()
+      ..shader = ui.Gradient.linear(
+        rect.topLeft,
+        rect.bottomRight,
+        const [Color(0xFF0A0C12), Color(0xFF030407)],
+      );
+    canvas.drawRRect(rrect, fill);
+
+    final innerShade = Paint()
+      ..shader = ui.Gradient.radial(
+        rect.bottomRight,
+        size.width,
+        [
+          Colors.black.withValues(alpha: 0.55),
+          Colors.black.withValues(alpha: 0.0),
+        ],
+      )
+      ..blendMode = BlendMode.multiply;
+    canvas.drawRRect(rrect, innerShade);
+
+    final glossRect = Rect.fromLTWH(
+      size.width * 0.08,
+      size.height * 0.06,
+      size.width * 0.84,
+      size.height * 0.46,
+    );
+    final glossPath = Path()
+      ..addRRect(RRect.fromRectAndRadius(glossRect, radius * 0.85));
+    final glossPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        glossRect.topCenter,
+        glossRect.bottomCenter,
+        [
+          Colors.white.withValues(alpha: 0.18),
+          Colors.white.withValues(alpha: 0.0),
+        ],
+      )
+      ..blendMode = BlendMode.screen;
+    canvas.save();
+    canvas.clipRRect(rrect);
+    canvas.drawPath(glossPath, glossPaint);
+    canvas.restore();
+
+    // Apple-style metallic rim — bilateral bevel lit from world-up.
+    // Three passes on the same RRect: dark anchor, top specular highlight,
+    // bottom shadow rim. Plus a faint lavender inner radial glow for depth.
+    final wireStroke = (size.width * 0.038).clamp(1.0, 1.7);
+    final inset = wireStroke / 2;
+    final rimRRect = RRect.fromRectAndRadius(
+      rect.deflate(inset),
+      Radius.circular(radius.x - inset),
+    );
+
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..color = const Color(0xFF1A1D26).withValues(alpha: 0.70),
+    );
+
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..blendMode = BlendMode.screen
+        ..shader = ui.Gradient.linear(
+          Offset(rect.center.dx, rect.top),
+          Offset(rect.center.dx, rect.top + size.height * 0.38),
+          [
+            Colors.white.withValues(alpha: 0.88),
+            Colors.white.withValues(alpha: 0.55),
+            Colors.white.withValues(alpha: 0.0),
+          ],
+          const [0.0, 0.30, 1.0],
+        ),
+    );
+
+    canvas.drawRRect(
+      rimRRect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke
+        ..shader = ui.Gradient.linear(
+          Offset(rect.center.dx, rect.bottom),
+          Offset(rect.center.dx, rect.bottom - size.height * 0.45),
+          [
+            const Color(0xFF4A4F5C).withValues(alpha: 0.85),
+            const Color(0xFF2E323C).withValues(alpha: 0.55),
+            const Color(0xFF2E323C).withValues(alpha: 0.0),
+          ],
+          const [0.0, 0.5, 1.0],
+        ),
+    );
+
+    canvas.drawRRect(
+      rrect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = wireStroke * 1.4
+        ..blendMode = BlendMode.screen
+        ..shader = ui.Gradient.radial(
+          rect.center,
+          size.width * 0.72,
+          [
+            const Color(0xFF8B7AE8).withValues(alpha: 0.18),
+            const Color(0xFF8B7AE8).withValues(alpha: 0.0),
+          ],
+        ),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CloudDriftBodyPainter oldDelegate) => false;
 }

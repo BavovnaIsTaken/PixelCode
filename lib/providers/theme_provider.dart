@@ -29,6 +29,9 @@ final activeThemeColorsProvider = Provider<ThemeColors>((ref) {
 
 /// The currently equipped send-button cosmetic variant (falls back to
 /// [SendButtonVariant.classic] when nothing is equipped).
+///
+/// Pixel Arcade and Liquid Glass coexist in the catalog so users can pick
+/// either identity on any platform.
 final activeSendButtonVariantProvider = Provider<SendButtonVariant>((ref) {
   final equipped = ref.watch(gameEconomyProvider).equippedCosmetics;
   return sendButtonVariantForId(equipped[CosmeticType.sendButtonStyle.index]);
@@ -56,7 +59,7 @@ ThemeData _buildThemeData(ThemeColors c) {
     ),
     tooltipTheme: isMacOS
         ? const TooltipThemeData(
-            waitDuration: Duration(milliseconds: 2000),
+            waitDuration: Duration(milliseconds: 1500),
             showDuration: Duration(seconds: 10),
           )
         : null,

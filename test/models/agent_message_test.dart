@@ -385,6 +385,26 @@ void main() {
       });
       expect(msg, isA<InitMessage>());
       expect((msg as InitMessage).sessionId, 'sess-1');
+      expect(msg.workingDirectory, isNull);
+    });
+
+    test('init parses workingDirectory when present', () {
+      final msg = parse({
+        'type': 'init',
+        'sessionId': 'sess-1',
+        'agents': [],
+        'workingDirectory': '/Users/dev/Projects/MyApp',
+      }) as InitMessage;
+      expect(msg.workingDirectory, '/Users/dev/Projects/MyApp');
+    });
+
+    test('init keeps workingDirectory null when field is missing', () {
+      final msg = parse({
+        'type': 'init',
+        'sessionId': 'sess-1',
+        'agents': [],
+      }) as InitMessage;
+      expect(msg.workingDirectory, isNull);
     });
 
     test('assistant_text routes to AssistantTextMessage', () {
@@ -626,6 +646,23 @@ void main() {
       final cast = msg as ToolUseMessage;
       expect(cast.toolName, 'Bash');
       expect(cast.threadId, 'th-1');
+    });
+
+    test('subagent_thread_event routes to SubagentThreadEventMessage', () {
+      final msg = parse({
+        'type': 'subagent_thread_event',
+        'agentId': 'manager#1',
+        'toolUseId': 'tu-42_m',
+        'toolName': 'Bash',
+        'status': 'grep -r palette',
+        'threadId': 'dispatch-1',
+      });
+      expect(msg, isA<SubagentThreadEventMessage>());
+      final cast = msg as SubagentThreadEventMessage;
+      expect(cast.agentId, 'manager#1');
+      expect(cast.toolName, 'Bash');
+      expect(cast.status, 'grep -r palette');
+      expect(cast.threadId, 'dispatch-1');
     });
 
     test('tool_done routes to ToolDoneMessage', () {

@@ -22,6 +22,9 @@ import {
   type GameStateData,
 } from "./agents.js";
 import { formatTraitsForPrompt, type TraitStore } from "./trait_memory.js";
+import { CircuitBreaker } from "./circuit_breaker.js";
+import { UsageLogger, newRunId } from "./usage_log.js";
+import type { AgentRunStore } from "./agent_run.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +43,9 @@ export interface RunningAgent {
   abortController: AbortController;
   startedAt: number;
   promise: Promise<void>;
+  /** Owning WebSocket — kept so disconnect can cancel only the dropped
+   *  client's agents, not every peer's. */
+  ws: WebSocket;
 }
 
 export interface DispatchParams {
@@ -51,6 +57,34 @@ export interface DispatchParams {
   projectMemory?: string;
   traitStore: TraitStore;
   bypassPermissions?: boolean;
+  /**
+   * Pre-rendered tech-lead digest block. Only used when the dispatched
+   * sub-agent's role is `tech-lead`; ignored otherwise. Kept on this
+   * struct (not pulled from a global) so agent_runner stays pure and
+   * unit-testable without a digest singleton.
+   */
+  techLeadDigest?: string;
+  /**
+   * Optional usage logger — records the completed run's cost / tokens /
+   * tool-call count to JSONL. Kept on the params struct (not a singleton)
+   * so unit tests can omit it without ceremony, and so a future per-user
+   * UsageLogger split doesn't need a runner refactor.
+   */
+  usageLogger?: UsageLogger;
+  /**
+   * Optional persistent run store — records the dispatch lifecycle
+   * (running → completed / failed / interrupted / cancelled) so the UI
+   * can recover state on reconnect / server restart. Same DI rationale
+   * as `usageLogger`: passed via params, not pulled from a singleton.
+   */
+  agentRunStore?: AgentRunStore;
+  /**
+   * Role type for the dispatched agent (e.g. "coder", "reviewer"). Used
+   * by `usageLogger` so the JSONL has a `{role, taskType}` key suitable
+   * for empirical baseline analysis. Pure passthrough — derive at the
+   * call site so this module stays decoupled from agents.ts.
+   */
+  role?: string;
   /** Called for every SDK message from the sub-agent (for real-time UI). */
   onMessage: (msg: SDKMessage, agentId: string, dispatchId: string) => void;
   /** Called when the sub-agent completes (success or error). */
@@ -90,6 +124,7 @@ export class AgentRunner {
       abortController,
       startedAt: Date.now(),
       promise: this.runAgent(dispatchId, params, abortController),
+      ws: params.ws,
     };
 
     this.running.set(dispatchId, entry);
@@ -111,12 +146,21 @@ export class AgentRunner {
     return true;
   }
 
-  /** Cancel all running agents for a given WebSocket (e.g. on disconnect). */
-  cancelAll(ws?: WebSocket): void {
+  /**
+   * Cancel running agents. With `ws`, cancels only that ws's agents
+   * (used on disconnect — must NOT take down peer agents). Without `ws`,
+   * cancels everything (used on project switch / shutdown). Returns the
+   * number of agents cancelled.
+   */
+  cancelAll(ws?: WebSocket): number {
+    let n = 0;
     for (const [id, entry] of this.running) {
+      if (ws && entry.ws !== ws) continue;
       entry.abortController.abort();
       this.running.delete(id);
+      n++;
     }
+    return n;
   }
 
   /** Get list of currently running agents. */
@@ -150,12 +194,37 @@ export class AgentRunner {
     params: DispatchParams,
     abortController: AbortController,
   ): Promise<void> {
-    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions } = params;
+    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions, techLeadDigest, usageLogger, agentRunStore, role } = params;
 
+    let _timedOut = false;
+    let _breakerTripped = false;
+    let _breakerSnapshot: ReturnType<CircuitBreaker["snapshot"]> | null = null;
+    const runId = newRunId("dispatch");
+    const startedAt = new Date().toISOString();
+    let _numTurns = 0;
+    // Hoisted so the catch block can snapshot usage for interrupted runs
+    // (timeouts, breaker trips, network errors all still cost money).
+    let _breaker: CircuitBreaker | null = null;
+    // C.2 — open the persistent run record. Status flips to its terminal
+    // form in the success / catch paths.
+    agentRunStore?.start({
+      runId,
+      agentId,
+      taskType: "dispatch",
+      userMessageSnippet: task.slice(0, 200),
+      startedAt,
+    });
+    let _runPartial = "";
     try {
       // Build the sub-agent's system prompt
       const agentTraits = formatTraitsForPrompt(traitStore, agentId);
-      const systemPrompt = buildOfficePrompt(agentId, projectMemory, agentTraits, gameState);
+      const systemPrompt = buildOfficePrompt(
+        agentId,
+        projectMemory,
+        agentTraits,
+        gameState,
+        techLeadDigest,
+      );
 
       // Determine model from hardware (hardware is tracked per instance now)
       const instance = gameState?.instances[agentId];
@@ -177,7 +246,7 @@ export class AgentRunner {
           allowedTools: agentTools,
           cwd: projectCwd,
           includePartialMessages: true,
-          permissionMode: bypassPermissions ? "bypassPermissions" : "acceptEdits",
+          permissionMode: "bypassPermissions",
           maxTurns: 30,
           persistSession: false,
           abortController,
@@ -188,6 +257,19 @@ export class AgentRunner {
       let costUsd = 0;
       let durationMs = 0;
 
+      // Abort after 3 minutes — a stuck sub-agent holds a MAX_CONCURRENT slot
+      // and starves other dispatches.
+      const _timeoutId = setTimeout(() => {
+        _timedOut = true;
+        abortController.abort();
+      }, 3 * 60_000);
+
+      // C.2.4 circuit breaker — same safety policy as the main manager
+      // query: cap cost ($5) + tool calls (30) per sub-agent run.
+      const breaker = new CircuitBreaker(model);
+      _breaker = breaker;
+
+      try {
       for await (const message of q) {
         // Forward all messages for real-time UI updates
         params.onMessage(message, agentId, dispatchId);
@@ -197,11 +279,38 @@ export class AgentRunner {
           const asst = message as SDKAssistantMessage;
           // Only collect text from top-level messages (no parent)
           if (!asst.parent_tool_use_id) {
+            let _msgText = "";
             for (const block of asst.message.content) {
               if (block.type === "text") {
-                resultText += (block as { type: "text"; text: string }).text;
+                _msgText += (block as { type: "text"; text: string }).text;
+              }
+              // C.2 — surface tool_use into the persistent run record.
+              if (block.type === "tool_use" && agentRunStore) {
+                agentRunStore.appendToolCall(runId, {
+                  name: block.name,
+                  id: block.id,
+                  at: new Date().toISOString(),
+                });
               }
             }
+            if (_msgText) {
+              resultText += _msgText;
+              _runPartial += _msgText;
+              agentRunStore?.update(runId, { partialOutput: _runPartial });
+            }
+          }
+          // Breaker observation — same logic as runQuery in server.ts.
+          const trip = breaker.observeAssistantMessage(
+            asst.message.usage as unknown as
+              | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+              | null
+              | undefined,
+            asst.message.content,
+          );
+          if (trip) {
+            _breakerTripped = true;
+            _breakerSnapshot = breaker.snapshot();
+            abortController.abort();
           }
         }
 
@@ -209,11 +318,48 @@ export class AgentRunner {
           const res = message as SDKResultMessage;
           costUsd = res.total_cost_usd ?? 0;
           durationMs = res.duration_ms ?? 0;
+          _numTurns = res.num_turns ?? 0;
           const resText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
           if (resText && !resultText) {
             resultText = resText;
           }
         }
+      }
+
+      if (usageLogger) {
+        const snap = breaker.snapshot();
+        usageLogger.record({
+          runId,
+          role: role ?? agentId,
+          taskType: "dispatch",
+          agentId,
+          inputTokens: snap.inputTokens,
+          outputTokens: snap.outputTokens,
+          cacheCreationTokens: snap.cacheCreateTokens,
+          cacheReadTokens: snap.cacheReadTokens,
+          costUsd,
+          durationMs,
+          numTurns: _numTurns,
+          numToolCalls: snap.toolCalls,
+          startedAt,
+          completedAt: new Date().toISOString(),
+        });
+      }
+      if (agentRunStore) {
+        const snap = breaker.snapshot();
+        agentRunStore.update(runId, {
+          status: "completed",
+          finalOutput: resultText,
+          usage: {
+            inputTokens: snap.inputTokens,
+            outputTokens: snap.outputTokens,
+            cacheCreationTokens: snap.cacheCreateTokens,
+            cacheReadTokens: snap.cacheReadTokens,
+            costUsd,
+            numTurns: _numTurns,
+            numToolCalls: snap.toolCalls,
+          },
+        });
       }
 
       params.onComplete({
@@ -223,9 +369,67 @@ export class AgentRunner {
         costUsd,
         durationMs,
       });
+      } finally {
+        clearTimeout(_timeoutId);
+      }
     } catch (err) {
-      if (abortController.signal.aborted) return; // cancelled, not an error
-      const errMsg = err instanceof Error ? err.message : String(err);
+      // Abort with neither timeout nor breaker = explicit user cancel.
+      const explicitCancel =
+        abortController.signal.aborted && !_timedOut && !_breakerTripped;
+      if (explicitCancel) {
+        agentRunStore?.update(runId, {
+          status: "cancelled",
+          partialOutput: _runPartial || undefined,
+        });
+        return;
+      }
+      const errMsg = _breakerTripped
+        ? `Sub-agent ${agentId} stopped: ${_breakerSnapshot?.tripped?.message ?? "circuit breaker tripped"}`
+        : _timedOut
+          ? `Sub-agent ${agentId} timed out after 3 minutes`
+          : err instanceof Error ? err.message : String(err);
+      // C.2 — flip persistent run to terminal status. Interrupted covers
+      // breaker / timeout; everything else is a failure.
+      if (agentRunStore) {
+        const snap = _breaker?.snapshot();
+        agentRunStore.update(runId, {
+          status: _breakerTripped || _timedOut ? "interrupted" : "failed",
+          reason: errMsg,
+          partialOutput: _runPartial || undefined,
+          usage: snap
+            ? {
+                inputTokens: snap.inputTokens,
+                outputTokens: snap.outputTokens,
+                cacheCreationTokens: snap.cacheCreateTokens,
+                cacheReadTokens: snap.cacheReadTokens,
+                costUsd: snap.costUsd,
+                numTurns: _numTurns,
+                numToolCalls: snap.toolCalls,
+              }
+            : undefined,
+        });
+      }
+      // Record partial usage even on interruption — breaker / timeout runs
+      // still cost money and belong in the baseline distribution.
+      if (usageLogger && _breaker) {
+        const snap = _breaker.snapshot();
+        usageLogger.record({
+          runId,
+          role: role ?? agentId,
+          taskType: "dispatch",
+          agentId,
+          inputTokens: snap.inputTokens,
+          outputTokens: snap.outputTokens,
+          cacheCreationTokens: snap.cacheCreateTokens,
+          cacheReadTokens: snap.cacheReadTokens,
+          costUsd: snap.costUsd,
+          durationMs: Date.now() - new Date(startedAt).getTime(),
+          numTurns: _numTurns,
+          numToolCalls: snap.toolCalls,
+          startedAt,
+          completedAt: new Date().toISOString(),
+        });
+      }
       params.onError(agentId, dispatchId, errMsg);
     }
   }

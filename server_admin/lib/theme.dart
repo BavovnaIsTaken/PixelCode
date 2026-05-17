@@ -20,6 +20,7 @@ class PixelPalette {
   static const accent = Color(0xFF00C0D1);
   static const accentSoft = Color(0xFF1F8A93);
   static const gold = Color(0xFFFFD700);
+  static const ice = Color(0xFF7DD3FC);
   static const success = Color(0xFF22C55E);
   static const error = Color(0xFFEF4444);
   static const warn = Color(0xFFE0A44A);
@@ -108,13 +109,25 @@ class GlowDot extends StatelessWidget {
 /// Card with PixelCode-flavored chrome: dark surface, sharp 1px border, a
 /// title strip in pixel font over a dimmer background.
 class PixelCard extends StatelessWidget {
-  const PixelCard({super.key, required this.title, required this.child, this.titleColor});
+  const PixelCard({
+    super.key,
+    required this.title,
+    required this.child,
+    this.titleColor,
+    this.expand = false,
+  });
   final String title;
   final Widget child;
   final Color? titleColor;
 
+  /// When true, the body grows to fill remaining vertical space — required
+  /// when `child` itself contains an `Expanded` (e.g. a long log list). The
+  /// caller must place the card in a bounded-height parent (Expanded/SizedBox).
+  final bool expand;
+
   @override
   Widget build(BuildContext context) {
+    final body = Padding(padding: const EdgeInsets.all(16), child: child);
     return Container(
       decoration: BoxDecoration(
         color: PixelPalette.surface,
@@ -122,6 +135,7 @@ class PixelCard extends StatelessWidget {
         border: Border.all(color: PixelPalette.border),
       ),
       child: Column(
+        mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
@@ -158,7 +172,7 @@ class PixelCard extends StatelessWidget {
               ],
             ),
           ),
-          Padding(padding: const EdgeInsets.all(16), child: child),
+          if (expand) Expanded(child: body) else body,
         ],
       ),
     );

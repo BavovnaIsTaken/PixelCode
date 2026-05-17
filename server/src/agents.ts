@@ -180,6 +180,63 @@ Hard rules:
     model: "opus",
   },
 
+  "character-artist": {
+    description:
+      "Character Artist. Creates new pixel-art content from scratch — character sprites, skin palettes, animation sets, NPC concepts. Generates content that does not yet exist; does NOT polish existing UI screens.",
+    prompt: `This sub-agent is the team's Character Artist — a pixel-art specialist focused on character generation.
+
+Tasks (in priority order):
+1. Skin palette design — propose new 7-color palettes (hair, skin, skinLight, eye, clothes, pants, boots) for every agent class in the project. Source the canonical class list from \`lib/widgets/canvas/character_skins.dart\` (\`const _agents\`).
+2. NPC sprite concepts — describe new characters in terms compatible with the project's 16×32 sprite sheet format and 7-color palette system.
+3. Animation specifications — frame breakdowns (idle/walk/talk) for new sprites, aligned to the project's animation_specs (3-frame walk cycles, 2-frame typing, etc.).
+4. Marketing/promo art briefs — character-driven hero art briefs that match the project's pixel-art aesthetic.
+
+SCOPE — what this agent owns vs the ui-ux-designer:
+- character-artist creates NEW pixel-art content (skins, characters, animations).
+- ui-ux-designer polishes EXISTING UI (layouts, screen flows, palette coherence on widgets).
+- If the user asks for screen layout, widget composition, or UX flow → defer to ui-ux-designer.
+
+MANDATORY workflow for any new skin proposal:
+1. \`mcp__pixelcode-game-assets__get_color_palettes\` — read existing palette context.
+2. \`mcp__pixelcode-game-assets__diff_against_existing_palettes\` — verify the proposed palette is NOT a clone of an existing skin (is_clone must be false). Shift hue/value on dominant slots if it clones.
+3. \`mcp__pixelcode-game-assets__preview_skin_palette\` — confirm contrast holds against floor colors of every office tier (no unreadable verdicts).
+4. \`mcp__pixelcode-game-assets__add_character_skin\` — atomically insert. Never raw-Edit \`character_skins.dart\` for skin additions; this tool validates and registers in \`allCharacterSkins\` for you.
+
+HARD CONSTRAINT — IP safety (provenance lock):
+- NEVER generate sprites or palettes "in the style of" named IPs (Studio Ghibli, Pokémon, Zelda, Mario, Undertale, Stardew Valley, Hades, Celeste, etc.). If a user asks for one, transform the request: extract the *functional* visual goal (mood, palette mood, silhouette, faction signal) and build from PixelCode's own corpus (\`assets/characters/\`, \`character_skins.dart\`).
+- Style references allowed: open-game-art, public-domain pixel sets, the project's own existing corpus.
+- Always declare the basis: every concept ends with one sentence "Built from: \`<files/sources>\`. Original work, no IP imitation."
+
+Guidelines:
+- Read \`lib/widgets/canvas/character_skins.dart\`, \`lib/widgets/canvas/room_themes.dart\`, and \`assets/characters/\` before proposing anything.
+- Functional differentiation > aesthetic novelty. Every new skin must answer "what does this palette communicate that existing skins do not?" (faction, role, mood signal).
+- Keep the 7-slot palette discipline — no new color slots, no extra accessories without explicit owner approval.
+- ${LANG_RULE}`,
+    tools: [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Bash",
+      "WebFetch",
+      "mcp__pixelcode-game-assets__get_sprite_system_spec",
+      "mcp__pixelcode-game-assets__list_game_assets",
+      "mcp__pixelcode-game-assets__get_color_palettes",
+      "mcp__pixelcode-game-assets__get_animation_specs",
+      "mcp__pixelcode-game-assets__get_office_layout",
+      "mcp__pixelcode-game-assets__get_rendering_pipeline",
+      "mcp__pixelcode-game-assets__get_pubspec_assets",
+      "mcp__pixelcode-game-assets__suggest_new_sprite_type",
+      "mcp__pixelcode-game-assets__generate_text_sprite_template",
+      "mcp__pixelcode-game-assets__validate_text_sprite",
+      "mcp__pixelcode-game-assets__add_character_skin",
+      "mcp__pixelcode-game-assets__preview_skin_palette",
+      "mcp__pixelcode-game-assets__diff_against_existing_palettes",
+    ],
+    model: "sonnet",
+  },
+
   "game-designer": {
     description:
       "Game Designer. Designs mechanics, progression, economy, F2P loops, marketplace; balances numbers; decomposes big goals into MVP/v1/v2 slices.",
@@ -243,6 +300,7 @@ export const roleDefaultProviders: Record<string, number> = {
   "llm-specialist": 0,
   "game-designer": 0,
   "strategy-keeper": 0,
+  "character-artist": 0,
 };
 
 /** @deprecated Use roleTemplates. Kept as alias during migration. */
@@ -335,6 +393,15 @@ export const roleCatalog: Record<string, RoleInfo> = {
     weakness: "writing or modifying code — advisory role only; ships scope verdicts and roadmap diffs, not implementation",
     singleton: false,
   },
+  "character-artist": {
+    id: "character-artist",
+    ukrainianRoleLabel: "Художник",
+    specialization:
+      "creating new pixel-art content from scratch — character sprites, skin palettes, animation sets, NPC concepts; works with the project's 7-color palette system and 16×32 sprite sheet format",
+    weakness:
+      "screen layout, widget composition, UX flow, and existing-UI polish — those belong to ui-ux-designer; needs concrete content briefs to be productive (idle without sprite/skin work in the queue)",
+    singleton: false,
+  },
 };
 
 // ─── Hardware → Model mapping ──────────────────────────────────────────────
@@ -389,8 +456,9 @@ const capabilityWeights: Record<CapabilityProfile, {
 };
 
 const roleCapabilityProfile: Record<string, CapabilityProfile> = {
-  "ui-ux-designer": "creative",
-  "game-designer":  "creative",
+  "ui-ux-designer":  "creative",
+  "game-designer":   "creative",
+  "character-artist": "creative",
 };
 
 export function capabilityProfileForRole(roleType?: string): CapabilityProfile {
@@ -556,6 +624,13 @@ export function buildOfficePrompt(
   projectMemory?: string,
   agentTraits?: string,
   gameState?: GameStateData,
+  /**
+   * Recent team-completion digest, rendered as a markdown block. Currently
+   * only injected for the tech-lead role so the architect actually sees what
+   * the team finished while replying. Other roles get the existing prompt
+   * unchanged. Pass `undefined` (or empty) to skip.
+   */
+  techLeadDigest?: string,
 ): string {
   const memorySection = projectMemory
     ? `\n\n## Project Memory
@@ -652,7 +727,8 @@ ${isManager ? `- As **manager (Captain)**: ALWAYS dispatch work using the mcp__d
   to read current cards before creating duplicates.
 - When dispatching, pass the EXACT instanceId (e.g. "coder#2", not "coder") so the specific teammate gets the task.
 - Dispatched agents work INDEPENDENTLY — you do NOT wait for their results. Continue with other work immediately.
-- Use the mcp__dispatch__team_status tool to check who is busy before dispatching.
+- Use the mcp__dispatch__team_status tool to check who is busy BEFORE every dispatch. The status shows each agent's board card count vs the system limit. NEVER dispatch or assign to an agent marked "AT CAPACITY" — their board cards are full. Pick a free teammate instead. If everyone is at capacity, tell the user and wait.
+- Each agent can handle at most 2 in-progress board cards simultaneously. This is a hard system constraint — exceeding it creates overload and slows the whole team.
 - When agents finish their work, you will receive their results automatically and should briefly report to the user and move the corresponding board card.
 - PRIORITY SYSTEM: Always handle the user's chat messages FIRST, then board tasks. If the user writes something new while agents work — respond to them immediately.
 
@@ -682,7 +758,11 @@ When dispatching work, use the mcp__dispatch__dispatch tool. The agent works ind
 Use mcp__dispatch__team_status to check team workload before dispatching. Pass the EXACT instanceId.
 Available teammates:
 ${delegationLines || "  (no other hired instances — hire more in the shop to enable delegation)"}
-${skillSection}${memorySection}${traitsSection}`;
+${skillSection}${memorySection}${traitsSection}${
+    isTechLead && techLeadDigest && techLeadDigest.trim().length > 0
+      ? `\n\n${techLeadDigest}\n\nUse this when answering: ground architectural reactions in actual finished work, flag concerning patterns ("three failures in auth this week"), and skip generic reassurance.`
+      : ""
+  }`;
 }
 
 // ─── Hired instance info for the UI ────────────────────────────────────────

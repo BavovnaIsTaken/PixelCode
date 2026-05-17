@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/agent_message.dart';
 import '../models/agent_trait.dart';
 import '../models/game_economy.dart';
+import '../services/chat_history_merge.dart';
 import '../services/chat_persistence_service.dart';
 import 'game_economy_provider.dart';
 import 'settings_provider.dart';
@@ -28,7 +30,9 @@ class WorkingDirectoryNotifier extends Notifier<String?> {
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
     ref.onDispose(() => _sub?.cancel());
-    return null;
+    // Seed from buffered init — covers the race where InitMessage was
+    // dispatched before this notifier subscribed (common on mobile cold-start).
+    return ws.lastInit?.workingDirectory;
   }
 
   void _onMessage(ServerMessage msg) {
@@ -89,7 +93,15 @@ final selectedAgentProvider = StateProvider<String>((ref) {
 
 // ─── Bypass permissions toggle ───────────────────────────────────────────
 
-final bypassPermissionsProvider = StateProvider<bool>((ref) => false);
+final bypassPermissionsProvider = StateProvider<bool>((ref) => true);
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/// Generate a random UUID-like string (32 hex chars) for local message ids.
+String _generateId() {
+  final rng = Random.secure();
+  return List.generate(32, (_) => rng.nextInt(16).toRadixString(16)).join();
+}
 
 // ─── Chat sync state ────────────────────────────────────────────────────────
 
@@ -113,6 +125,13 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// The agent whose responses are currently being streamed.
   String? _activeStreamAgent;
 
+  /// Push a chat-domain log to the in-app DebugConsole (visible under the
+  /// `CHAT` filter). Use sparingly — only events that meaningfully help
+  /// triage future bug reports (user action, server error, history anomaly).
+  void _log(String msg, {String level = 'info'}) {
+    ref.read(debugLogProvider.notifier).addLocal('chat', msg, level: level);
+  }
+
   @override
   List<ChatMessage> build() {
     final ws = ref.watch(wsServiceProvider);
@@ -132,7 +151,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     // subscribed (race condition on localhost where response is instant).
     final buffered = ws.lastChatHistory;
     if (buffered != null) {
-      _allMessages = _mergeHistory(_allMessages, buffered.messages);
+      _allMessages = mergeChatHistory(_allMessages, buffered.messages);
       _scheduleSave();
       ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
     }
@@ -151,44 +170,9 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void _setAgentMessages(String agentId, List<ChatMessage> messages) {
     _allMessages = {..._allMessages, agentId: messages};
-    // Only update state if this is the currently viewed agent
     if (agentId == _selectedAgent) {
       state = messages;
     }
-  }
-
-  /// Merge server-authoritative history with local per-agent messages.
-  ///
-  /// Preserves any local message that is either still streaming or has a
-  /// timestamp newer than the server's latest for that agent — otherwise a
-  /// `chat_history` snapshot taken before the current stream finalized would
-  /// wipe captain responses visible mid-flight.
-  static Map<String, List<ChatMessage>> _mergeHistory(
-    Map<String, List<ChatMessage>> local,
-    List<ChatMessage> serverMessages,
-  ) {
-    final serverGrouped = <String, List<ChatMessage>>{};
-    for (final m in serverMessages) {
-      (serverGrouped[m.agentId] ??= []).add(m);
-    }
-    final merged = <String, List<ChatMessage>>{};
-    final agentIds = {...local.keys, ...serverGrouped.keys};
-    for (final agentId in agentIds) {
-      final serverList = serverGrouped[agentId] ?? const <ChatMessage>[];
-      final localList = local[agentId] ?? const <ChatMessage>[];
-      if (serverList.isEmpty) {
-        merged[agentId] = List.of(localList);
-        continue;
-      }
-      final serverLatest = serverList
-          .map((m) => m.timestamp)
-          .reduce((a, b) => a.isAfter(b) ? a : b);
-      final tail = localList.where(
-        (m) => m.isStreaming || m.timestamp.isAfter(serverLatest),
-      );
-      merged[agentId] = [...serverList, ...tail];
-    }
-    return merged;
   }
 
   void _scheduleSave() {
@@ -208,8 +192,27 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
 
       case ChatHistoryMessage(:final messages):
-        _allMessages = _mergeHistory(_allMessages, messages);
-        state = _allMessages[_selectedAgent] ?? [];
+        final sel = _selectedAgent;
+        // Pre-merge anomaly check: a server snapshot smaller than the local
+        // store for the same agent means server-side history was trimmed
+        // (e.g. process restart, in-memory cap). The merge keeps local
+        // orphans in a chronological tail — surfacing the count delta here
+        // helps triage "missing message" reports without re-instrumenting.
+        final localCount = (_allMessages[sel] ?? const <ChatMessage>[])
+            .where((m) => m.agentId == sel)
+            .length;
+        final serverCount =
+            messages.where((m) => m.agentId == sel).length;
+        if (localCount > 0 && serverCount < localCount) {
+          _log(
+            'chat_history snapshot smaller than local for $sel '
+            '(server=$serverCount, local=$localCount, '
+            'missing=${localCount - serverCount}) — orphan tail preserved',
+            level: 'warn',
+          );
+        }
+        _allMessages = mergeChatHistory(_allMessages, messages);
+        state = _allMessages[sel] ?? [];
         _scheduleSave();
         ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
 
@@ -233,21 +236,45 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
         _setAgentMessages(agentId, messages);
 
-      case AssistantDoneMessage(:final text, :final agentId, :final threadId):
+      case AssistantDoneMessage(
+          :final text,
+          :final agentId,
+          :final threadId,
+          :final messageId,
+          :final timestamp,
+        ):
         final messages = [..._agentMessages(agentId)];
+        final serverTimestamp = timestamp != null ? DateTime.parse(timestamp) : null;
         if (messages.isNotEmpty &&
             messages.last.role == ChatRole.assistant &&
             messages.last.isStreaming) {
           messages[messages.length - 1] = messages.last.copyWith(
             text: text,
             isStreaming: false,
+            id: messageId,
           );
+          // Stamp with server timestamp if available
+          if (serverTimestamp != null) {
+            final finalMsg = messages[messages.length - 1];
+            messages[messages.length - 1] = ChatMessage(
+              role: finalMsg.role,
+              text: finalMsg.text,
+              agentId: finalMsg.agentId,
+              timestamp: serverTimestamp,
+              imageBase64s: finalMsg.imageBase64s,
+              threadId: finalMsg.threadId,
+              category: finalMsg.category,
+              id: finalMsg.id,
+            );
+          }
         } else {
           messages.add(ChatMessage(
             role: ChatRole.assistant,
             text: text,
             agentId: agentId,
             threadId: threadId,
+            timestamp: serverTimestamp,
+            id: messageId,
           ));
         }
         _setAgentMessages(agentId, messages);
@@ -267,8 +294,25 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           ),
         ]);
 
+      case SubagentThreadEventMessage(
+          :final agentId,
+          :final status,
+          :final threadId,
+        ):
+        _setAgentMessages(agentId, [
+          ..._agentMessages(agentId),
+          ChatMessage(
+            role: ChatRole.assistant,
+            agentId: agentId,
+            text: status,
+            category: MessageCategory.status,
+            threadId: threadId,
+          ),
+        ]);
+
       case ErrorMessage(:final message):
         final agentId = _activeStreamAgent ?? _selectedAgent;
+        _log('server error on $agentId: $message', level: 'error');
         _setAgentMessages(agentId, [
           ..._agentMessages(agentId),
           ChatMessage(
@@ -300,6 +344,8 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     final agentId = _selectedAgent;
     _activeStreamAgent = agentId;
     final imageBase64s = images.map((b) => base64Encode(b)).toList();
+    final localId = _generateId(); // client-generated id for deduplication
+    _log('send → $agentId localId=$localId chars=${text.length} images=${imageBase64s.length}');
     _setAgentMessages(agentId, [
       ..._agentMessages(agentId),
       ChatMessage(
@@ -307,18 +353,21 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         text: text,
         agentId: agentId,
         imageBase64s: imageBase64s,
+        id: localId,
       ),
     ]);
     ref.read(wsServiceProvider).sendMessage(
           text,
           agentId: agentId,
           images: imageBase64s.isNotEmpty ? imageBase64s : null,
+          localId: localId,
         );
     _scheduleSave();
   }
 
   void newChat() {
     final agentId = _selectedAgent;
+    _log('newChat: clearing $agentId locally and on server');
     _allMessages = {..._allMessages, agentId: []};
     state = [];
     final prefs = ref.read(sharedPrefsProvider);
@@ -761,6 +810,17 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
     state = updated.length > _maxEntries
         ? updated.sublist(updated.length - _maxEntries)
         : updated;
+  }
+
+  /// Push a client-side diagnostic into the in-app console so it shows up
+  /// alongside server logs (without needing to attach a terminal).
+  void addLocal(String category, String message, {String level = 'info'}) {
+    _add(DebugLogMessage(
+      timestamp: DateTime.now(),
+      level: level,
+      category: category,
+      message: message,
+    ));
   }
 
   void clear() => state = [];

@@ -7,7 +7,7 @@ import 'package:pixelcode/providers/settings_provider.dart';
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  Future<ProviderContainer> _container() async {
+  Future<ProviderContainer> makeContainer() async {
     final prefs = await SharedPreferences.getInstance();
     return ProviderContainer(
       overrides: [sharedPrefsProvider.overrideWithValue(prefs)],
@@ -15,7 +15,7 @@ void main() {
   }
 
   test('fresh build starts with zero usage', () async {
-    final c = await _container();
+    final c = await makeContainer();
     addTearDown(c.dispose);
     final s = c.read(energyProvider);
     expect(s.tokensUsedToday, 0);
@@ -25,7 +25,7 @@ void main() {
   });
 
   test('recordTaskTokens increments counters', () async {
-    final c = await _container();
+    final c = await makeContainer();
     addTearDown(c.dispose);
     c.read(energyProvider.notifier).recordTaskTokens('opus', 12000);
     final s = c.read(energyProvider);
@@ -35,7 +35,7 @@ void main() {
   });
 
   test('effectiveModel downgrades opus past cap', () async {
-    final c = await _container();
+    final c = await makeContainer();
     addTearDown(c.dispose);
     final n = c.read(energyProvider.notifier);
     n.recordTaskTokens('opus', 10000);
@@ -45,7 +45,7 @@ void main() {
   });
 
   test('effectiveModel downgrades everything to haiku past token cap', () async {
-    final c = await _container();
+    final c = await makeContainer();
     addTearDown(c.dispose);
     final n = c.read(energyProvider.notifier);
     n.updateDailyCap(100000);

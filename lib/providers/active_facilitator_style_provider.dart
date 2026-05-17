@@ -14,6 +14,16 @@ import '../services/facilitator_style_loader.dart';
 import 'project_provider.dart';
 import 'settings_provider.dart';
 
+/// Holds the id of a previously-chosen facilitator style whose asset is
+/// no longer available (renamed or removed from the bundle). When set,
+/// the UI should prompt "стиль `{id}` видалено, оберіть інший" and
+/// route the user back to the picker, then clear the marker. Null at
+/// every other time. Persists for the lifetime of the provider
+/// container — the marker is cleared by `setStyle()` and `clear()` on
+/// the active-style notifier so it never lingers after the user has
+/// resolved the situation.
+final lostFacilitatorStyleIdProvider = StateProvider<String?>((_) => null);
+
 class ActiveFacilitatorStyleNotifier
     extends AsyncNotifier<FacilitatorStyle?> {
   static String prefsKeyFor(String projectPath) =>
@@ -38,8 +48,11 @@ class ActiveFacilitatorStyleNotifier
           : FacilitatorStyleLoader.loadById(id, loader: override));
     } catch (_) {
       // A persisted id may point at an asset that no longer ships
-      // (e.g. style was renamed). Fall back to "no style" rather than
-      // surfacing the error — kanban will show canonical labels.
+      // (e.g. style was renamed). Surface the lost id so the UI can
+      // prompt the user to repick rather than silently dropping back
+      // to canonical kanban labels — that hid renames behind a
+      // mysterious "style went away" experience.
+      ref.read(lostFacilitatorStyleIdProvider.notifier).state = id;
       return null;
     }
   }
@@ -50,6 +63,9 @@ class ActiveFacilitatorStyleNotifier
     if (project == null) return;
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.setString(prefsKeyFor(project.path), style.id);
+    // Resolving the situation: any "lost id" marker is no longer
+    // relevant once the user has picked a (working) style.
+    ref.read(lostFacilitatorStyleIdProvider.notifier).state = null;
     state = AsyncData(style);
   }
 
@@ -59,6 +75,7 @@ class ActiveFacilitatorStyleNotifier
     if (project == null) return;
     final prefs = ref.read(sharedPrefsProvider);
     await prefs.remove(prefsKeyFor(project.path));
+    ref.read(lostFacilitatorStyleIdProvider.notifier).state = null;
     state = const AsyncData(null);
   }
 

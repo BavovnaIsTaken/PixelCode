@@ -265,7 +265,7 @@ class _DebugConsoleState extends ConsumerState<DebugConsole> {
   }
 
   List<Widget> _buildFilters() {
-    const filters = ['all', 'session', 'sdk', 'ws', 'error'];
+    const filters = ['all', 'session', 'sdk', 'ws', 'chat', 'error'];
     return filters.map((f) {
       final isActive = _filter == f;
       return Padding(

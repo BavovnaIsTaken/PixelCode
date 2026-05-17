@@ -21,6 +21,18 @@ enum SendButtonVariant {
   /// 8-bit arcade-style hard drop shadow; depresses into the shadow on
   /// tap like a physical button. Premium.
   pixelArcade,
+
+  /// Apple Liquid Glass — translucent surface with backdrop blur, specular
+  /// highlight and an engraved pixel arrow. Sits alongside [pixelArcade] in
+  /// the catalog so users can pick either pixel or glass identity regardless
+  /// of platform.
+  liquidGlass,
+
+  /// Cloud Drift — four pastel cloud-masses (lavender, peach, mint, fuchsia)
+  /// slowly drift across the glow halo on incommensurate sinusoids, softly
+  /// mixing at the edges without ever resolving into a single tone. Dark
+  /// core with white send glyph. Premium.
+  cloudDrift,
 }
 
 /// Resolve a cosmetic ID to its [SendButtonVariant].
@@ -29,5 +41,7 @@ SendButtonVariant sendButtonVariantForId(String? cosmeticId) =>
       'send_neon_pulse' => SendButtonVariant.neonPulse,
       'send_gold_rocket' => SendButtonVariant.goldRocket,
       'send_pixel_arcade' => SendButtonVariant.pixelArcade,
+      'send_liquid_glass' => SendButtonVariant.liquidGlass,
+      'send_cloud_drift' => SendButtonVariant.cloudDrift,
       _ => SendButtonVariant.classic,
     };

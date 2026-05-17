@@ -128,6 +128,7 @@ class ServerStatus {
     required this.clients,
     required this.mdnsActive,
     this.tailscaleUrl,
+    this.metrics,
   });
 
   final int pid;
@@ -140,6 +141,7 @@ class ServerStatus {
   final int clients;
   final bool mdnsActive;
   final String? tailscaleUrl;
+  final ServerMetrics? metrics;
 
   factory ServerStatus.fromJson(Map<String, dynamic> j) => ServerStatus(
         pid: (j['pid'] as num).toInt(),
@@ -152,6 +154,9 @@ class ServerStatus {
         clients: (j['clients'] as num).toInt(),
         mdnsActive: j['mdnsActive'] as bool,
         tailscaleUrl: j['tailscaleUrl'] as String?,
+        metrics: j['metrics'] is Map<String, dynamic>
+            ? ServerMetrics.fromJson(j['metrics'] as Map<String, dynamic>)
+            : null,
       );
 
   /// Where did a config field's effective value come from?
@@ -160,6 +165,49 @@ class ServerStatus {
     if (flagOverrides.contains(key)) return 'flag';
     if (envOverrides.contains(key)) return 'env';
     return 'file';
+  }
+}
+
+/// Runtime metrics sampled at every `/admin/api/status` call.
+class ServerMetrics {
+  ServerMetrics({
+    required this.rss,
+    required this.heapUsed,
+    required this.heapTotal,
+    required this.external,
+    required this.cpuPercent,
+    required this.queuedTasks,
+    required this.activeAgents,
+    required this.nodeVersion,
+    required this.platform,
+  });
+
+  final int rss;
+  final int heapUsed;
+  final int heapTotal;
+  final int external;
+
+  /// Single-core utilisation since previous poll (0–100+). Null on the first
+  /// poll after server start (no prior sample to diff against).
+  final double? cpuPercent;
+  final int queuedTasks;
+  final int activeAgents;
+  final String nodeVersion;
+  final String platform;
+
+  factory ServerMetrics.fromJson(Map<String, dynamic> j) {
+    final mem = (j['memory'] as Map<String, dynamic>?) ?? const {};
+    return ServerMetrics(
+      rss: (mem['rss'] as num?)?.toInt() ?? 0,
+      heapUsed: (mem['heapUsed'] as num?)?.toInt() ?? 0,
+      heapTotal: (mem['heapTotal'] as num?)?.toInt() ?? 0,
+      external: (mem['external'] as num?)?.toInt() ?? 0,
+      cpuPercent: (j['cpuPercent'] as num?)?.toDouble(),
+      queuedTasks: (j['queuedTasks'] as num?)?.toInt() ?? 0,
+      activeAgents: (j['activeAgents'] as num?)?.toInt() ?? 0,
+      nodeVersion: j['nodeVersion'] as String? ?? '',
+      platform: j['platform'] as String? ?? '',
+    );
   }
 }
 

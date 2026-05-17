@@ -92,11 +92,12 @@ const int rosterStatMin = 1;
 /// Required minimum spread between max and min stat (anti-blandness).
 const int rosterStatSpreadMin = 4;
 
-/// Curated starter roster — 7 characters covering 7 of the 10 hireable roles.
+/// Curated starter roster — 8 characters covering 8 of the 11 hireable roles.
 ///
 /// `manager` is excluded (singleton, seeded). `game-designer` and
 /// `strategy-keeper` are excluded as v1 — they are meta-roles better suited
-/// to Marketplace v1 (E) unlocks.
+/// to Marketplace v1 (E) unlocks. `character-artist` is included alongside
+/// `ui-ux-designer` as a parallel creative role (genesis vs polish).
 ///
 /// Balance rationale and telemetry plan: see `docs/STRATEGY.md` §Phase 1.5
 /// and `docs/ROADMAP.md` §D.1.
@@ -176,6 +177,26 @@ const List<RosterCharacter> rosterCatalog = [
     tagline: 'Вона бачить те, чого ще немає.',
     strength: 'Найвища creativity — wow-моменти на дизайн-задачах.',
     weakness: 'Дизайни часто потребують доопрацювання деталей.',
+  ),
+  RosterCharacter(
+    id: 'nazar_artist',
+    name: 'Назар',
+    roleType: 'character-artist',
+    statWeights: {
+      SkillType.speed: 1,
+      SkillType.precision: 4,
+      SkillType.creativity: 7,
+      SkillType.insight: 2,
+      SkillType.reliability: 4,
+    },
+    promptBias:
+        'Перш ніж пропонувати новий колір — пошукай у існуючих скінах. Reuse first.',
+    defaultProvider: AgentProviderType.local,
+    price: 700,
+    tagline: 'Він пише характер кольором.',
+    strength:
+        'Найвища creativity у roster — нові скіни і NPC народжуються з першого ескізу.',
+    weakness: 'Без content-задач у беклозі простоює — не вигадує роботу.',
   ),
   RosterCharacter(
     id: 'bohdan_techlead',

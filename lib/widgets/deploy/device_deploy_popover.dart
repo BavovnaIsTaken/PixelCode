@@ -1,7 +1,8 @@
-/// Popover with Android / iOS tabs for one-click device deploy.
+/// Popover with platform selector for one-click device deploy.
 ///
-/// Opened from the phone icon in the title bar. Each tab owns a single
-/// responsibility: showing deploy state + action button for its platform.
+/// Opened from the phone icon in the title bar. A segmented Android/iOS
+/// selector at the top drives which provider's state and actions are shown.
+/// Device list is kept in sync via a server-pushed socket stream.
 library;
 
 import 'package:flutter/material.dart';
@@ -50,12 +51,37 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
     duration: const Duration(milliseconds: 120),
   )..forward();
 
-  int _tabIndex = 0;
+  bool _isAndroid = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(androidDeployProvider.notifier).startWatchingDevices();
+    });
+  }
+
+  @override
+  void deactivate() {
+    ref.read(androidDeployProvider.notifier).stopWatchingDevices();
+    super.deactivate();
+  }
 
   @override
   void dispose() {
     _anim.dispose();
     super.dispose();
+  }
+
+  void _selectPlatform(bool isAndroid) {
+    if (_isAndroid == isAndroid) return;
+    setState(() => _isAndroid = isAndroid);
+    if (isAndroid) {
+      ref.read(androidDeployProvider.notifier).startWatchingDevices();
+    } else {
+      ref.read(androidDeployProvider.notifier).stopWatchingDevices();
+    }
   }
 
   static const _popoverWidth = 320.0;
@@ -64,6 +90,18 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
   @override
   Widget build(BuildContext context) {
     final tc = context.appColors;
+    final androidDeploy = ref.watch(androidDeployProvider);
+    final iosDeploy = ref.watch(iosDeployProvider);
+    final androidNotifier = ref.read(androidDeployProvider.notifier);
+    final iosNotifier = ref.read(iosDeployProvider.notifier);
+
+    final deploy = _isAndroid ? androidDeploy : iosDeploy;
+    final buildArtifact = _isAndroid ? 'APK' : 'IPA';
+    final platformLabel = _isAndroid ? 'Android' : 'iOS';
+    final onDeploy = _isAndroid ? androidNotifier.deploy : iosNotifier.deploy;
+    final onCancel = _isAndroid ? androidNotifier.cancel : iosNotifier.cancel;
+    final onOpenUrl =
+        _isAndroid ? androidNotifier.openInstallUrl : iosNotifier.openInstallUrl;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -75,19 +113,19 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
           (maxWidth - _popoverWidth - _edgeMargin)
               .clamp(_edgeMargin, double.infinity),
         );
-        final top = widget.anchor.dy
-            .clamp(_edgeMargin, (maxHeight - _edgeMargin).clamp(_edgeMargin, double.infinity));
+        final top = widget.anchor.dy.clamp(
+          _edgeMargin,
+          (maxHeight - _edgeMargin).clamp(_edgeMargin, double.infinity),
+        );
 
         return Stack(
           children: [
-            // Dismiss layer
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: widget.onDismiss,
               ),
             ),
-            // Popover
             Positioned(
               left: left,
               top: top,
@@ -107,6 +145,7 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
                   color: Colors.transparent,
                   child: Container(
                     width: _popoverWidth,
+                    clipBehavior: Clip.antiAlias,
                     decoration: BoxDecoration(
                       color: tc.surface,
                       borderRadius: BorderRadius.circular(8),
@@ -127,25 +166,63 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                _TabBar(
-                                  index: _tabIndex,
-                                  onChanged: (i) =>
-                                      setState(() => _tabIndex = i),
+                                _PlatformSelector(
+                                  isAndroid: _isAndroid,
+                                  onChanged: _selectPlatform,
                                 ),
                                 Container(height: 1, color: tc.divider),
-                                IndexedStack(
-                                  index: _tabIndex,
-                                  children: const [
-                                    _AndroidTab(),
-                                    _IOSTab(),
-                                  ],
+                                Padding(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _StatusRow(
+                                        phase: deploy.phase,
+                                        buildArtifact: buildArtifact,
+                                      ),
+                                      if (_isAndroid) ...[
+                                        const SizedBox(height: 10),
+                                        _AndroidDevicePicker(
+                                          devices: androidDeploy.devices,
+                                          selectedSerial:
+                                              androidDeploy.selectedSerial,
+                                          isBusy: androidDeploy.isBusy,
+                                          onSelect: androidNotifier.selectDevice,
+                                        ),
+                                      ],
+                                      const SizedBox(height: 10),
+                                      _ActionButton(
+                                        phase: deploy.phase,
+                                        platformLabel: platformLabel,
+                                        buildArtifact: buildArtifact,
+                                        onDeploy: onDeploy,
+                                        onCancel: onCancel,
+                                        onOpenUrl: onOpenUrl,
+                                      ),
+                                      if (deploy.phase == DeployPhase.error &&
+                                          deploy.lastError != null) ...[
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          deploy.lastError!,
+                                          style: TextStyle(
+                                            color: tc.error,
+                                            fontSize: 11,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
                           ),
                           Container(width: 1, color: tc.divider),
                           _SideToolbar(
-                            platform: _tabIndex == 0 ? 'android' : 'ios',
+                            platform: _isAndroid ? 'android' : 'ios',
                           ),
                         ],
                       ),
@@ -166,17 +243,17 @@ class _DeployPopoverState extends ConsumerState<_DeployPopover>
 class _SideToolbar extends ConsumerWidget {
   const _SideToolbar({required this.platform});
 
-  /// Which tab is active — drives what the toolbar actions target.
   final String platform;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final tc = context.appColors;
     final shot = ref.watch(screenshotProvider);
-    final busy = shot.phase == ScreenshotPhase.capturing;
+    final androidDeploy = ref.watch(androidDeployProvider);
+    final shotBusy = shot.phase == ScreenshotPhase.capturing;
+    final isAndroid = platform == 'android';
+    final deployBusy = isAndroid && androidDeploy.isBusy;
 
-    // Show preview once a screenshot is ready — routed to the overlay
-    // after build so we don't schedule a navigator call during build.
     ref.listen<ScreenshotState>(screenshotProvider, (prev, next) {
       if (next.phase == ScreenshotPhase.ready && next.url != null) {
         _showScreenshotViewer(context, next.url!, () {
@@ -185,38 +262,44 @@ class _SideToolbar extends ConsumerWidget {
       }
     });
 
-    return SizedBox(
-      width: 36,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _ToolbarButton(
-              icon: busy ? Icons.hourglass_top : Icons.photo_camera_outlined,
-              tooltip: 'Скріншот пристрою',
-              active: busy,
-              onTap: busy
-                  ? null
-                  : () => ref
-                      .read(screenshotProvider.notifier)
-                      .capture(platform: platform),
-            ),
-            if (shot.phase == ScreenshotPhase.error) ...[
-              const SizedBox(height: 6),
-              Tooltip(
-                message: shot.error ?? 'Помилка',
-                child: Icon(Icons.error_outline, size: 14, color: tc.error),
-              ),
-            ],
+    return Container(
+      width: 48,
+      color: tc.surfaceDim,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ToolbarButton(
+            icon: Icons.refresh,
+            tooltip: 'Оновити список пристроїв',
+            onTap: deployBusy || !isAndroid
+                ? null
+                : () => ref
+                    .read(androidDeployProvider.notifier)
+                    .startWatchingDevices(),
+          ),
+          const SizedBox(height: 4),
+          _ToolbarButton(
+            icon: shotBusy ? Icons.hourglass_top : Icons.photo_camera_outlined,
+            tooltip: 'Скріншот пристрою',
+            active: shotBusy,
+            onTap: shotBusy
+                ? null
+                : () => ref
+                    .read(screenshotProvider.notifier)
+                    .capture(platform: platform),
+          ),
+          if (shot.phase == ScreenshotPhase.error) ...[
+            const SizedBox(height: 6),
+            _ErrorHintIcon(message: shot.error ?? 'Помилка'),
           ],
-        ),
+        ],
       ),
     );
   }
 }
 
-class _ToolbarButton extends StatelessWidget {
+class _ToolbarButton extends StatefulWidget {
   const _ToolbarButton({
     required this.icon,
     required this.tooltip,
@@ -230,31 +313,101 @@ class _ToolbarButton extends StatelessWidget {
   final bool active;
 
   @override
+  State<_ToolbarButton> createState() => _ToolbarButtonState();
+}
+
+class _ToolbarButtonState extends State<_ToolbarButton> {
+  bool _hovering = false;
+
+  @override
   Widget build(BuildContext context) {
     final tc = context.appColors;
-    final enabled = onTap != null;
+    final enabled = widget.onTap != null;
+    final hot = _hovering && enabled;
+
+    final Color bg = widget.active
+        ? tc.accent.withValues(alpha: 0.18)
+        : hot
+            ? tc.surface
+            : Colors.transparent;
+    final Color iconColor = widget.active
+        ? tc.accent
+        : enabled
+            ? (hot ? tc.textHigh : tc.textMedium)
+            : tc.textLow.withValues(alpha: 0.4);
+
     return Tooltip(
-      message: tooltip,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          width: 28,
-          height: 28,
-          decoration: BoxDecoration(
-            color: active
-                ? tc.accent.withValues(alpha: 0.18)
-                : Colors.white.withValues(alpha: enabled ? 0.04 : 0.0),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: active ? tc.accent : Colors.transparent,
+      message: widget.tooltip,
+      waitDuration: const Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor: enabled
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: widget.active ? tc.accent : Colors.transparent,
+              ),
             ),
+            alignment: Alignment.center,
+            child: Icon(widget.icon, size: 20, color: iconColor),
           ),
-          alignment: Alignment.center,
-          child: Icon(
-            icon,
-            size: 14,
-            color: enabled ? tc.textMedium : tc.textLow,
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorHintIcon extends StatefulWidget {
+  const _ErrorHintIcon({required this.message});
+
+  final String message;
+
+  @override
+  State<_ErrorHintIcon> createState() => _ErrorHintIconState();
+}
+
+class _ErrorHintIconState extends State<_ErrorHintIcon> {
+  final GlobalKey<TooltipState> _tooltipKey = GlobalKey<TooltipState>();
+  bool _hovering = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tc = context.appColors;
+    final bg = _hovering
+        ? tc.error.withValues(alpha: 0.18)
+        : Colors.transparent;
+
+    return Tooltip(
+      key: _tooltipKey,
+      message: widget.message,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovering = true),
+        onExit: (_) => setState(() => _hovering = false),
+        child: GestureDetector(
+          onTap: () => _tooltipKey.currentState?.ensureTooltipVisible(),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Icon(
+              Icons.error_outline,
+              size: 14,
+              color: _hovering ? tc.error : tc.error.withValues(alpha: 0.85),
+            ),
           ),
         ),
       ),
@@ -361,8 +514,7 @@ class _ScreenshotViewer extends StatelessWidget {
                             padding: const EdgeInsets.all(24),
                             child: Text(
                               'Не вдалося завантажити зображення',
-                              style:
-                                  TextStyle(color: tc.error, fontSize: 12),
+                              style: TextStyle(color: tc.error, fontSize: 12),
                             ),
                           ),
                         ),
@@ -379,17 +531,17 @@ class _ScreenshotViewer extends StatelessWidget {
   }
 }
 
-// ─── Tab bar ────────────────────────────────────────────────────────────
+// ─── Platform selector ───────────────────────────────────────────────────
 
-class _TabBar extends StatelessWidget {
-  const _TabBar({required this.index, required this.onChanged});
+class _PlatformSelector extends StatelessWidget {
+  const _PlatformSelector({required this.isAndroid, required this.onChanged});
 
-  final int index;
-  final ValueChanged<int> onChanged;
+  final bool isAndroid;
+  final ValueChanged<bool> onChanged;
 
-  static const _tabs = [
-    (Icons.phone_android, 'Android'),
-    (Icons.phone_iphone, 'iOS'),
+  static const _options = [
+    (Icons.phone_android, 'Android', true),
+    (Icons.phone_iphone, 'iOS', false),
   ];
 
   @override
@@ -399,17 +551,17 @@ class _TabBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
       child: Row(
         children: [
-          for (int i = 0; i < _tabs.length; i++) ...[
+          for (int i = 0; i < _options.length; i++) ...[
             if (i > 0) const SizedBox(width: 4),
             Expanded(
               child: GestureDetector(
-                onTap: () => onChanged(i),
+                onTap: () => onChanged(_options[i].$3),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
                   padding:
                       const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
                   decoration: BoxDecoration(
-                    color: i == index
+                    color: (_options[i].$3 == isAndroid)
                         ? Colors.white.withValues(alpha: 0.08)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(6),
@@ -418,155 +570,29 @@ class _TabBar extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        _tabs[i].$1,
+                        _options[i].$1,
                         size: 14,
-                        color: i == index ? tc.textHigh : tc.textLow,
+                        color: (_options[i].$3 == isAndroid)
+                            ? tc.textHigh
+                            : tc.textLow,
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        _tabs[i].$2,
+                        _options[i].$2,
                         style: TextStyle(
                           fontSize: 12,
-                          fontWeight:
-                              i == index ? FontWeight.w600 : FontWeight.normal,
-                          color: i == index ? tc.textHigh : tc.textLow,
+                          fontWeight: (_options[i].$3 == isAndroid)
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                          color: (_options[i].$3 == isAndroid)
+                              ? tc.textHigh
+                              : tc.textLow,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Android tab ────────────────────────────────────────────────────────
-
-class _AndroidTab extends ConsumerStatefulWidget {
-  const _AndroidTab();
-
-  @override
-  ConsumerState<_AndroidTab> createState() => _AndroidTabState();
-}
-
-class _AndroidTabState extends ConsumerState<_AndroidTab> {
-  @override
-  void initState() {
-    super.initState();
-    // Fetch connected devices as soon as the tab appears so the user can pick
-    // a target before tapping "Install APK".
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(androidDeployProvider.notifier).refreshDevices();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final deploy = ref.watch(androidDeployProvider);
-    final notifier = ref.read(androidDeployProvider.notifier);
-
-    return _PlatformDeployTab(
-      state: deploy,
-      platformLabel: 'Android',
-      buildArtifact: 'APK',
-      onDeploy: notifier.deploy,
-      onCancel: notifier.cancel,
-      onOpenUrl: notifier.openInstallUrl,
-      extra: _AndroidDevicePicker(
-        devices: deploy.devices,
-        selectedSerial: deploy.selectedSerial,
-        isBusy: deploy.isBusy,
-        onSelect: notifier.selectDevice,
-        onRefresh: notifier.refreshDevices,
-      ),
-    );
-  }
-}
-
-// ─── iOS tab ────────────────────────────────────────────────────────────
-
-class _IOSTab extends ConsumerWidget {
-  const _IOSTab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final deploy = ref.watch(iosDeployProvider);
-    final notifier = ref.read(iosDeployProvider.notifier);
-
-    return _PlatformDeployTab(
-      state: deploy,
-      platformLabel: 'iOS',
-      buildArtifact: 'IPA',
-      onDeploy: notifier.deploy,
-      onCancel: notifier.cancel,
-      onOpenUrl: notifier.openInstallUrl,
-    );
-  }
-}
-
-// ─── Shared platform tab content ────────────────────────────────────────
-
-class _PlatformDeployTab extends StatelessWidget {
-  const _PlatformDeployTab({
-    required this.state,
-    required this.platformLabel,
-    required this.buildArtifact,
-    required this.onDeploy,
-    required this.onCancel,
-    required this.onOpenUrl,
-    this.extra,
-  });
-
-  final DeployState state;
-  final String platformLabel;
-  final String buildArtifact;
-  final VoidCallback onDeploy;
-  final VoidCallback onCancel;
-  final VoidCallback onOpenUrl;
-  final Widget? extra;
-
-  @override
-  Widget build(BuildContext context) {
-    final tc = context.appColors;
-
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Status row
-          _StatusRow(phase: state.phase, buildArtifact: buildArtifact),
-          if (extra != null) ...[
-            const SizedBox(height: 10),
-            extra!,
-          ],
-          const SizedBox(height: 10),
-          // Action button
-          _ActionButton(
-            phase: state.phase,
-            platformLabel: platformLabel,
-            buildArtifact: buildArtifact,
-            onDeploy: onDeploy,
-            onCancel: onCancel,
-            onOpenUrl: onOpenUrl,
-          ),
-          // Error message
-          if (state.phase == DeployPhase.error && state.lastError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              state.lastError!,
-              style: TextStyle(
-                color: tc.error,
-                fontSize: 11,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
             ),
           ],
         ],
@@ -583,14 +609,12 @@ class _AndroidDevicePicker extends StatelessWidget {
     required this.selectedSerial,
     required this.isBusy,
     required this.onSelect,
-    required this.onRefresh,
   });
 
   final List<AndroidDevice> devices;
   final String? selectedSerial;
   final bool isBusy;
   final ValueChanged<String> onSelect;
-  final VoidCallback onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -610,18 +634,6 @@ class _AndroidDevicePicker extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
                 color: tc.textLow,
-              ),
-            ),
-            const Spacer(),
-            GestureDetector(
-              onTap: isBusy ? null : onRefresh,
-              child: Padding(
-                padding: const EdgeInsets.all(2),
-                child: Icon(
-                  Icons.refresh,
-                  size: 14,
-                  color: isBusy ? tc.textLow : tc.textMedium,
-                ),
               ),
             ),
           ],
@@ -648,7 +660,8 @@ class _AndroidDevicePicker extends StatelessWidget {
                 _DeviceRow(
                   device: d,
                   selected: d.serial == selectedSerial,
-                  onTap: d.isReady && !isBusy ? () => onSelect(d.serial) : null,
+                  onTap:
+                      d.isReady && !isBusy ? () => onSelect(d.serial) : null,
                 ),
             ],
           ),
@@ -772,9 +785,21 @@ class _StatusRow extends StatelessWidget {
 
     final (String label, Color color, IconData icon) = switch (phase) {
       DeployPhase.idle => ('Не зібрано', tc.textLow, Icons.circle_outlined),
-      DeployPhase.checking => ('Перевірка залежностей...', tc.accent, Icons.hourglass_top),
-      DeployPhase.building => ('Збірка $buildArtifact...', tc.accent, Icons.build_outlined),
-      DeployPhase.ready => ('$buildArtifact готовий', tc.success, Icons.check_circle_outline),
+      DeployPhase.checking => (
+          'Перевірка залежностей...',
+          tc.accent,
+          Icons.hourglass_top
+        ),
+      DeployPhase.building => (
+          'Збірка $buildArtifact...',
+          tc.accent,
+          Icons.build_outlined
+        ),
+      DeployPhase.ready => (
+          '$buildArtifact готовий',
+          tc.success,
+          Icons.check_circle_outline
+        ),
       DeployPhase.error => ('Помилка', tc.error, Icons.error_outline),
     };
 

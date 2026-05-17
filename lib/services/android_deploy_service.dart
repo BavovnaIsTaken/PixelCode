@@ -47,34 +47,6 @@ class AndroidDeployService {
     );
   }
 
-  // ─── Device listing ─────────────────────────────────────────────────────
-
-  /// Запитує список підключених пристроїв з сервера (через `adb devices -l`).
-  Future<List<AndroidDevice>> listDevices() async {
-    final ws = _wsService;
-    if (ws == null || !ws.isConnected) return const [];
-
-    final completer = Completer<List<AndroidDevice>>();
-    late StreamSubscription<ServerMessage> sub;
-
-    sub = ws.messages.listen((msg) {
-      if (msg is AndroidDeployStatusMessage && msg.subtype == 'devices_list') {
-        sub.cancel();
-        completer.complete(msg.devices ?? const []);
-      }
-    });
-
-    ws.androidDeployListDevices();
-
-    return completer.future.timeout(
-      const Duration(seconds: 15),
-      onTimeout: () {
-        sub.cancel();
-        return const [];
-      },
-    );
-  }
-
   // ─── Build & Deploy ─────────────────────────────────────────────────────
 
   /// Будує APK та повертає URL для завантаження.

@@ -1,16 +1,32 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'admin_client.dart';
 import 'theme.dart';
+import 'services/setup_service.dart';
+import 'services/server_control_service.dart';
+import 'pages/dashboard_page.dart';
+import 'pages/setup_page.dart';
+import 'pages/config_page.dart';
+import 'pages/logs_page.dart';
+import 'pages/clients_page.dart';
 
 void main() {
-  runApp(const ServerAdminApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SetupService()),
+        ChangeNotifierProvider(create: (_) => ServerControlService()),
+      ],
+      child: const PixelDockApp(),
+    ),
+  );
 }
 
-class ServerAdminApp extends StatelessWidget {
-  const ServerAdminApp({super.key});
+class PixelDockApp extends StatelessWidget {
+  const PixelDockApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -18,20 +34,21 @@ class ServerAdminApp extends StatelessWidget {
       title: 'PixelDock',
       debugShowCheckedModeBanner: false,
       theme: buildPixelTheme(),
-      home: const DashboardScreen(),
+      home: const MainScreen(),
     );
   }
 }
 
-// ─── Dashboard ──────────────────────────────────────────────────────────────
+// ─── Main screen ─────────────────────────────────────────────────────────────
 
-class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  State<MainScreen> createState() => _MainScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _MainScreenState extends State<MainScreen> {
   static const _prefsKey = 'launcherBaseUrl';
   static const _defaultLauncherUrl = 'http://127.0.0.1:9719';
 
@@ -47,7 +64,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<ConnectedClientInfo> _clients = const [];
   String? _launcherError;
   bool _ready = false;
-  bool _busy = false;
+  String? _inFlightAction; // 'start' | 'stop' | 'restart' | null
+  int _selectedIndex = 0;
 
   Timer? _pollTimer;
 
@@ -102,7 +120,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _startPolling() {
     _pollTimer?.cancel();
     _pollOnce();
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) => _pollOnce());
+    _pollTimer =
+        Timer.periodic(const Duration(milliseconds: 2500), (_) => _pollOnce());
   }
 
   Future<void> _pollOnce() async {
@@ -123,7 +142,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted || launcher != _launcher) return;
 
     final adminUrl = launcher.adminBaseUrl(lstatus.serverPort);
-    final admin = (_admin == null || _admin!.baseUrl != adminUrl) ? AdminClient(adminUrl) : _admin!;
+    final admin = (_admin == null || _admin!.baseUrl != adminUrl)
+        ? AdminClient(adminUrl)
+        : _admin!;
 
     setState(() {
       _launcherStatus = lstatus;
@@ -162,7 +183,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _serverLogs = const [];
           _clients = const [];
         });
-      } catch (_) {/* ignore */}
+      } catch (_) {}
     }
   }
 
@@ -173,13 +194,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final cfg = await admin.getConfig();
       if (!mounted) return;
       setState(() => _config = cfg);
-    } catch (_) {/* ignore */}
+    } catch (_) {}
   }
 
-  Future<void> _saveConfig({required bool thenRestart, required Map<String, dynamic> patch}) async {
+  Future<void> _saveConfig({
+    required bool thenRestart,
+    required Map<String, dynamic> patch,
+  }) async {
     final admin = _admin;
     if (admin == null) {
-      _toast('Server is offline — start it first to edit config', isError: true);
+      _toast('Server is offline — start it first to edit config',
+          isError: true);
       return;
     }
     try {
@@ -189,39 +214,133 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ? 'Saved — restarting…'
           : (result.restartRequired ? 'Saved (restart required)' : 'Saved'));
       await _refreshConfig();
-      if (thenRestart) await _launcher.restart();
+      if (thenRestart) { await _launcher.restart(); }
     } catch (e) {
       _toast('Save failed: $e', isError: true);
     }
   }
 
-  Future<void> _start() => _runAction('Start', _launcher.start);
+  Future<void> _start() => _runAction(
+        action: 'start',
+        label: 'Start',
+        fn: _launcher.start,
+        expectsRunning: true,
+      );
+
   Future<void> _stop() async {
-    if (!await _confirm('Stop server?', 'The server process will exit; the launcher stays alive.')) return;
-    await _runAction('Stop', _launcher.stop);
-  }
-  Future<void> _restart() async {
-    if (!await _confirm('Restart server?', 'Server will be killed and respawned. Launcher stays alive throughout.')) return;
-    await _runAction('Restart', _launcher.restart);
+    if (!await _confirm('Stop server?',
+        'The server process will exit; the launcher stays alive.')) { return; }
+    await _runAction(
+      action: 'stop',
+      label: 'Stop',
+      fn: _launcher.stop,
+      expectsRunning: false,
+    );
   }
 
-  Future<void> _runAction(String label, Future<LauncherActionResult> Function() fn) async {
-    setState(() => _busy = true);
+  Future<void> _restart() async {
+    if (!await _confirm('Restart server?',
+        'Server will be killed and respawned. Launcher stays alive throughout.')) {
+      return;
+    }
+    await _runAction(
+      action: 'restart',
+      label: 'Restart',
+      fn: _launcher.restart,
+      expectsRunning: true,
+    );
+  }
+
+  Future<void> _runAction({
+    required String action,
+    required String label,
+    required Future<LauncherActionResult> Function() fn,
+    required bool expectsRunning,
+  }) async {
+    if (_inFlightAction != null) return;
+    setState(() => _inFlightAction = action);
     try {
       final result = await fn();
       if (!mounted) return;
-      if (result.ok) {
-        final note = result.note ?? (result.alreadyRunning == true ? 'already running' : '$label OK');
-        _toast('$label: $note');
-      } else {
+
+      if (!result.ok) {
         _toast('$label failed: ${result.error ?? "unknown"}', isError: true);
+        await _pollOnce();
+        return;
       }
+
       await _pollOnce();
+      if (!mounted) return;
+
+      // Server spawned but readiness probe is still pending — keep the
+      // button in its in-flight state and watch for liveness up to 30s.
+      // If liveness still doesn't arrive, surface a developer-friendly
+      // hint pulled from the launcher's boot log.
+      if (expectsRunning && result.ready == false) {
+        final live = await _waitForServerRunning(
+          timeout: const Duration(seconds: 30),
+        );
+        if (!mounted) return;
+        if (!live) {
+          final hint = await _lastBootError();
+          _toast(
+            'Server failed to come up within 30s — open LOGS tab'
+            '${hint != null ? '\n$hint' : ''}',
+            isError: true,
+          );
+        }
+      }
     } catch (e) {
+      if (!mounted) return;
       _toast('$label failed: $e', isError: true);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _inFlightAction = null);
     }
+  }
+
+  Future<bool> _waitForServerRunning({required Duration timeout}) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return false;
+      await _pollOnce();
+      if (!mounted) return false;
+      if (_launcherStatus?.serverRunning == true) return true;
+    }
+    return false;
+  }
+
+  Future<String?> _lastBootError() async {
+    try {
+      final logs = await _launcher.bootLogs(limit: 60);
+      // Flatten stderr lines in arrival order, drop empties.
+      final stderr = <String>[];
+      for (final entry in logs) {
+        if (entry.stream != 'stderr') continue;
+        for (final raw in entry.line.split('\n')) {
+          final l = raw.trim();
+          if (l.isNotEmpty) stderr.add(l);
+        }
+      }
+      if (stderr.isEmpty) return null;
+
+      // Prefer the first line that looks like an exception summary
+      // ("Error: ...", "TypeError: ...", "SyntaxError: ..."). The very last
+      // stderr line is usually a Node version footer ("Node.js v24.7.0"),
+      // which is useless on its own.
+      final exceptionRe =
+          RegExp(r'^[A-Z][a-zA-Z]*(Error|Exception): ');
+      String pick = stderr.firstWhere(
+        exceptionRe.hasMatch,
+        orElse: () => stderr.lastWhere(
+          (l) => !RegExp(r'^Node\.js v').hasMatch(l),
+          orElse: () => stderr.last,
+        ),
+      );
+      if (pick.length > 200) pick = '${pick.substring(0, 200)}…';
+      return pick;
+    } catch (_) {}
+    return null;
   }
 
   Future<bool> _confirm(String title, String body) async {
@@ -233,12 +352,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           borderRadius: BorderRadius.circular(8),
           side: const BorderSide(color: PixelPalette.border),
         ),
-        title: Text(title, style: pixelFont(size: 11, color: PixelPalette.accent)),
-        content: Text(body, style: const TextStyle(color: PixelPalette.textHigh)),
+        title: Text(title,
+            style: pixelFont(size: 11, color: PixelPalette.accent)),
+        content:
+            Text(body, style: const TextStyle(color: PixelPalette.textHigh)),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text('Cancel', style: pixelFont(size: 9, color: PixelPalette.textMed)),
+            child: Text('Cancel',
+                style: pixelFont(size: 9, color: PixelPalette.textMed)),
           ),
           FilledButton(
             style: pixelFilledStyle(color: PixelPalette.accent),
@@ -257,16 +379,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
       SnackBar(
         content: Text(msg),
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isError ? PixelPalette.error.withValues(alpha: 0.85) : PixelPalette.surfaceHi,
+        backgroundColor: isError
+            ? PixelPalette.error.withValues(alpha: 0.85)
+            : PixelPalette.surfaceHi,
         showCloseIcon: true,
       ),
     );
   }
 
+  // ─── Build ─────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     if (!_ready) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator()));
     }
     return Scaffold(
       appBar: _PixelAppBar(
@@ -275,49 +402,92 @@ class _DashboardScreenState extends State<DashboardScreen> {
         launcherStatus: _launcherStatus,
         launcherError: _launcherError,
       ),
-      body: RefreshIndicator(
-        color: PixelPalette.accent,
-        backgroundColor: PixelPalette.surface,
-        onRefresh: () async { await _pollOnce(); },
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _StatusCard(
-              launcher: _launcherStatus,
-              launcherError: _launcherError,
-              server: _serverStatus,
-              busy: _busy,
-              onStart: _start,
-              onStop: _stop,
-              onRestart: _restart,
-            ),
-            const SizedBox(height: 14),
-            _ClientsCard(
-              clients: _clients,
-              serverRunning: _launcherStatus?.serverRunning ?? false,
-            ),
-            const SizedBox(height: 14),
-            _ConfigCard(
-              snapshot: _config,
-              serverRunning: _launcherStatus?.serverRunning ?? false,
-              onSave: (patch) => _saveConfig(thenRestart: false, patch: patch),
-              onSaveAndRestart: (patch) => _saveConfig(thenRestart: true, patch: patch),
-              onReload: _refreshConfig,
-            ),
-            const SizedBox(height: 14),
-            _LogsCard(
-              serverLogs: _serverLogs,
-              bootLogs: _bootLogs,
-              showingBoot: !(_launcherStatus?.serverRunning ?? false),
-            ),
-          ],
-        ),
+      body: Row(
+        children: [
+          NavigationRail(
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: (i) =>
+                setState(() => _selectedIndex = i),
+            labelType: NavigationRailLabelType.all,
+            backgroundColor: PixelPalette.surfaceDim,
+            indicatorColor: PixelPalette.surfaceHi,
+            selectedIconTheme:
+                const IconThemeData(color: PixelPalette.ice),
+            unselectedIconTheme:
+                const IconThemeData(color: PixelPalette.textMed),
+            selectedLabelTextStyle:
+                pixelFont(size: 7, color: PixelPalette.ice),
+            unselectedLabelTextStyle:
+                pixelFont(size: 7, color: PixelPalette.textMed),
+            destinations: const [
+              NavigationRailDestination(
+                icon: Icon(Icons.speed_outlined),
+                selectedIcon: Icon(Icons.speed),
+                label: Text('DASH'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.build_circle_outlined),
+                selectedIcon: Icon(Icons.build_circle),
+                label: Text('SETUP'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings),
+                label: Text('CONFIG'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.terminal),
+                label: Text('LOGS'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.devices_outlined),
+                selectedIcon: Icon(Icons.devices),
+                label: Text('CLIENTS'),
+              ),
+            ],
+          ),
+          const VerticalDivider(
+              thickness: 1, width: 1, color: PixelPalette.divider),
+          Expanded(child: _buildPage()),
+        ],
       ),
     );
   }
+
+  Widget _buildPage() => switch (_selectedIndex) {
+        0 => DashboardPage(
+            launcher: _launcherStatus,
+            launcherError: _launcherError,
+            server: _serverStatus,
+            inFlightAction: _inFlightAction,
+            onStart: _start,
+            onStop: _stop,
+            onRestart: _restart,
+            onRefresh: _pollOnce,
+          ),
+        1 => const SetupPage(),
+        2 => ConfigPage(
+            snapshot: _config,
+            serverRunning: _launcherStatus?.serverRunning ?? false,
+            onSave: (p) => _saveConfig(thenRestart: false, patch: p),
+            onSaveAndRestart: (p) =>
+                _saveConfig(thenRestart: true, patch: p),
+            onReload: _refreshConfig,
+          ),
+        3 => LogsPage(
+            serverLogs: _serverLogs,
+            bootLogs: _bootLogs,
+            showingBoot: !(_launcherStatus?.serverRunning ?? false),
+          ),
+        4 => ClientsPage(
+            clients: _clients,
+            serverRunning: _launcherStatus?.serverRunning ?? false,
+          ),
+        _ => const SizedBox.shrink(),
+      };
 }
 
-// ─── App-bar ────────────────────────────────────────────────────────────────
+// ─── App bar ──────────────────────────────────────────────────────────────────
 
 class _PixelAppBar extends StatelessWidget implements PreferredSizeWidget {
   const _PixelAppBar({
@@ -332,860 +502,158 @@ class _PixelAppBar extends StatelessWidget implements PreferredSizeWidget {
   final LauncherStatus? launcherStatus;
   final String? launcherError;
 
+  // VS Code-style extended titlebar: Flutter draws under the system title bar
+  // (enabled by fullSizeContentView in MainFlutterWindow.swift). The duck logo
+  // sits in the same left column as the traffic-light buttons (below them),
+  // and the PIXELDOCK title spans the full vertical extent — buttons + gap +
+  // logo height — to the right of that column.
+  static const double _topInsetMac = 28;
+  static const double _topInsetDefault = 12;
+  static const double _logoSize = 56;
+  static const double _gapBelowButtons = 6;
+  static const double _bottomPad = 8;
+  static const double _titleTopPad = 14;
+
+  double get _topInset => Platform.isMacOS ? _topInsetMac : _topInsetDefault;
+  double get _totalHeight =>
+      _topInset + _gapBelowButtons + _logoSize + _bottomPad;
+
   @override
-  Size get preferredSize => const Size.fromHeight(86);
+  Size get preferredSize => Size.fromHeight(_totalHeight);
 
   @override
   Widget build(BuildContext context) {
     final launcherUp = launcherStatus != null;
     final serverUp = launcherStatus?.serverRunning ?? false;
 
-    Color dotColor;
-    String tag;
+    final Color dotColor;
+    final String tag;
     if (!launcherUp) {
-      dotColor = launcherError != null ? PixelPalette.error : PixelPalette.textLow;
+      dotColor = launcherError != null
+          ? PixelPalette.error
+          : PixelPalette.textLow;
       tag = launcherError != null ? 'launcher offline' : 'connecting…';
     } else if (serverUp) {
       dotColor = PixelPalette.success;
       tag = 'server :${launcherStatus!.serverPort}';
     } else {
       dotColor = PixelPalette.gold;
-      tag = 'launcher :${launcherStatus!.launcherPort}  •  server idle';
+      tag =
+          'launcher :${launcherStatus!.launcherPort}  •  server idle';
     }
 
     return AppBar(
       automaticallyImplyLeading: false,
       titleSpacing: 16,
-      toolbarHeight: 86,
+      toolbarHeight: _totalHeight,
       backgroundColor: PixelPalette.background,
       flexibleSpace: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+          padding: EdgeInsets.fromLTRB(12, 0, 16, _bottomPad),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Pixel-art logo (the same icon used for the .app bundle).
-              Container(
-                width: 56, height: 56,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: PixelPalette.border),
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Image.asset(
-                  'assets/logo.png',
-                  filterQuality: FilterQuality.none, // keep pixels crisp
+              Align(
+                alignment: Alignment.bottomLeft,
+                child: Container(
+                  width: _logoSize,
+                  height: _logoSize,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: PixelPalette.border),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Image.asset('assets/logo.png',
+                      filterQuality: FilterQuality.none),
                 ),
               ),
               const SizedBox(width: 14),
-              // Wordmark + status tag.
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Row(
-                    children: [
-                      Text('PIXEL', style: pixelFont(size: 14, color: PixelPalette.accent, letterSpacing: 1.5)),
-                      const SizedBox(width: 4),
-                      Text('DOCK', style: pixelFont(size: 14, color: PixelPalette.gold, letterSpacing: 1.5)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      GlowDot(color: dotColor, size: 8),
-                      const SizedBox(width: 8),
-                      Text(
-                        tag,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: PixelPalette.textMed,
-                          fontFamily: 'Menlo',
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: _titleTopPad),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('PIXEL',
+                            style: pixelFont(
+                                size: 34,
+                                color: PixelPalette.accent,
+                                letterSpacing: 2.5)),
+                        const SizedBox(width: 6),
+                        Text('DOCK',
+                            style: pixelFont(
+                                size: 34,
+                                color: PixelPalette.gold,
+                                letterSpacing: 2.5)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        GlowDot(color: dotColor, size: 8),
+                        const SizedBox(width: 8),
+                        Text(
+                          tag,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: PixelPalette.textMed,
+                            fontFamily: 'Menlo',
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
-              const Spacer(),
-              // Launcher URL field (compact).
-              SizedBox(
-                width: 320,
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: SizedBox(
+                  width: 320,
                 child: TextField(
                   controller: controller,
                   onSubmitted: onSubmit,
-                  style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textHigh),
+                  style: const TextStyle(
+                      fontFamily: 'Menlo',
+                      fontSize: 12,
+                      color: PixelPalette.textHigh),
                   decoration: InputDecoration(
                     isDense: true,
                     filled: true,
                     fillColor: PixelPalette.surfaceDim,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 10),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: PixelPalette.border),
+                      borderSide:
+                          const BorderSide(color: PixelPalette.border),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: PixelPalette.accent),
+                      borderSide:
+                          const BorderSide(color: PixelPalette.accent),
                     ),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6)),
                     hintText: 'launcher URL',
-                    hintStyle: const TextStyle(color: PixelPalette.textLow, fontFamily: 'Menlo'),
+                    hintStyle: const TextStyle(
+                        color: PixelPalette.textLow, fontFamily: 'Menlo'),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.arrow_forward, size: 16, color: PixelPalette.accent),
+                      icon: const Icon(Icons.arrow_forward,
+                          size: 16, color: PixelPalette.accent),
                       tooltip: 'Connect',
                       onPressed: () => onSubmit(controller.text),
                     ),
                   ),
                 ),
+                ),
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─── Status card ────────────────────────────────────────────────────────────
-
-class _StatusCard extends StatelessWidget {
-  const _StatusCard({
-    required this.launcher,
-    required this.launcherError,
-    required this.server,
-    required this.busy,
-    required this.onStart,
-    required this.onStop,
-    required this.onRestart,
-  });
-
-  final LauncherStatus? launcher;
-  final String? launcherError;
-  final ServerStatus? server;
-  final bool busy;
-  final VoidCallback onStart;
-  final VoidCallback onStop;
-  final VoidCallback onRestart;
-
-  @override
-  Widget build(BuildContext context) {
-    return PixelCard(
-      title: 'Status',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (launcher == null && launcherError != null)
-            _ErrorBlock(error: launcherError!)
-          else if (launcher == null)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('Connecting to launcher…', style: TextStyle(color: PixelPalette.textMed)),
-            )
-          else ...[
-            _ProcRow(
-              label: 'LAUNCHER',
-              up: true,
-              detail: ':${launcher!.launcherPort}  PID ${launcher!.launcherPid}  (${launcher!.phase.name})',
-            ),
-            const SizedBox(height: 8),
-            _ProcRow(
-              label: 'SERVER',
-              up: launcher!.serverRunning,
-              detail: launcher!.serverRunning
-                  ? ':${launcher!.serverPort}  PID ${launcher!.serverPid ?? "?"}'
-                  : _offlineDetail(launcher!),
-            ),
-            if (server != null) ...[
-              const SizedBox(height: 16),
-              const Divider(color: PixelPalette.divider, height: 1),
-              const SizedBox(height: 12),
-              _kv('Working dir', server!.config.projectCwd, source: server!.sourceOf('projectCwd'), mono: true),
-              _kv('OTA hostname', server!.config.otaHostname ?? '(auto)', source: server!.sourceOf('otaHostname')),
-              _kv('Connected clients', '${server!.clients}'),
-              _kv('mDNS', server!.mdnsActive ? 'active' : 'inactive'),
-              _kv('Tailscale', server!.tailscaleUrl ?? '—', mono: true),
-              _kv('Uptime', _fmtUptime(server!.uptimeMs)),
-              _kv('Booted', server!.bootedAt.toLocal().toString()),
-              _kv('Config file', server!.configPath, mono: true),
-            ],
-          ],
-          const SizedBox(height: 16),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              if (launcher != null && !launcher!.serverRunning)
-                FilledButton.icon(
-                  onPressed: busy ? null : onStart,
-                  style: pixelFilledStyle(color: PixelPalette.success),
-                  icon: const Icon(Icons.play_arrow, size: 16),
-                  label: const Text('START'),
-                ),
-              if (launcher != null && launcher!.serverRunning) ...[
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onRestart,
-                  style: pixelOutlinedStyle(foreground: PixelPalette.accent),
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('RESTART'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: busy ? null : onStop,
-                  style: pixelOutlinedStyle(foreground: PixelPalette.error),
-                  icon: const Icon(Icons.power_settings_new, size: 16),
-                  label: const Text('STOP'),
-                ),
-              ],
-              if (busy)
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6),
-                  child: SizedBox(
-                    width: 18, height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: PixelPalette.accent),
-                  ),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  static String _offlineDetail(LauncherStatus l) {
-    if (l.lastExitCode != null) {
-      final sig = l.lastSignal != null ? ' signal=${l.lastSignal}' : '';
-      return 'offline — last exit ${l.lastExitCode}$sig';
-    }
-    return 'offline — never started this session';
-  }
-
-  static Widget _kv(String label, String value, {String? source, bool mono = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 150,
-            child: Text(label,
-                style: pixelFont(size: 8, color: PixelPalette.textMed, letterSpacing: 1.2)),
-          ),
-          Expanded(
-            child: Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                SelectableText(
-                  value,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: PixelPalette.textHigh,
-                    fontFamily: mono ? 'Menlo' : null,
-                  ),
-                ),
-                if (source != null && source != 'file') _SourceBadge(source: source),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  static String _fmtUptime(int ms) {
-    final s = ms ~/ 1000;
-    if (s < 60) return '${s}s';
-    final m = s ~/ 60;
-    if (m < 60) return '${m}m ${s % 60}s';
-    final h = m ~/ 60;
-    if (h < 24) return '${h}h ${m % 60}m';
-    return '${h ~/ 24}d ${h % 24}h';
-  }
-}
-
-class _ClientsCard extends StatelessWidget {
-  const _ClientsCard({required this.clients, required this.serverRunning});
-
-  final List<ConnectedClientInfo> clients;
-  final bool serverRunning;
-
-  @override
-  Widget build(BuildContext context) {
-    return PixelCard(
-      title: 'Connected devices  (${clients.length})',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!serverRunning)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Text(
-                'Server is offline.',
-                style: TextStyle(color: PixelPalette.textMed),
-              ),
-            )
-          else if (clients.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
-              child: Text(
-                'No devices connected.',
-                style: TextStyle(color: PixelPalette.textMed),
-              ),
-            )
-          else
-            for (var i = 0; i < clients.length; i++) ...[
-              if (i > 0) const SizedBox(height: 8),
-              _ClientRow(client: clients[i]),
-            ],
-        ],
-      ),
-    );
-  }
-}
-
-class _ClientRow extends StatelessWidget {
-  const _ClientRow({required this.client});
-  final ConnectedClientInfo client;
-
-  IconData get _icon => switch (client.platform) {
-        'macos' || 'linux' || 'windows' => Icons.desktop_mac_outlined,
-        'ios' => Icons.phone_iphone,
-        'android' => Icons.phone_android,
-        'web' => Icons.language,
-        _ => Icons.devices_other,
-      };
-
-  String get _displayName {
-    if (client.deviceName.isNotEmpty) return client.deviceName;
-    return switch (client.platform) {
-      'ios' => 'iPhone',
-      'android' => 'Android',
-      'macos' => 'Mac',
-      'linux' => 'Linux',
-      'windows' => 'Windows',
-      'web' => 'Web',
-      _ => 'Device',
-    };
-  }
-
-  String get _durationLabel {
-    final diff = DateTime.now().difference(client.connectedAt);
-    if (diff.inSeconds < 60) return 'just now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    final h = diff.inHours;
-    final m = diff.inMinutes % 60;
-    if (m == 0) return '${h}h';
-    return '${h}h ${m}m';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: PixelPalette.surfaceDim,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: PixelPalette.border),
-      ),
-      child: Row(
-        children: [
-          Icon(_icon, size: 16, color: PixelPalette.textMed),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _displayName,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13,
-                          color: PixelPalette.textHigh,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: client.isLocal ? PixelPalette.success : PixelPalette.accent,
-                        ),
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                      child: Text(
-                        client.isLocal ? 'LOCAL' : 'REMOTE',
-                        style: pixelFont(
-                          size: 7,
-                          color: client.isLocal ? PixelPalette.success : PixelPalette.accent,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${client.platform} · ${client.clientId.substring(0, client.clientId.length < 8 ? client.clientId.length : 8)}',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'Menlo',
-                    color: PixelPalette.textLow,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            _durationLabel,
-            style: const TextStyle(fontSize: 11, color: PixelPalette.textMed),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProcRow extends StatelessWidget {
-  const _ProcRow({required this.label, required this.up, required this.detail});
-  final String label;
-  final bool up;
-  final String detail;
-  @override
-  Widget build(BuildContext context) {
-    final color = up ? PixelPalette.success : PixelPalette.gold;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: PixelPalette.surfaceDim,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: PixelPalette.border),
-      ),
-      child: Row(
-        children: [
-          GlowDot(color: color, size: 9),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 90,
-            child: Text(label, style: pixelFont(size: 9, color: color, letterSpacing: 1.4)),
-          ),
-          Expanded(
-            child: SelectableText(
-              detail,
-              style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, color: PixelPalette.textMed),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SourceBadge extends StatelessWidget {
-  const _SourceBadge({required this.source});
-  final String source;
-  @override
-  Widget build(BuildContext context) {
-    final color = source == 'env' ? PixelPalette.warn : PixelPalette.accent;
-    return Container(
-      margin: const EdgeInsets.only(left: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: color),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Text(source.toUpperCase(),
-          style: pixelFont(size: 7, color: color, letterSpacing: 1.2)),
-    );
-  }
-}
-
-// ─── Config card ────────────────────────────────────────────────────────────
-
-class _ConfigCard extends StatefulWidget {
-  const _ConfigCard({
-    required this.snapshot,
-    required this.serverRunning,
-    required this.onSave,
-    required this.onSaveAndRestart,
-    required this.onReload,
-  });
-
-  final ConfigSnapshot? snapshot;
-  final bool serverRunning;
-  final Future<void> Function(Map<String, dynamic> patch) onSave;
-  final Future<void> Function(Map<String, dynamic> patch) onSaveAndRestart;
-  final VoidCallback onReload;
-
-  @override
-  State<_ConfigCard> createState() => _ConfigCardState();
-}
-
-class _ConfigCardState extends State<_ConfigCard> {
-  final _portCtrl = TextEditingController();
-  final _cwdCtrl = TextEditingController();
-  final _otaCtrl = TextEditingController();
-  ConfigSnapshot? _shown;
-  bool _saving = false;
-
-  @override
-  void didUpdateWidget(covariant _ConfigCard old) {
-    super.didUpdateWidget(old);
-    final snap = widget.snapshot;
-    if (snap != null && snap != _shown) {
-      _shown = snap;
-      _portCtrl.text = '${snap.file.port}';
-      _cwdCtrl.text = snap.file.projectCwd;
-      _otaCtrl.text = snap.file.otaHostname ?? '';
-    }
-  }
-
-  @override
-  void dispose() {
-    _portCtrl.dispose();
-    _cwdCtrl.dispose();
-    _otaCtrl.dispose();
-    super.dispose();
-  }
-
-  Map<String, dynamic>? _collectPatch() {
-    final port = int.tryParse(_portCtrl.text.trim());
-    if (port == null || port <= 0 || port > 65535) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Port must be a number in 1..65535')),
-      );
-      return null;
-    }
-    final cwd = _cwdCtrl.text.trim();
-    if (cwd.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Project cwd cannot be empty')),
-      );
-      return null;
-    }
-    final ota = _otaCtrl.text.trim();
-    return {'port': port, 'projectCwd': cwd, 'otaHostname': ota.isEmpty ? null : ota};
-  }
-
-  Future<void> _run(Future<void> Function(Map<String, dynamic>) action) async {
-    final patch = _collectPatch();
-    if (patch == null) return;
-    setState(() => _saving = true);
-    try { await action(patch); } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final snap = widget.snapshot;
-    final disabled = _saving || snap == null || !widget.serverRunning;
-    return PixelCard(
-      title: 'Configuration',
-      titleColor: PixelPalette.gold,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (!widget.serverRunning)
-            Container(
-              margin: const EdgeInsets.only(bottom: 14),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: PixelPalette.gold.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: PixelPalette.gold.withValues(alpha: 0.5)),
-              ),
-              child: Text(
-                'Server is offline — config edits go through /admin/api/config '
-                    'which needs the server running. Start it first.',
-                style: TextStyle(color: PixelPalette.gold.withValues(alpha: 0.9), fontSize: 12),
-              ),
-            ),
-          _field(label: 'PORT', controller: _portCtrl, hint: '9720', disabled: disabled),
-          _field(label: 'PROJECT CWD', controller: _cwdCtrl, hint: '/path/to/project', disabled: disabled),
-          _field(label: 'OTA HOSTNAME', controller: _otaCtrl, hint: '(optional, e.g. mac.local)', disabled: disabled),
-          const SizedBox(height: 6),
-          if (snap != null) ...[
-            Text('Config file: ${snap.configPath}',
-                style: const TextStyle(color: PixelPalette.textLow, fontSize: 11, fontFamily: 'Menlo')),
-            if (snap.envOverrides.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'env overrides: ${snap.envOverrides.join(", ")}',
-                  style: const TextStyle(color: PixelPalette.warn, fontSize: 11),
-                ),
-              ),
-          ],
-          const SizedBox(height: 14),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton.icon(
-                onPressed: disabled ? null : () => _run(widget.onSave),
-                style: pixelFilledStyle(color: PixelPalette.accent),
-                icon: const Icon(Icons.save_outlined, size: 16),
-                label: const Text('SAVE'),
-              ),
-              OutlinedButton.icon(
-                onPressed: disabled ? null : () => _run(widget.onSaveAndRestart),
-                style: pixelOutlinedStyle(foreground: PixelPalette.accent),
-                icon: const Icon(Icons.restart_alt, size: 16),
-                label: const Text('SAVE & RESTART'),
-              ),
-              OutlinedButton.icon(
-                onPressed: disabled ? null : widget.onReload,
-                style: pixelOutlinedStyle(foreground: PixelPalette.textMed),
-                icon: const Icon(Icons.download, size: 16),
-                label: const Text('RELOAD'),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _field({
-    required String label,
-    required TextEditingController controller,
-    required String hint,
-    bool disabled = false,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(label,
-                style: pixelFont(size: 8, color: PixelPalette.textMed, letterSpacing: 1.4)),
-          ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: !disabled,
-              style: const TextStyle(fontFamily: 'Menlo', fontSize: 13, color: PixelPalette.textHigh),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: true,
-                fillColor: PixelPalette.surfaceDim,
-                hintText: hint,
-                hintStyle: const TextStyle(color: PixelPalette.textLow, fontFamily: 'Menlo'),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: const BorderSide(color: PixelPalette.border),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: const BorderSide(color: PixelPalette.accent),
-                ),
-                disabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(4),
-                  borderSide: BorderSide(color: PixelPalette.border.withValues(alpha: 0.5)),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Logs card ──────────────────────────────────────────────────────────────
-
-class _LogsCard extends StatelessWidget {
-  const _LogsCard({required this.serverLogs, required this.bootLogs, required this.showingBoot});
-  final List<LogEntry> serverLogs;
-  final List<BootLogEntry> bootLogs;
-  final bool showingBoot;
-
-  Color _levelColor(String level) {
-    switch (level) {
-      case 'warn': return PixelPalette.warn;
-      case 'error': return PixelPalette.error;
-      default: return PixelPalette.textHigh;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final title = showingBoot ? 'Boot logs' : 'Server logs';
-    final subtitle = showingBoot ? '(stdout/stderr from launcher)' : '(structured log ring)';
-    final isEmpty = showingBoot ? bootLogs.isEmpty : serverLogs.isEmpty;
-    return PixelCard(
-      title: title,
-      titleColor: showingBoot ? PixelPalette.gold : PixelPalette.accent,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(subtitle,
-                style: const TextStyle(color: PixelPalette.textLow, fontSize: 11, fontFamily: 'Menlo')),
-          ),
-          Container(
-            decoration: BoxDecoration(
-              color: const Color(0xFF08080B),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: PixelPalette.border),
-            ),
-            constraints: const BoxConstraints(maxHeight: 360, minHeight: 80),
-            child: isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Text(
-                      showingBoot ? '(no boot logs yet — try Start)' : '(no log entries yet)',
-                      style: const TextStyle(color: PixelPalette.textLow),
-                    ),
-                  )
-                : showingBoot ? _bootList() : _serverList(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _serverList() {
-    return ListView.builder(
-      reverse: true,
-      padding: const EdgeInsets.all(10),
-      itemCount: serverLogs.length,
-      itemBuilder: (context, i) {
-        final e = serverLogs[serverLogs.length - 1 - i];
-        final ts = e.timestamp.toIso8601String().substring(11, 23);
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 1),
-          child: SelectableText.rich(
-            TextSpan(children: [
-              TextSpan(text: '$ts ', style: const TextStyle(color: PixelPalette.textLow)),
-              TextSpan(text: '[${e.category}] ', style: const TextStyle(color: PixelPalette.accent)),
-              TextSpan(text: e.message, style: TextStyle(color: _levelColor(e.level))),
-            ]),
-            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.45),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _bootList() {
-    return ListView.builder(
-      reverse: true,
-      padding: const EdgeInsets.all(10),
-      itemCount: bootLogs.length,
-      itemBuilder: (context, i) {
-        final e = bootLogs[bootLogs.length - 1 - i];
-        final ts = e.timestamp.toIso8601String().substring(11, 23);
-        final color = e.stream == 'stderr' ? PixelPalette.warn : PixelPalette.textHigh;
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 1),
-          child: SelectableText.rich(
-            TextSpan(children: [
-              TextSpan(text: '$ts ', style: const TextStyle(color: PixelPalette.textLow)),
-              TextSpan(
-                text: '${e.stream.padRight(6)} ',
-                style: TextStyle(color: color.withValues(alpha: 0.55)),
-              ),
-              TextSpan(text: e.line, style: TextStyle(color: color)),
-            ]),
-            style: const TextStyle(fontFamily: 'Menlo', fontSize: 12, height: 1.45),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _ErrorBlock extends StatefulWidget {
-  const _ErrorBlock({required this.error});
-  final String error;
-  @override
-  State<_ErrorBlock> createState() => _ErrorBlockState();
-}
-
-class _ErrorBlockState extends State<_ErrorBlock> {
-  bool _copied = false;
-
-  Future<void> _copy() async {
-    await Clipboard.setData(const ClipboardData(text: 'pixelcode-server start'));
-    if (!mounted) return;
-    setState(() => _copied = true);
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
-    setState(() => _copied = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: PixelPalette.error.withValues(alpha: 0.1),
-        border: Border.all(color: PixelPalette.error),
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('LAUNCHER UNAVAILABLE',
-              style: pixelFont(size: 10, color: PixelPalette.error, letterSpacing: 1.4)),
-          const SizedBox(height: 8),
-          RichText(
-            text: TextSpan(
-              style: const TextStyle(color: PixelPalette.textMed, fontSize: 12),
-              children: [
-                const TextSpan(text: 'Please, run '),
-                WidgetSpan(
-                  alignment: PlaceholderAlignment.middle,
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.click,
-                    child: GestureDetector(
-                      onTap: _copy,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _copied
-                              ? PixelPalette.success.withValues(alpha: 0.2)
-                              : PixelPalette.error.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'pixelcode-server start',
-                              style: const TextStyle(
-                                fontFamily: 'Menlo',
-                                fontSize: 12,
-                                color: PixelPalette.textHigh,
-                              ),
-                            ),
-                            if (_copied) ...[
-                              const SizedBox(width: 4),
-                              const Icon(Icons.check, size: 12, color: PixelPalette.success),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const TextSpan(text: ' in terminal.'),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

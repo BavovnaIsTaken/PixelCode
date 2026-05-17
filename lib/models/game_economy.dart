@@ -5,6 +5,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:math';
 
 import 'agent_message.dart';
 import 'app_theme.dart';
@@ -41,21 +42,21 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.garage => 'Гараж',
         OfficeLevel.smallOffice => 'Маленький офіс',
         OfficeLevel.modernOffice => 'Модерн офіс',
-        OfficeLevel.techHub => 'Тех хаб',
+        OfficeLevel.techHub => 'Тех-хаб',
         OfficeLevel.campus => 'Кампус',
       };
 
   String get description => switch (this) {
         OfficeLevel.garage =>
-          'Обшарпаний гараж з парою столів та тьмяним світлом. Повільно, але працює.',
+          'Обшарпаний гараж, тьмяне світло. Старт 5×3, розширення до 8×5 клітинок — забудовуй і перебудовуй як хочеш.',
         OfficeLevel.smallOffice =>
-          'Невеликий офіс з базовими меблями та нормальним Wi-Fi.',
+          'Скромний офіс з нормальним Wi-Fi. Старт 7×4, розширення до 11×8 клітинок — твоя розкладка від першої клітинки.',
         OfficeLevel.modernOffice =>
-          'Сучасний офіс з ергономічними кріслами та швидким інтернетом.',
+          'Сучасний офіс, ергономіка і швидкий інтернет. Старт 9×5, розширення до 14×10 клітинок — простір під будь-яку розкладку.',
         OfficeLevel.techHub =>
-          'Стильний тех хаб з неоновим підсвічуванням та топовим залізом.',
+          'Тех-хаб з неоном і топовим залізом. Старт 10×7, розширення до 16×13 клітинок — є де розгулятися.',
         OfficeLevel.campus =>
-          'Розкішний кампус з усіма зручностями. Мрія кожного розробника.',
+          'Розкішний кампус. Старт 12×10, розширення до 20×16 клітинок — плануй від першої до останньої клітинки.',
       };
 
   String get emoji => switch (this) {
@@ -207,6 +208,50 @@ extension OfficeLevelExt on OfficeLevel {
       (effectiveCols(expansionsBought) - 2) *
       (effectiveRows(expansionsBought) - 2);
 
+  /// How many extra expansion steps (and what cost) are needed to grow the
+  /// playable inner area to at least `neededInnerCols × neededInnerRows`.
+  ///
+  /// Returns a plan even when zero steps are needed (extraSteps == 0). When
+  /// the target exceeds this tier's max expansion capacity, [reachable] is
+  /// false and the caller should treat the ghost as invalid (tooltip:
+  /// "Потрібен Tier Upgrade").
+  PendingExpansionPlan computeExpansionPlan(
+    int currentBought,
+    int neededInnerCols,
+    int neededInnerRows,
+  ) {
+    // Translate inner target → total grid target (inner + 2 walls).
+    final neededTotalCols = neededInnerCols + 2;
+    final neededTotalRows = neededInnerRows + 2;
+
+    final maxBought = expansions.length;
+    var bought = currentBought.clamp(0, maxBought);
+    var cumulativeCost = 0;
+
+    while (effectiveCols(bought) < neededTotalCols ||
+        effectiveRows(bought) < neededTotalRows) {
+      if (bought >= maxBought) {
+        return PendingExpansionPlan(
+          extraSteps: bought - currentBought,
+          totalCost: cumulativeCost,
+          resultCols: effectiveCols(bought),
+          resultRows: effectiveRows(bought),
+          reachable: false,
+        );
+      }
+      cumulativeCost += expansions[bought].cost;
+      bought++;
+    }
+
+    return PendingExpansionPlan(
+      extraSteps: bought - currentBought,
+      totalCost: cumulativeCost,
+      resultCols: effectiveCols(bought),
+      resultRows: effectiveRows(bought),
+      reachable: true,
+    );
+  }
+
   /// Base/max playable tiles — used for shop labels.
   int get basePlayableTiles => playableTiles(0);
   int get maxPlayableTiles => playableTiles(expansions.length);
@@ -226,6 +271,28 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.techHub => OfficeLevel.campus,
         OfficeLevel.campus => null,
       };
+}
+
+/// Result of `OfficeLevel.computeExpansionPlan`. When [extraSteps] is 0 the
+/// ghost fits in the current owned grid — no expansion purchase needed.
+/// When [reachable] is false the ghost is outside even the max expansion of
+/// the current tier and the caller should treat placement as invalid.
+class PendingExpansionPlan {
+  final int extraSteps;
+  final int totalCost;
+  final int resultCols;
+  final int resultRows;
+  final bool reachable;
+
+  const PendingExpansionPlan({
+    required this.extraSteps,
+    required this.totalCost,
+    required this.resultCols,
+    required this.resultRows,
+    required this.reachable,
+  });
+
+  bool get fitsInOwned => extraSteps == 0;
 }
 
 // ─── Hardware tiers ────────────────────────────────────────────────────────
@@ -548,6 +615,18 @@ const double kLessonSuccessBonusPerLesson = 0.005;
 /// visible without trivializing the roll for agents with hundreds of lessons.
 const double kMaxLessonSuccessBonus = 0.10;
 
+/// Crit-chance bonus granted per 5 completed tasks on architectural tasks.
+/// 1% per 5 tasks → 75 tasks = +15% crit on architecture rolls.
+const double kProjectMemoryBonusPerTasks = 0.01;
+
+/// Number of tasks completed per 1% crit bonus increment on architecture rolls.
+const int kProjectMemoryTasksPerStep = 5;
+
+/// Hard cap on project memory depth bonus. Keeps the mechanic visible without
+/// making aged agents trivial on architectural reasoning.
+const double kMaxProjectMemoryBonus = 0.15;
+
+
 // ─── Agent passives ───────────────────────────────────────────────────────
 
 class AgentPassive {
@@ -601,6 +680,12 @@ class RoleCatalogEntry {
   /// Defaults to 0 (Claude).
   final int defaultProvider;
 
+  /// Ukrainian personal-name pool. New seeds / custom spawns pick a random name
+  /// from here (excluding names already used on the team). Pool intentionally
+  /// thematic per role (martial for security, lyrical for artist, etc.) so the
+  /// generated team reads like a curated cast, not random noise.
+  final List<String> nicknamePool;
+
   final AgentPassive passive;
 
   const RoleCatalogEntry({
@@ -612,6 +697,7 @@ class RoleCatalogEntry {
     required this.hireCost,
     required this.salary,
     required this.passive,
+    this.nicknamePool = const [],
     this.singleton = false,
     this.defaultSeedCount = 0,
     this.defaultProvider = 0,
@@ -629,6 +715,7 @@ const roleCatalog = <RoleCatalogEntry>[
     salary: 50,
     singleton: true,
     defaultSeedCount: 1,
+    nicknamePool: ['Остап', 'Святослав', 'Орест', 'Левко'],
     passive: AgentPassive(
       icon: '🧠',
       name: 'Tactical Mind',
@@ -646,6 +733,7 @@ const roleCatalog = <RoleCatalogEntry>[
     hireCost: 0,
     salary: 40,
     defaultSeedCount: 1,
+    nicknamePool: ['Юрій', 'Степан', 'Ярема', 'Влад'],
     passive: AgentPassive(
       icon: '⌨️',
       name: 'Speed Typing',
@@ -662,6 +750,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Деталі low-level реалізації та pixel-perfect UI.',
     hireCost: 500,
     salary: 80,
+    nicknamePool: ['Олег', 'Михайло', 'Ігор', 'Антін'],
     passive: AgentPassive(
       icon: '🏗️',
       name: 'System Vision',
@@ -678,6 +767,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Не пише й не змінює код — тільки оглядає.',
     hireCost: 300,
     salary: 40,
+    nicknamePool: ['Тарас', 'Лука', 'Ілля', 'Захар'],
     passive: AgentPassive(
       icon: '🔍',
       name: 'Bug Radar',
@@ -694,6 +784,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Архітектурні рішення й візуальний дизайн — поза зоною.',
     hireCost: 300,
     salary: 40,
+    nicknamePool: ['Петро', 'Кирило', 'Гліб', 'Микита'],
     passive: AgentPassive(
       icon: '👆',
       name: 'Swipe Master',
@@ -710,12 +801,13 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Не вміє в polish фіч та візуал.',
     hireCost: 800,
     salary: 60,
+    nicknamePool: ['Роман', 'Євген', 'Володимир', 'Адам'],
     passive: AgentPassive(
       icon: '🛡️',
       name: 'Firewall',
       nameUk: 'Фаєрвол',
       description:
-          'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 в коді.',
+          'Невидимий щит — автоматично виявляє вразливості OWASP Top 10 у коді.',
     ),
   ),
   RoleCatalogEntry(
@@ -726,6 +818,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Бекенд-архітектура й алгоритми — не профіль.',
     hireCost: 400,
     salary: 45,
+    nicknamePool: ['Маркіян', 'Северин', 'Юрко', 'Стах'],
     passive: AgentPassive(
       icon: '🎨',
       name: 'Pixel Perfect',
@@ -743,6 +836,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Без LLM-задач у беклозі простоює — звичайний CRUD не його профіль.',
     hireCost: 1200,
     salary: 100,
+    nicknamePool: ['Артур', 'Платон', 'Серафим', 'Філіп'],
     passive: AgentPassive(
       icon: '🤖',
       name: 'Prompt Whisperer',
@@ -760,6 +854,7 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Сам код не пише — здає спеки і дифи в roadmap, реалізацію передає coder/tech-lead.',
     hireCost: 600,
     salary: 70,
+    nicknamePool: ['Денис', 'Влас', 'Тимко', 'Іларіон'],
     passive: AgentPassive(
       icon: '🎲',
       name: 'Game Sense',
@@ -777,12 +872,32 @@ const roleCatalog = <RoleCatalogEntry>[
     weakness: 'Код не пише — здає вердикти зі scope і точкові дифи у STRATEGY/ROADMAP, які власник застосовує сам.',
     hireCost: 1000,
     salary: 90,
+    nicknamePool: ['Богуслав', 'Аркадій', 'Лаврін', 'Гордій'],
     passive: AgentPassive(
       icon: '🧭',
       name: 'Reality Check',
       nameUk: 'Перевірка реальністю',
       description:
           'Тримає курс — раз на період звіряє останні коміти з roadmap і повідомляє, де доки розійшлися з реальністю, поки drift не став хронічним.',
+    ),
+  ),
+  RoleCatalogEntry(
+    roleType: 'character-artist',
+    baseName: 'Піксельмейстер',
+    role: 'Художник',
+    specialization:
+        'Створює нових персонажів з нуля — спрайти, скін-палітри, анімаційні сети, NPC. Працює із 7-колірною палітрою та 16×32 sprite sheet.',
+    weakness:
+        'Не дизайнить екрани і UI-флоу — це робота UI/UX дизайнера. Без задач на новий контент простоює.',
+    hireCost: 500,
+    salary: 55,
+    nicknamePool: ['Лесь', 'Ярослав', 'Корній', 'Сава'],
+    passive: AgentPassive(
+      icon: '🎨',
+      name: 'Color Soul',
+      nameUk: 'Кольорова душа',
+      description:
+          'Відчуває характер персонажа через палітру — нові скіни і NPC народжуються з першого ескізу без переробок.',
     ),
   ),
 ];
@@ -876,6 +991,13 @@ Map<SkillType, int> initialSkillsForRole(String roleType) {
         SkillType.insight: 5,
         SkillType.reliability: 3,
       },
+    'character-artist' => const {
+        SkillType.speed: 1,
+        SkillType.precision: 4,
+        SkillType.creativity: 6,
+        SkillType.insight: 1,
+        SkillType.reliability: 1,
+      },
     _ => const {
         SkillType.speed: 2,
         SkillType.precision: 2,
@@ -917,6 +1039,30 @@ String nextInstanceId(String roleType, Iterable<String> existingIds) {
 /// First instance gets the bare [baseName], later ones get "baseName 2", "baseName 3"…
 String defaultNicknameFor(RoleCatalogEntry role, int ordinal) {
   return ordinal <= 1 ? role.baseName : '${role.baseName} $ordinal';
+}
+
+/// Random Ukrainian personal name for a new instance of [roleType]. Picks
+/// uniformly from the role's [RoleCatalogEntry.nicknamePool], excluding any
+/// nicknames already used on the team so duplicates don't clutter the roster.
+///
+/// Falls back to [defaultNicknameFor] (class label) when the role is unknown
+/// or the pool is empty / fully consumed by exclusions. Pass [seed] for
+/// deterministic output in tests.
+String pickRoleNickname(
+  String roleType, {
+  Iterable<String> excludeNicknames = const [],
+  int? seed,
+}) {
+  final role = roleCatalogFor(roleType);
+  if (role == null) return roleType;
+  if (role.nicknamePool.isEmpty) return role.baseName;
+
+  final usedLower = {for (final n in excludeNicknames) n.toLowerCase()};
+  final available =
+      role.nicknamePool.where((n) => !usedLower.contains(n.toLowerCase())).toList();
+  final pool = available.isNotEmpty ? available : role.nicknamePool;
+  final rng = seed != null ? Random(seed) : Random();
+  return pool[rng.nextInt(pool.length)];
 }
 
 // ─── Donation packages ─────────────────────────────────────────────────────
@@ -1084,6 +1230,8 @@ const cosmeticCatalog = <CosmeticItem>[
   CosmeticItem(id: 'send_neon_pulse', type: CosmeticType.sendButtonStyle, name: 'Неоновий Пульс', cost: 6000, preview: '✺'),
   CosmeticItem(id: 'send_gold_rocket', type: CosmeticType.sendButtonStyle, name: 'Золота Ракета', cost: 12000, preview: '🚀'),
   CosmeticItem(id: 'send_pixel_arcade', type: CosmeticType.sendButtonStyle, name: 'Піксельна Аркада', cost: 20000, preview: '▶'),
+  CosmeticItem(id: 'send_liquid_glass', type: CosmeticType.sendButtonStyle, name: 'Рідке Скло', cost: 25000, preview: '🫧'),
+  CosmeticItem(id: 'send_cloud_drift', type: CosmeticType.sendButtonStyle, name: 'Хмарний Дрейф', cost: 18000, preview: '🌬'),
 ];
 
 CosmeticItem? cosmeticById(String id) {
@@ -1325,30 +1473,66 @@ FurnitureItem? furnitureById(String id) {
 
 // ─── Office rooms ──────────────────────────────────────────────────────────
 
-/// Room types split into two groups:
-/// - compact rooms (2×2, 3×2) — dominant, placed in quantity
-/// - luxury rooms (bigger) — 1 per office, each with a signature mechanic
+/// Two structural classes that share the same `RoomType` enum but render and
+/// validate differently:
+///
+/// - **Room** — enclosed unit with its own walls/border. Initiates and
+///   receives adjacency pairs. Examples: workstation, openSpace, serverRoom.
+/// - **Zone** — open feature area without walls (think gym floor, pool deck,
+///   lounge corner). Renders with a dashed border instead of a solid one.
+///   Only *receives* adjacency bonuses — never initiates a pair. Examples:
+///   lounge, gym, pool, cinema, miniGolf.
+///
+/// The split is structural, not cosmetic — adjacency engine, ghost preview
+/// and BuildMenu badge all branch on `category`.
+enum RoomCategory { room, zone }
+
+/// Room types share a single enum so their `.index` keeps a stable JSON
+/// encoding across schema versions. New values MUST be appended to the end
+/// to avoid renumbering historical saves.
 enum RoomType {
-  // ── Compact ──
+  // ── Rooms (enclosed, own walls) ──
   workstation,
   breakRoom,
   meetingRoom,
   serverRoom,
+  // ── Zones (open feature areas, no walls) ──
   lounge,
-  // ── Luxury (1-2 per office) ──
   gym,
   cinema,
   pool,
   miniGolf,
+  // ── Appended in B.1 Stage 3b ──
+  openSpace,
+  // ── Appended in B.1 Stage 3b polish round (2026-05-11) ──
+  teamFloor,
 }
 
 extension RoomTypeExt on RoomType {
+  RoomCategory get category => switch (this) {
+        RoomType.workstation ||
+        RoomType.breakRoom ||
+        RoomType.meetingRoom ||
+        RoomType.serverRoom ||
+        RoomType.openSpace ||
+        RoomType.teamFloor =>
+          RoomCategory.room,
+        RoomType.lounge ||
+        RoomType.gym ||
+        RoomType.cinema ||
+        RoomType.pool ||
+        RoomType.miniGolf =>
+          RoomCategory.zone,
+      };
+
   String get nameUk => switch (this) {
-        RoomType.workstation => 'Робоче місце',
-        RoomType.breakRoom => 'Куток відпочинку',
-        RoomType.meetingRoom => 'Переговорний пункт',
-        RoomType.serverRoom => 'Сервер',
-        RoomType.lounge => 'Скейт-куток',
+        RoomType.workstation => 'Воркстейшн',
+        RoomType.breakRoom => 'Кімната відпочинку',
+        RoomType.meetingRoom => 'Переговорна',
+        RoomType.serverRoom => 'Серверна',
+        RoomType.openSpace => 'Опен-спейс',
+        RoomType.teamFloor => 'Командний поверх',
+        RoomType.lounge => 'Рекреація',
         RoomType.gym => 'Спортзал',
         RoomType.cinema => 'Кінозал',
         RoomType.pool => 'Басейн',
@@ -1356,17 +1540,24 @@ extension RoomTypeExt on RoomType {
       };
 
   String get description => switch (this) {
-        RoomType.workstation => 'Додаткове місце для агента без канонічного стола.',
+        RoomType.workstation =>
+          'Один робочий стіл для агента без закріпленого місця.',
         RoomType.breakRoom =>
-          'Агенти сидять за столом на 50 % довше — менше блукають.',
+          'Агенти відновлюються довше — менше безцільного блукання офісом.',
         RoomType.meetingRoom =>
-          'Координаційний пункт — покращує роботу менеджера.',
-        RoomType.serverRoom => 'Всі агенти рухаються на 10 % швидше.',
-        RoomType.lounge => 'Агенти частіше катаються скейтом саме сюди.',
-        RoomType.gym => 'Люкс. Морал-буст для всієї команди.',
-        RoomType.cinema => 'Люкс. Кіно-перегляди підвищують командний дух.',
-        RoomType.pool => 'Люкс. Найкращий spot для відпочинку між спринтами.',
-        RoomType.miniGolf => 'Люкс. Невеликі змагання між колегами.',
+          'Координаційний центр менеджера. Поряд з воркстейшном — −10 % затримки dispatch.',
+        RoomType.serverRoom =>
+          'Все прискорюється на 10 %. Ефективна лише поряд з воркстейшнами.',
+        RoomType.openSpace =>
+          'Відкритий простір на 6 столів. Ефективніший за шість окремих воркстейшнів.',
+        RoomType.teamFloor =>
+          'Командний open-plan поверх на 12 столів. Кістяк продуктового офісу.',
+        RoomType.lounge =>
+          'Зона. Відкрита рекреаційна зона. Агенти прямують сюди у вільний час.',
+        RoomType.gym => 'Зона. Морал-буст для всієї команди.',
+        RoomType.cinema => 'Зона. Кіно-перегляди підвищують командний дух.',
+        RoomType.pool => 'Зона. Найкращий spot відпочинку між спринтами.',
+        RoomType.miniGolf => 'Зона. Невеликі змагання між колегами.',
       };
 
   String get icon => switch (this) {
@@ -1374,6 +1565,8 @@ extension RoomTypeExt on RoomType {
         RoomType.breakRoom => '🛋️',
         RoomType.meetingRoom => '🗣️',
         RoomType.serverRoom => '🖥️',
+        RoomType.openSpace => '🏢',
+        RoomType.teamFloor => '🏬',
         RoomType.lounge => '🛹',
         RoomType.gym => '🏋️',
         RoomType.cinema => '🎬',
@@ -1386,6 +1579,8 @@ extension RoomTypeExt on RoomType {
         RoomType.breakRoom => 2,
         RoomType.meetingRoom => 3,
         RoomType.serverRoom => 2,
+        RoomType.openSpace => 5,
+        RoomType.teamFloor => 7,
         RoomType.lounge => 3,
         RoomType.gym => 4,
         RoomType.cinema => 5,
@@ -1398,6 +1593,8 @@ extension RoomTypeExt on RoomType {
         RoomType.breakRoom => 2,
         RoomType.meetingRoom => 2,
         RoomType.serverRoom => 2,
+        RoomType.openSpace => 4,
+        RoomType.teamFloor => 5,
         RoomType.lounge => 2,
         RoomType.gym => 3,
         RoomType.cinema => 3,
@@ -1410,6 +1607,8 @@ extension RoomTypeExt on RoomType {
         RoomType.breakRoom => 500,
         RoomType.meetingRoom => 900,
         RoomType.serverRoom => 1500,
+        RoomType.openSpace => 1800,
+        RoomType.teamFloor => 4500,
         RoomType.lounge => 700,
         RoomType.gym => 2500,
         RoomType.cinema => 3500,
@@ -1422,6 +1621,8 @@ extension RoomTypeExt on RoomType {
         RoomType.breakRoom => 4,
         RoomType.meetingRoom => 3,
         RoomType.serverRoom => 3,
+        RoomType.openSpace => 3,
+        RoomType.teamFloor => 2,
         RoomType.lounge => 3,
         RoomType.gym => 1,
         RoomType.cinema => 1,
@@ -1429,8 +1630,8 @@ extension RoomTypeExt on RoomType {
         RoomType.miniGolf => 1,
       };
 
-  /// Compact rooms are the "dominant" small-size group; luxury rooms are the
-  /// signature 1-per-office feature pieces. UI groups them separately.
+  /// True for high-tier feature Zones (1-per-office signature pieces) gated
+  /// behind office upgrades. Garage tier hides them in BuildMenu.
   bool get isLuxury => switch (this) {
         RoomType.gym ||
         RoomType.cinema ||
@@ -1440,6 +1641,9 @@ extension RoomTypeExt on RoomType {
         _ => false,
       };
 }
+
+/// 2D tile coordinate (col, row). Used for [PlacedRoom.closedDoors].
+typedef DoorTile = ({int col, int row});
 
 class PlacedRoom {
   final String id;
@@ -1456,6 +1660,11 @@ class PlacedRoom {
   /// Optional override of the tier-default floor skin. Null inherits.
   final String? floorSkinId;
 
+  /// Tile coords on this room's border that the player has explicitly closed
+  /// (sealed the auto-gap). Geometric doors form whenever two rooms share an
+  /// edge; this set carves exceptions back out. Persists across reloads.
+  final Set<DoorTile> closedDoors;
+
   const PlacedRoom({
     required this.id,
     required this.type,
@@ -1464,6 +1673,7 @@ class PlacedRoom {
     this.rotation = 0,
     this.wallSkinId,
     this.floorSkinId,
+    this.closedDoors = const {},
   });
 
   /// Footprint width, accounting for 90°/270° rotation that swaps axes.
@@ -1483,6 +1693,7 @@ class PlacedRoom {
     int? rotation,
     String? wallSkinId,
     String? floorSkinId,
+    Set<DoorTile>? closedDoors,
     bool clearWallSkin = false,
     bool clearFloorSkin = false,
   }) =>
@@ -1494,6 +1705,7 @@ class PlacedRoom {
         rotation: rotation ?? this.rotation,
         wallSkinId: clearWallSkin ? null : (wallSkinId ?? this.wallSkinId),
         floorSkinId: clearFloorSkin ? null : (floorSkinId ?? this.floorSkinId),
+        closedDoors: closedDoors ?? this.closedDoors,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1504,6 +1716,10 @@ class PlacedRoom {
         if (rotation != 0) 'rotation': rotation,
         if (wallSkinId != null) 'wallSkinId': wallSkinId,
         if (floorSkinId != null) 'floorSkinId': floorSkinId,
+        if (closedDoors.isNotEmpty)
+          'closedDoors': [
+            for (final d in closedDoors) {'col': d.col, 'row': d.row},
+          ],
       };
 
   factory PlacedRoom.fromJson(Map<String, dynamic> json) => PlacedRoom(
@@ -1514,6 +1730,13 @@ class PlacedRoom {
         rotation: json['rotation'] as int? ?? 0,
         wallSkinId: json['wallSkinId'] as String?,
         floorSkinId: json['floorSkinId'] as String?,
+        closedDoors: {
+          for (final d in (json['closedDoors'] as List<dynamic>? ?? []))
+            (
+              col: (d as Map<String, dynamic>)['col'] as int,
+              row: d['row'] as int,
+            ),
+        },
       );
 }
 
@@ -1695,6 +1918,61 @@ const roomTemplateCatalog = <RoomTemplate>[
           furnitureId: 'cardboard_boxes', colOffset: 1, rowOffset: 0),
     ],
   ),
+  // ── Work-focused templates ─────────────────────────────────────────────
+  // Richer work-room presets that ship with motivational/utility furniture
+  // pre-laid out, so the player can drop in a "real" work room without
+  // hand-placing every prop. Multi-workstation Open Space requires a model
+  // extension (`RoomTemplate` currently holds one `baseRoom`) and is tracked
+  // as Stage 3b in ROADMAP.md.
+  RoomTemplate(
+    id: 'tpl_starter_cube',
+    name: 'Стартовий куб',
+    description:
+        'Робоче місце для новачка: мотиваційний постер, вазон і кулер з водою.',
+    baseRoom: RoomType.workstation,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'poster_motivational', colOffset: 0, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_small', colOffset: 1, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'water_cooler', colOffset: 1, rowOffset: 1),
+    ],
+  ),
+  RoomTemplate(
+    id: 'tpl_deep_focus',
+    name: 'Глибокий фокус',
+    description:
+        'Преміум робоче місце: дизайнерський столик, шафа з технічкою, велика рослина.',
+    baseRoom: RoomType.workstation,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'coffee_table_designer', colOffset: 0, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'bookshelf', colOffset: 1, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_large', colOffset: 1, rowOffset: 0),
+    ],
+    discountPercent: 12,
+  ),
+  RoomTemplate(
+    id: 'tpl_team_hub',
+    name: 'Команд-хаб',
+    description:
+        'Переговорна для командної роботи: шафа з документами, картотека, велика рослина.',
+    baseRoom: RoomType.meetingRoom,
+    furniture: [
+      TemplateFurnitureSlot(
+          furnitureId: 'bookshelf', colOffset: 0, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'filing_cabinet', colOffset: 1, rowOffset: 1),
+      TemplateFurnitureSlot(
+          furnitureId: 'plant_large', colOffset: 2, rowOffset: 0),
+      TemplateFurnitureSlot(
+          furnitureId: 'poster_code', colOffset: 0, rowOffset: 0),
+    ],
+    discountPercent: 10,
+  ),
   RoomTemplate(
     id: 'tpl_skater_lounge',
     name: 'Скейт-куток',
@@ -1735,11 +2013,17 @@ bool areRoomsAdjacent(PlacedRoom a, PlacedRoom b) {
 /// Positive = speed/morale boost, negative = penalty. Returns null when there
 /// is no adjacency effect (callers can skip rendering the label).
 ///
-/// Pairs from `docs/office_design.md §4`:
-/// - workstation ↔ serverRoom  → +5 % speed
-/// - breakRoom   ↔ lounge      → +5 % morale synergy (displayed as bonus)
-/// - meetingRoom ↔ workstation → +5 % efficiency (manager latency −10 %)
+/// Pairs (B.1 Stage 3b taxonomy):
+/// - workstation  ↔ serverRoom   → +5 % speed
+/// - workstation  ↔ meetingRoom  → +5 % efficiency
+/// - workstation  ↔ openSpace    → +5 % efficiency
+/// - openSpace    ↔ meetingRoom  → +5 % efficiency
+/// - breakRoom    → lounge       → +5 % morale (one-way, lounge is a Zone)
+/// - breakRoom    → gym          → +5 % morale (one-way, gym is a Zone)
 /// - serverRoom placed >8 tiles from every workstation → −5 % penalty
+///
+/// Zones (lounge, gym, cinema, pool, miniGolf) only *receive* pairs — they
+/// never initiate adjacency, by `category == zone` guard.
 int? computeAdjacencyBonusPercent(
   RoomType newType,
   int col,
@@ -1760,40 +2044,82 @@ int? computeAdjacencyBonusPercent(
   for (final existing in existingRooms) {
     if (!areRoomsAdjacent(ghost, existing)) continue;
 
-    if ((newType == RoomType.workstation &&
-            existing.type == RoomType.serverRoom) ||
-        (newType == RoomType.serverRoom &&
-            existing.type == RoomType.workstation)) {
-      bonus += 5;
-    }
-
-    if ((newType == RoomType.breakRoom && existing.type == RoomType.lounge) ||
-        (newType == RoomType.lounge && existing.type == RoomType.breakRoom)) {
-      bonus += 5;
-    }
-
-    if ((newType == RoomType.meetingRoom &&
-            existing.type == RoomType.workstation) ||
-        (newType == RoomType.workstation &&
-            existing.type == RoomType.meetingRoom)) {
-      bonus += 5;
-    }
+    bonus += _adjacencyContribution(newType, existing.type);
   }
 
-  // serverRoom far from every workstation → cable-cost penalty.
+  // serverRoom far from every desk-hub → cable-cost penalty.
   if (newType == RoomType.serverRoom && existingRooms.isNotEmpty) {
     final ghostCx = col + ghost.footprintWidth / 2.0;
     final ghostCy = row + ghost.footprintHeight / 2.0;
-    final hasNearbyWorkstation = existingRooms.any((r) {
-      if (r.type != RoomType.workstation) return false;
+    final hasNearbyHub = existingRooms.any((r) {
+      if (r.type != RoomType.workstation &&
+          r.type != RoomType.openSpace &&
+          r.type != RoomType.teamFloor) {
+        return false;
+      }
       final rcx = r.col + r.footprintWidth / 2.0;
       final rcy = r.row + r.footprintHeight / 2.0;
       return (rcx - ghostCx).abs() + (rcy - ghostCy).abs() <= 8;
     });
-    if (!hasNearbyWorkstation) bonus -= 5;
+    if (!hasNearbyHub) bonus -= 5;
   }
 
   return bonus == 0 ? null : bonus;
+}
+
+/// Single source of truth for adjacency-pair contributions. Returns the bonus
+/// the *new* room earns from being adjacent to an *existing* room.
+///
+/// One-way receive: a Zone never initiates, so when [newType] is a Zone we
+/// look up what pair-bonus would have applied if a Room *received* from it,
+/// flipping the direction. The result is the same number, attributed once.
+int _adjacencyContribution(RoomType newType, RoomType existing) {
+  // Zones don't initiate adjacency pairs — they only receive. Flip the
+  // direction so the Room side becomes the initiator. Guard against the
+  // zone-to-zone case (no pair possible) to keep recursion finite.
+  if (newType.category == RoomCategory.zone) {
+    if (existing.category == RoomCategory.zone) return 0;
+    return _adjacencyContribution(existing, newType);
+  }
+
+  // All desk-bearing rooms count as a "workstation hub" for adjacency.
+  // teamFloor is the biggest and inherits every workstation/openSpace pair.
+  const deskHubs = <RoomType>{
+    RoomType.workstation,
+    RoomType.openSpace,
+    RoomType.teamFloor,
+  };
+
+  // Workstation / openSpace / teamFloor pairs (symmetric within the hub set).
+  if (deskHubs.contains(newType)) {
+    if (existing == RoomType.serverRoom) return 5;
+    if (existing == RoomType.meetingRoom) return 5;
+    // Adjacent desk-hubs reinforce each other (openSpace ↔ workstation, etc.)
+    // — but a hub never pairs with itself (no double-counting of own type).
+    if (newType != existing && deskHubs.contains(existing)) return 5;
+    return 0;
+  }
+
+  // Server room pairs.
+  if (newType == RoomType.serverRoom) {
+    if (deskHubs.contains(existing)) return 5;
+    return 0;
+  }
+
+  // Meeting room pairs.
+  if (newType == RoomType.meetingRoom) {
+    if (deskHubs.contains(existing)) return 5;
+    return 0;
+  }
+
+  // Break room initiates one-way bonuses to Zones (lounge, gym).
+  if (newType == RoomType.breakRoom) {
+    if (existing == RoomType.lounge) return 5;
+    if (existing == RoomType.gym) return 5;
+    return 0;
+  }
+
+  return 0;
 }
 
 // ─── Wall / floor skin packs ───────────────────────────────────────────────
@@ -2308,10 +2634,11 @@ class GameState {
     for (final role in roleCatalog) {
       for (var i = 1; i <= role.defaultSeedCount; i++) {
         final id = nextInstanceId(role.roleType, agents.keys);
+        final used = agents.values.map((a) => a.nickname);
         agents[id] = AgentGameData(
           instanceId: id,
           roleType: role.roleType,
-          nickname: defaultNicknameFor(role, i),
+          nickname: pickRoleNickname(role.roleType, excludeNicknames: used),
           hardware: HardwareTier.oldLaptop,
           skills: initialSkillsForRole(role.roleType),
         );

@@ -35,11 +35,13 @@ const double kWalkSpeedPxPerSec = 48.0;
 const double kWalkFrameDuration = 0.15;
 const double kTypeFrameDuration = 0.3;
 
-// Wander AI
-const double kWanderPauseMin = 3.0;
-const double kWanderPauseMax = 15.0;
-const int kWanderMovesMin = 3;
-const int kWanderMovesMax = 6;
+// Wander AI — paused-feel tuning: idle-sim readability comes from decision
+// frequency, not walk speed. Longer pauses + fewer hops before returning to
+// the desk halve perceived activity without making walking look underwater.
+const double kWanderPauseMin = 8.0;
+const double kWanderPauseMax = 25.0;
+const int kWanderMovesMin = 2;
+const int kWanderMovesMax = 4;
 const double kSeatRestMin = 30.0;
 const double kSeatRestMax = 90.0;
 
@@ -69,7 +71,7 @@ const int kSnackTableRow = 1;
 // overhangs into the last floor row. Inline helpers so the painter, hit-
 // test, and blockedTiles all compute the same tile from current grid dims.
 int foremanColFor(int gridCols) => gridCols - 1;
-int foremanRowFor(int gridRows) => gridRows - 2;
+int foremanRowFor(int gridRows) => gridRows - 1;
 /// Extra downward shift applied to the foreman sprite and its hit-rect
 /// so he stands 1/3 tile lower within his anchor tile.
 const double kForemanVertOffset = kTileSize / 3;
@@ -77,7 +79,7 @@ const double kCoffeeBrewDuration = 6.0;
 
 // Skateboard
 const double kSkateboardSpeed = 96.0;
-const double kSkateboardChance = 0.2;
+const double kSkateboardChance = 0.07;
 const double kSkateMountDuration = 0.8;
 const double kSkateDismountDuration = 0.6;
 const double kSkateRideFrameDuration = 0.25;
@@ -408,6 +410,9 @@ class OfficeGameState {
   List<FurniturePlacement> _placedFurniture;
   List<PlacedCorridor> _placedCorridors;
   double _chatScanAccum = 0;
+  bool _frozen = false;
+  bool _autonomousMode = false;
+  final Map<String, double> _wakeDelayRemaining = {};
 
   int get gridCols => _gridCols;
   int get gridRows => _gridRows;
@@ -448,6 +453,55 @@ class OfficeGameState {
         _placedCorridors = placedCorridors {
     _buildAll();
     cat = OfficeCat();
+  }
+
+  bool get isFrozen => _frozen;
+  bool get isAutonomous => _autonomousMode;
+
+  /// Switch to autonomous wander mode — used when the server is offline or
+  /// during shutdown. Active tasks are cancelled; agents keep wandering at a
+  /// calmer pace without skateboarding until the connection is restored.
+  void enterAutonomousWander() {
+    _frozen = false;
+    _autonomousMode = true;
+    _wakeDelayRemaining.clear();
+    for (final ch in characters.values) {
+      if (!ch.isHired) continue;
+      ch.isActive = false;
+      ch.isOnSkateboard = false;
+      ch.isChatting = false;
+      ch.chatPartnerId = null;
+      if (ch.state == CharState.typing ||
+          ch.state == CharState.skateMount ||
+          ch.state == CharState.skateDismount) {
+        ch.state = CharState.idle;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
+        ch.wanderCount = 0;
+        ch.wanderLimit = _randomInt(kWanderMovesMin, kWanderMovesMax);
+      }
+      // Characters already walking or chatting-idle continue naturally.
+    }
+  }
+
+  /// Unfreeze characters with a distance-from-door stagger so those near the
+  /// entrance wake up first (natural "workday starts at the door" narrative).
+  /// delay = 200 ms base + 120 ms per manhattan tile from door + ±80 ms jitter.
+  void wakeUpStaggered() {
+    if (!_frozen && !_autonomousMode) return;
+    _frozen = false;
+    _autonomousMode = false;
+    // Mirror doorLeftColFor from foreman_overlay_painter (row 0 = back wall).
+    final doorCol = ((_gridCols - 2) ~/ 2).clamp(1, _gridCols - 1);
+    const doorRow = 0;
+    for (final ch in characters.values) {
+      final dist =
+          (ch.tileCol - doorCol).abs() + (ch.tileRow - doorRow).abs();
+      final delay =
+          0.200 + dist * 0.120 + (_rng.nextDouble() * 0.160 - 0.080);
+      _wakeDelayRemaining[ch.instanceId] = delay.clamp(0.1, 5.0);
+    }
   }
 
   void _buildAll() {
@@ -551,19 +605,64 @@ class OfficeGameState {
   }
 
   void _buildExtraStations() {
-    _extraStations = [
-      for (final room in _placedRooms)
-        if (room.type == RoomType.workstation)
-          DeskStation(
-            agentId: 'ws_${room.id}',
-            deskCol: room.col,
-            deskRow: room.row,
-            seatCol: room.col,
-            seatRow: room.row + 1,
+    final stations = <DeskStation>[];
+    for (final room in _placedRooms) {
+      if (room.type == RoomType.workstation) {
+        stations.add(DeskStation(
+          agentId: 'ws_${room.id}',
+          deskCol: room.col,
+          deskRow: room.row,
+          seatCol: room.col,
+          seatRow: room.row + 1,
+          facingDir: CharDirection.up,
+          isExtra: true,
+        ));
+      } else if (room.type == RoomType.openSpace) {
+        // 5×4 open space: 6 desk pods in 3×2 grid (matches room_sprites
+        // `_kOpenSpacePodOrigins`). Each pod has its own desk station.
+        const podOriginsTiles = <List<int>>[
+          [0, 0], [2, 0], [3, 0],
+          [0, 2], [2, 2], [3, 2],
+        ];
+        for (var i = 0; i < podOriginsTiles.length; i++) {
+          final dx = podOriginsTiles[i][0];
+          final dy = podOriginsTiles[i][1];
+          stations.add(DeskStation(
+            agentId: 'os_${room.id}_$i',
+            deskCol: room.col + dx,
+            deskRow: room.row + dy,
+            seatCol: room.col + dx,
+            seatRow: room.row + dy + 1,
             facingDir: CharDirection.up,
             isExtra: true,
-          ),
-    ];
+          ));
+        }
+      } else if (room.type == RoomType.teamFloor) {
+        // 7×5 team floor: 12 desk pods in 4×3 grid (matches room_sprites
+        // `_kTeamFloorPodOrigins`).
+        const podOriginsTiles = <List<int>>[
+          [0, 0], [2, 0], [3, 0], [5, 0],
+          [0, 2], [2, 2], [3, 2], [5, 2],
+          [0, 3], [2, 3], [3, 3], [5, 3],
+        ];
+        for (var i = 0; i < podOriginsTiles.length; i++) {
+          final dx = podOriginsTiles[i][0];
+          final dy = podOriginsTiles[i][1];
+          // Seat is one row below desk; clamp inside the room footprint.
+          final seatRow = room.row + dy + 1;
+          stations.add(DeskStation(
+            agentId: 'tf_${room.id}_$i',
+            deskCol: room.col + dx,
+            deskRow: room.row + dy,
+            seatCol: room.col + dx,
+            seatRow: seatRow > room.row + 4 ? room.row + dy : seatRow,
+            facingDir: CharDirection.up,
+            isExtra: true,
+          ));
+        }
+      }
+    }
+    _extraStations = stations;
   }
 
   void _buildTileMap() {
@@ -652,6 +751,8 @@ class OfficeGameState {
   Iterable<TilePos> _roomInternalBlocks(PlacedRoom room) sync* {
     switch (room.type) {
       case RoomType.workstation:
+      case RoomType.openSpace:
+      case RoomType.teamFloor:
         // Desk/seat already blocked via _extraStations.
         break;
       case RoomType.breakRoom:
@@ -1121,6 +1222,36 @@ class OfficeGameState {
   }
 
   void _updateCharacter(GameCharacter ch, double dt) {
+    // Disconnected: stand still, occasionally turn to a random direction.
+    if (_frozen) {
+      if (ch.state != CharState.idle && ch.state != CharState.waiting) {
+        ch.state = CharState.idle;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        ch.wanderTimer = _randomRange(4.0, 10.0);
+      }
+      ch.wanderTimer -= dt;
+      if (ch.wanderTimer <= 0) {
+        ch.wanderTimer = _randomRange(4.0, 10.0);
+        ch.dir = CharDirection.values[_rng.nextInt(CharDirection.values.length)];
+      }
+      return;
+    }
+
+    // Staggered wake-up: hold idle until this character's delay expires.
+    final wakeDelay = _wakeDelayRemaining[ch.instanceId];
+    if (wakeDelay != null) {
+      final remaining = wakeDelay - dt;
+      if (remaining > 0) {
+        _wakeDelayRemaining[ch.instanceId] = remaining;
+        return;
+      }
+      _wakeDelayRemaining.remove(ch.instanceId);
+      ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
+      ch.wanderCount = 0;
+      ch.wanderLimit = _randomInt(kWanderMovesMin, kWanderMovesMax);
+    }
+
     ch.frameTimer += dt;
 
     // Count down coffee timer while typing
@@ -1221,9 +1352,9 @@ class OfficeGameState {
           }
 
           if (walkableTiles.isNotEmpty) {
-            final wantSkate = ch.hasCoffee
+            final wantSkate = !_autonomousMode && (ch.hasCoffee
                 ? _rng.nextDouble() < kCoffeeSkateChance
-                : _rng.nextDouble() < kSkateboardChance;
+                : _rng.nextDouble() < kSkateboardChance);
 
             List<TilePos> path = const [];
             bool skate = false;
@@ -1308,7 +1439,8 @@ class OfficeGameState {
         ch.dir = _directionBetween(
           ch.tileCol, ch.tileRow, nextTile.col, nextTile.row,
         );
-        final walkSpeed = (ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec) * _speedBonus;
+        final baseSpeed = ch.isOnSkateboard ? kSkateboardSpeed : kWalkSpeedPxPerSec;
+        final walkSpeed = baseSpeed * _speedBonus * (_autonomousMode ? 0.65 : 1.0);
         ch.moveProgress += (walkSpeed / kTileSize) * dt;
 
         final fromX = ch.tileCol * kTileSize + kTileSize / 2;

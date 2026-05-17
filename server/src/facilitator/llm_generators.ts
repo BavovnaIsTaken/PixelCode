@@ -22,6 +22,11 @@ import type {
   StyledOutputGenerator,
 } from "./output_generator.js";
 import type { FacilitatorStyle } from "./types.js";
+import {
+  LLMGenerationError,
+  runWithTimeoutAndRetry,
+  type RunOptions,
+} from "./llm_runner.js";
 
 // ─── Shared types & utilities ──────────────────────────────────────────────
 
@@ -32,8 +37,18 @@ export type CallerFn = (
   projectPath: string,
 ) => Promise<string>;
 
-/** Strips markdown fences; falls back to outermost { … } extraction. */
-export function extractJson(text: string): string {
+/**
+ * Pull a JSON document out of an LLM response. Tries (in order):
+ *   1. ```json fenced block
+ *   2. ``` fenced block (plain)
+ *   3. Outermost matching {…}
+ *
+ * Returns `null` if none of those match — the caller is expected to
+ * raise an LLMGenerationError(parse) rather than silently parse the
+ * wrong text. Previously this function fell through to `text.trim()`
+ * which produced confusing downstream JSON.parse errors.
+ */
+export function extractJson(text: string): string | null {
   const jsonFence = text.match(/```json\s*([\s\S]+?)\s*```/);
   if (jsonFence) return jsonFence[1].trim();
   const codeFence = text.match(/```\s*([\s\S]+?)\s*```/);
@@ -41,11 +56,48 @@ export function extractJson(text: string): string {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start !== -1 && end > start) return text.slice(start, end + 1);
-  return text.trim();
+  return null;
 }
 
 export function modelForTier(tier: string): "haiku" | "sonnet" {
   return tier === "medium" || tier === "large" ? "sonnet" : "haiku";
+}
+
+/**
+ * Shared body for every generator: call the LLM with timeout/retry,
+ * extract the JSON envelope, validate parseability, return the raw
+ * JSON text. Any failure becomes a typed LLMGenerationError so the
+ * WS handler can ship a `code` field.
+ */
+async function generateJsonViaCaller(
+  caller: CallerFn,
+  systemPrompt: string,
+  userPrompt: string,
+  model: "haiku" | "sonnet",
+  projectPath: string,
+  runOptions: RunOptions,
+): Promise<string> {
+  const raw = await runWithTimeoutAndRetry(
+    () => caller(systemPrompt, userPrompt, model, projectPath),
+    runOptions,
+  );
+  const json = extractJson(raw);
+  if (json === null) {
+    throw new LLMGenerationError(
+      "parse",
+      `LLM response contained no JSON block (first 80 chars: ${raw.slice(0, 80)})`,
+    );
+  }
+  try {
+    JSON.parse(json);
+  } catch (e) {
+    throw new LLMGenerationError(
+      "parse",
+      `LLM JSON was not parseable: ${e}`,
+      e,
+    );
+  }
+  return json;
 }
 
 function lexiconLines(lexicon: Record<string, string>): string {
@@ -70,7 +122,7 @@ export async function callClaude(
       allowedTools: [],
       cwd: projectPath,
       includePartialMessages: false,
-      permissionMode: "acceptEdits",
+      permissionMode: "bypassPermissions",
       maxTurns: 1,
       persistSession: false,
     },
@@ -181,6 +233,7 @@ export class ClaudeQuestLineGenerator implements StyledOutputGenerator {
   constructor(
     private readonly projectPath: string,
     private readonly caller: CallerFn = callClaude,
+    private readonly runOptions: RunOptions = {},
   ) {}
 
   async generate(input: GeneratorInput): Promise<GeneratorOutput> {
@@ -201,19 +254,15 @@ Generate a quest line for this project.
 
 Return ONLY the JSON object.`;
 
-    try {
-      const raw = await this.caller(
-        questLineSystemPrompt(input.style),
-        userPrompt,
-        model,
-        this.projectPath,
-      );
-      const json = extractJson(raw);
-      JSON.parse(json); // validate before returning
-      return { outputJson: json, format: "quest_line" };
-    } catch (err) {
-      throw new Error(`ClaudeQuestLineGenerator failed: ${err}`);
-    }
+    const json = await generateJsonViaCaller(
+      this.caller,
+      questLineSystemPrompt(input.style),
+      userPrompt,
+      model,
+      this.projectPath,
+      this.runOptions,
+    );
+    return { outputJson: json, format: "quest_line" };
   }
 }
 
@@ -277,6 +326,7 @@ export class ClaudeMissionBriefingGenerator implements StyledOutputGenerator {
   constructor(
     private readonly projectPath: string,
     private readonly caller: CallerFn = callClaude,
+    private readonly runOptions: RunOptions = {},
   ) {}
 
   async generate(input: GeneratorInput): Promise<GeneratorOutput> {
@@ -297,19 +347,15 @@ Generate a mission briefing for this project.
 
 Return ONLY the JSON object.`;
 
-    try {
-      const raw = await this.caller(
-        missionBriefingSystemPrompt(input.style),
-        userPrompt,
-        model,
-        this.projectPath,
-      );
-      const json = extractJson(raw);
-      JSON.parse(json);
-      return { outputJson: json, format: "mission_briefing" };
-    } catch (err) {
-      throw new Error(`ClaudeMissionBriefingGenerator failed: ${err}`);
-    }
+    const json = await generateJsonViaCaller(
+      this.caller,
+      missionBriefingSystemPrompt(input.style),
+      userPrompt,
+      model,
+      this.projectPath,
+      this.runOptions,
+    );
+    return { outputJson: json, format: "mission_briefing" };
   }
 }
 
@@ -384,6 +430,7 @@ export class ClaudeMilestoneTreeGenerator implements StyledOutputGenerator {
   constructor(
     private readonly projectPath: string,
     private readonly caller: CallerFn = callClaude,
+    private readonly runOptions: RunOptions = {},
   ) {}
 
   async generate(input: GeneratorInput): Promise<GeneratorOutput> {
@@ -405,18 +452,14 @@ Generate a milestone tree for this project.
 
 Return ONLY the JSON object.`;
 
-    try {
-      const raw = await this.caller(
-        milestoneTreeSystemPrompt(input.style),
-        userPrompt,
-        model,
-        this.projectPath,
-      );
-      const json = extractJson(raw);
-      JSON.parse(json);
-      return { outputJson: json, format: "milestone_tree" };
-    } catch (err) {
-      throw new Error(`ClaudeMilestoneTreeGenerator failed: ${err}`);
-    }
+    const json = await generateJsonViaCaller(
+      this.caller,
+      milestoneTreeSystemPrompt(input.style),
+      userPrompt,
+      model,
+      this.projectPath,
+      this.runOptions,
+    );
+    return { outputJson: json, format: "milestone_tree" };
   }
 }

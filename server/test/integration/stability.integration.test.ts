@@ -1,0 +1,1310 @@
+/**
+ * Stability integration tests — anti-regression harness for the
+ * "stupid" bugs that have eaten the most time in this project so far:
+ *
+ *   1. Chat history desyncs between iPhone ↔ Mac. A device misses a
+ *      message, or a reconnecting device doesn't catch up.
+ *   2. Mid-conversation, an agent asks "and what project are we in?"
+ *      The team apparently forgot the brief moments after running the
+ *      facilitator intake.
+ *
+ * The harness mirrors `server.ts` handlers WITHOUT booting a real WS
+ * server: each fake client is just a `received: ServerMessage[]` array,
+ * and `broadcastAll` walks the connected list. Connect/disconnect runs
+ * the SAME logic the real `wss.on("connection", …)` handler does for
+ * the message types we care about (chat_history snapshot replay,
+ * team-memory restore, facilitator output sync).
+ *
+ * For each known bug a test reproduces the failure mode against the
+ * harness; the harness exists *to* fail today. The matching server.ts
+ * change makes it green and keeps regressions out.
+ */
+
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+} from "fs";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
+
+import { ChatHistory } from "../../src/chat_history.ts";
+import { buildOfficePrompt, type GameStateData } from "../../src/agents.ts";
+import { deriveProjectMemoryFromBrief } from "../../src/conversational_loop.ts";
+
+// ─── Test fixtures ────────────────────────────────────────────────────────
+
+function tmpHome(): { root: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), "pixelcode-stability-"));
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+function inst(roleType: string) {
+  return {
+    roleType,
+    nickname: roleType,
+    hardware: 2,
+    skills: { precision: 5, speed: 5 },
+  };
+}
+
+const ROSTER: GameStateData = {
+  instances: {
+    "manager#1": inst("manager"),
+    "tech-lead#1": inst("tech-lead"),
+    "coder#1": inst("coder"),
+  },
+};
+
+// ─── Server harness ───────────────────────────────────────────────────────
+
+interface FakeClient {
+  id: string;
+  received: Array<Record<string, unknown>>;
+}
+
+interface FacilitatorOutput {
+  styleId: string;
+  finalScore: Record<string, number>;
+  outputFormat: string;
+  outputJson: string;
+}
+
+/**
+ * Mirrors the chat + project-memory + facilitator handlers from
+ * `server.ts` against in-memory fake clients. Reuses the SAME modules
+ * (ChatHistory, buildOfficePrompt, deriveProjectMemoryFromBrief) so a
+ * drift in production code surfaces here.
+ */
+class ServerHarness {
+  chatHistory: ChatHistory;
+  readonly clients: FakeClient[] = [];
+  readonly clientProjectContext = new Map<string, string>();
+  // Per-ws scratch state — mirrors clientGameState/getCommLog/getMetrics/etc.
+  // in server.ts. Modeling it here is what lets us pin "set_project clears
+  // peer state too" instead of just the sender's.
+  readonly clientScratch = new Map<string, { msgsSeen: number }>();
+  // Mirrors `clientGameState` WeakMap in server.ts: the per-ws roster that
+  // dispatch/validation paths read. Latest accepted roster from any client
+  // must propagate here for ALL connected clients, not just the sender —
+  // otherwise peer dispatches operate on a stale roster server-side.
+  readonly clientGameState = new Map<string, { instances: Record<string, unknown> }>();
+  latestFullGameState: { instances: Record<string, unknown> } | null = null;
+  latestStateUpdatedAt = 0;
+  // Per-ws provider keys + the most-recent value seen on any ws. Single-
+  // tenant server, so a key typed on one device must reach the others.
+  readonly clientDeepSeekKey = new Map<string, string>();
+  readonly clientKimiKey = new Map<string, string>();
+  lastSeenDeepSeekKey: string | undefined;
+  lastSeenKimiKey: string | undefined;
+  // Session presence: only one ws holds write authority at a time. The
+  // server pairs `clientId` with `ws` so reconnects of the same device
+  // re-claim the slot. Connected clients map carries clientId per ws.
+  readonly connectedClients = new Map<string, { clientId: string; deviceName: string }>();
+  activeSession: { clientId: string; deviceName: string; wsId: string } | null = null;
+  latestFacilitatorOutput: FacilitatorOutput | null = null;
+  private projectCwd: string;
+
+  constructor(baseDir: string) {
+    this.projectCwd = baseDir;
+    this.chatHistory = new ChatHistory();
+    this.chatHistory.load(this.historyFilePath());
+  }
+
+  // ── Storage paths (mirror `server.ts`) ─────────────────────────────────
+  private historyFilePath(): string {
+    return join(this.projectCwd, "history.json");
+  }
+  private teamMemoryFilePath(): string {
+    return join(this.projectCwd, "team_memory.txt");
+  }
+  private facilitatorFilePath(): string {
+    return join(this.projectCwd, "facilitator_output.json");
+  }
+  private gameStateFilePath(): string {
+    return join(this.projectCwd, "game_state.json");
+  }
+
+  // ── Connect / disconnect ───────────────────────────────────────────────
+  connect(id: string): FakeClient {
+    const c: FakeClient = { id, received: [] };
+    this.clients.push(c);
+    this.clientScratch.set(c.id, { msgsSeen: 0 });
+    // Inherit current authoritative roster (if any) so a late-joining
+    // client's per-ws clientGameState matches what other clients see.
+    if (this.latestFullGameState) {
+      this.clientGameState.set(c.id, this.latestFullGameState);
+    }
+    // Inherit any provider keys another device already forwarded —
+    // single-tenant server, late joiner is the same user.
+    if (this.lastSeenDeepSeekKey) this.clientDeepSeekKey.set(c.id, this.lastSeenDeepSeekKey);
+    if (this.lastSeenKimiKey) this.clientKimiKey.set(c.id, this.lastSeenKimiKey);
+    // Mirror wss.on("connection", …): init + chat_history + team-memory
+    // restore + facilitator_output_sync if present.
+    this.send(c, {
+      type: "init",
+      sessionId: "test",
+      agents: [],
+      workingDirectory: this.projectCwd,
+    });
+    this.send(c, this.chatHistory.snapshot() as unknown as Record<string, unknown>);
+    if (existsSync(this.teamMemoryFilePath())) {
+      this.clientProjectContext.set(
+        c.id,
+        readFileSync(this.teamMemoryFilePath(), "utf-8"),
+      );
+    }
+    if (existsSync(this.facilitatorFilePath())) {
+      // Reload latestFacilitatorOutput from disk to mirror server boot.
+      this.latestFacilitatorOutput = JSON.parse(
+        readFileSync(this.facilitatorFilePath(), "utf-8"),
+      ) as FacilitatorOutput;
+    }
+    if (this.latestFacilitatorOutput) {
+      this.send(c, {
+        type: "facilitator_output_sync",
+        ...this.latestFacilitatorOutput,
+      });
+    }
+    return c;
+  }
+
+  /**
+   * Mirrors `case "set_project"` in server.ts: switch global PROJECT_CWD,
+   * reload chat history + team memory for the new project, and re-init
+   * EVERY connected client (not just the sender) so peer devices don't
+   * keep operating on stale state. The bug pinned by the regression test
+   * is: previously per-ws scratch + clientProjectContext was cleared only
+   * for the sender, leaving peer devices in an inconsistent state.
+   */
+  setProject(c: FakeClient, newBaseDir: string): void {
+    this.projectCwd = newBaseDir;
+    this.chatHistory = new ChatHistory();
+    this.chatHistory.load(this.historyFilePath());
+    const newMemory = existsSync(this.teamMemoryFilePath())
+      ? readFileSync(this.teamMemoryFilePath(), "utf-8")
+      : null;
+    // The new project has its own caches on disk; reload them. Without
+    // this, server keeps the OLD project's roster + facilitator output
+    // and clobbers the new project's disk file on next persist.
+    this.latestFullGameState = existsSync(this.gameStateFilePath())
+      ? (JSON.parse(readFileSync(this.gameStateFilePath(), "utf-8")) as { instances: Record<string, unknown> })
+      : null;
+    this.latestStateUpdatedAt = this.latestFullGameState ? Date.now() : 0;
+    this.latestFacilitatorOutput = existsSync(this.facilitatorFilePath())
+      ? (JSON.parse(readFileSync(this.facilitatorFilePath(), "utf-8")) as FacilitatorOutput)
+      : null;
+    this.lastSeenDeepSeekKey = undefined;
+    this.lastSeenKimiKey = undefined;
+    // Reset every connected client's per-ws state, not just the sender.
+    for (const peer of this.clients) {
+      this.clientScratch.set(peer.id, { msgsSeen: 0 });
+      this.clientGameState.delete(peer.id);
+      this.clientDeepSeekKey.delete(peer.id);
+      this.clientKimiKey.delete(peer.id);
+      if (newMemory) this.clientProjectContext.set(peer.id, newMemory);
+      else this.clientProjectContext.delete(peer.id);
+      // Broadcast `init` with new workingDirectory so every device's UI
+      // re-syncs to the new project.
+      this.send(peer, {
+        type: "init",
+        sessionId: "test",
+        agents: [],
+        workingDirectory: this.projectCwd,
+      });
+      this.send(
+        peer,
+        this.chatHistory.snapshot() as unknown as Record<string, unknown>,
+      );
+      if (this.latestFullGameState) {
+        this.send(peer, {
+          type: "game_state_sync",
+          fullState: JSON.stringify(this.latestFullGameState),
+          stateUpdatedAt: this.latestStateUpdatedAt,
+        });
+        this.clientGameState.set(peer.id, this.latestFullGameState);
+      }
+      if (this.latestFacilitatorOutput) {
+        this.send(peer, {
+          type: "facilitator_output_sync",
+          ...this.latestFacilitatorOutput,
+        });
+      }
+    }
+  }
+
+  /** Mirrors per-ws bookkeeping done on user-message receive. */
+  private bumpScratch(c: FakeClient): void {
+    const s = this.clientScratch.get(c.id);
+    if (s) s.msgsSeen += 1;
+  }
+
+  /** Mirrors `case "client_info"` after a successful identify. */
+  identify(c: FakeClient, clientId: string, deviceName: string): void {
+    this.connectedClients.set(c.id, { clientId, deviceName });
+    if (!this.activeSession || this.activeSession.clientId === clientId) {
+      this.activeSession = { clientId, deviceName, wsId: c.id };
+      // Fix: broadcast to ALL peers, not just `c`. Otherwise a viewer
+      // that learnt "no primary" during a prior session_release stays in
+      // that stale view forever until something else triggers a re-broadcast.
+      this.broadcastSessionStatus();
+    } else {
+      this.send(c, {
+        type: "session_status",
+        mode: "viewer",
+        primaryDevice: this.activeSession.deviceName,
+      });
+    }
+  }
+
+  /** Mirrors `case "session_release"` — primary drops the slot. */
+  sessionRelease(c: FakeClient): void {
+    if (this.activeSession?.wsId !== c.id) return;
+    this.activeSession = null;
+    this.broadcastSessionStatus();
+  }
+
+  private broadcastSessionStatus(): void {
+    for (const peer of this.clients) {
+      const isPrimary = this.activeSession?.wsId === peer.id;
+      const msg: Record<string, unknown> = {
+        type: "session_status",
+        mode: isPrimary ? "primary" : "viewer",
+      };
+      if (!isPrimary && this.activeSession) {
+        msg.primaryDevice = this.activeSession.deviceName;
+      }
+      this.send(peer, msg);
+    }
+  }
+
+  /**
+   * Mirrors `case "set_game_state"` in server.ts after the
+   * last-write-wins gate accepts. The fix: set the per-ws roster on EVERY
+   * connected client, not just the sender. Without this, peer devices
+   * keep server-side stale rosters; their next dispatch/validation reads
+   * `clientGameState.get(peerWs)` and fails on the freshly-hired agent.
+   */
+  setGameState(
+    c: FakeClient,
+    gs: { instances: Record<string, unknown> },
+    updatedAt: number,
+    opts: { deepseekApiKey?: string; kimiApiKey?: string } = {},
+  ): void {
+    // Stash any newly-arrived API keys before validating + propagate to
+    // peers that don't already have one (local-typed wins). Server is
+    // single-tenant so the keys identify the user, not the ws.
+    if (opts.deepseekApiKey) {
+      this.clientDeepSeekKey.set(c.id, opts.deepseekApiKey);
+      this.lastSeenDeepSeekKey = opts.deepseekApiKey;
+      for (const peer of this.clients) {
+        if (peer.id === c.id) continue;
+        if (!this.clientDeepSeekKey.has(peer.id))
+          this.clientDeepSeekKey.set(peer.id, opts.deepseekApiKey);
+      }
+    }
+    if (opts.kimiApiKey) {
+      this.clientKimiKey.set(c.id, opts.kimiApiKey);
+      this.lastSeenKimiKey = opts.kimiApiKey;
+      for (const peer of this.clients) {
+        if (peer.id === c.id) continue;
+        if (!this.clientKimiKey.has(peer.id))
+          this.clientKimiKey.set(peer.id, opts.kimiApiKey);
+      }
+    }
+    const isSeed = this.latestFullGameState === null;
+    if (!isSeed && updatedAt <= this.latestStateUpdatedAt) {
+      // Reject stale; push authoritative back to sender.
+      this.send(c, {
+        type: "game_state_sync",
+        fullState: JSON.stringify(this.latestFullGameState),
+        stateUpdatedAt: this.latestStateUpdatedAt,
+      });
+      return;
+    }
+    this.latestFullGameState = gs;
+    this.latestStateUpdatedAt = updatedAt;
+    // Set on EVERY connected client so dispatch/validation paths see the
+    // current roster regardless of which device sent it.
+    for (const peer of this.clients) {
+      this.clientGameState.set(peer.id, gs);
+      if (peer.id !== c.id) {
+        this.send(peer, {
+          type: "game_state_sync",
+          fullState: JSON.stringify(gs),
+          stateUpdatedAt: updatedAt,
+        });
+      }
+    }
+  }
+
+  disconnect(c: FakeClient): void {
+    const i = this.clients.indexOf(c);
+    if (i >= 0) this.clients.splice(i, 1);
+    // WeakMap-style binding in real server.ts ties context to ws lifetime,
+    // but team_memory.txt persists. Mirror that: clear in-memory entry,
+    // disk stays.
+    this.clientProjectContext.delete(c.id);
+  }
+
+  // ── Chat handler (mirrors `case "chat_message"` in server.ts) ──────────
+  sendUserMessage(c: FakeClient, content: string, ts: string): void {
+    this.bumpScratch(c);
+    this.chatHistory.add({
+      role: "user",
+      text: content,
+      agentId: "manager",
+      timestamp: ts,
+      id: `local-${c.id}-${ts}`,
+    });
+    this.chatHistory.save(this.historyFilePath());
+    this.broadcastAll(this.chatHistory.snapshot() as unknown as Record<string, unknown>);
+  }
+
+  /**
+   * Mirrors `case "new_chat"` in server.ts — clears history and broadcasts
+   * both `init` and `chat_history` to every peer.
+   */
+  newChat(initiator: FakeClient): void {
+    this.chatHistory.clear();
+    this.chatHistory.save(this.historyFilePath());
+    for (const c of this.clients) {
+      this.send(c, { type: "init", sessionId: "pending" });
+      this.send(c, this.chatHistory.snapshot() as unknown as Record<string, unknown>);
+    }
+  }
+
+  /**
+   * Mirrors `case "push_facilitator_output"` — device pushing local
+   * output after server restart. Only stores if server has nothing, then
+   * broadcasts to all OTHER connected peers.
+   */
+  pushFacilitatorOutput(pusher: FakeClient, outputJson: string): void {
+    if (this.latestFacilitatorOutput) return; // server already has one
+    this.latestFacilitatorOutput = {
+      styleId: "",
+      finalScore: {},
+      outputFormat: "quest_line",
+      outputJson,
+    };
+    mkdirSync(dirname(this.facilitatorFilePath()), { recursive: true });
+    writeFileSync(this.facilitatorFilePath(), JSON.stringify(this.latestFacilitatorOutput));
+    // Broadcast to all OTHER connected devices (the fix).
+    for (const c of this.clients) {
+      if (c.id === pusher.id) continue;
+      this.send(c, { type: "facilitator_output_sync", ...this.latestFacilitatorOutput });
+    }
+  }
+
+  /**
+   * Mirrors the part of `case "facilitator_start"` that runs after the
+   * seed succeeds: persist the output AND distil project memory so the
+   * next agent prompt has grounding. The latter is what was missing.
+   */
+  facilitatorSeed(c: FakeClient, brief: string, now: Date): void {
+    const output: FacilitatorOutput = {
+      styleId: "test-style",
+      finalScore: {},
+      outputFormat: "quest_line",
+      outputJson: JSON.stringify({ id: "out-1", projectBrief: brief }),
+    };
+    this.latestFacilitatorOutput = output;
+    mkdirSync(dirname(this.facilitatorFilePath()), { recursive: true });
+    writeFileSync(this.facilitatorFilePath(), JSON.stringify(output));
+
+    // The fix: derive a project-memory hint and persist it so every
+    // agent prompt has grounding even after a reconnect or another
+    // device joining.
+    const memory = deriveProjectMemoryFromBrief(brief, now);
+    mkdirSync(dirname(this.teamMemoryFilePath()), { recursive: true });
+    writeFileSync(this.teamMemoryFilePath(), memory);
+    // Mirror server.ts: set on every currently-connected client, not just
+    // the sender. Otherwise peer devices keep stale/empty memory until
+    // they reconnect.
+    for (const peer of this.clients) this.clientProjectContext.set(peer.id, memory);
+
+    this.broadcastAll({
+      type: "facilitator_seeded",
+      styleId: output.styleId,
+      finalScore: output.finalScore,
+      outputFormat: output.outputFormat,
+      outputJson: output.outputJson,
+    });
+  }
+
+  /**
+   * Build the system prompt the SAME way agent dispatch builds it for a
+   * given client. Uses `clientProjectContext` keyed by client.
+   */
+  promptFor(c: FakeClient, agentId: string): string {
+    const projectMemory = this.clientProjectContext.get(c.id);
+    return buildOfficePrompt(
+      agentId,
+      projectMemory,
+      undefined,
+      ROSTER,
+      undefined,
+    );
+  }
+
+  // ── Internals ──────────────────────────────────────────────────────────
+  private send(c: FakeClient, msg: Record<string, unknown>): void {
+    c.received.push(msg);
+  }
+  private broadcastAll(msg: Record<string, unknown>): void {
+    for (const c of this.clients) this.send(c, msg);
+  }
+}
+
+function lastChatHistory(c: FakeClient): Array<{ role: string; text: string }> {
+  for (let i = c.received.length - 1; i >= 0; i--) {
+    const m = c.received[i];
+    if (m.type === "chat_history") {
+      return m.messages as Array<{ role: string; text: string }>;
+    }
+  }
+  return [];
+}
+
+// ─── Bug 1: chat history desync between devices ───────────────────────────
+
+describe("chat sync across connected clients", () => {
+  test("when A sends, B receives the new snapshot via broadcast", () => {
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const iPhone = h.connect("iphone");
+      const mac = h.connect("mac");
+      h.sendUserMessage(iPhone, "Hello team — let's start.", "2026-05-08T10:00:00Z");
+
+      const macHistory = lastChatHistory(mac);
+      assert.equal(macHistory.length, 1, "Mac must see the iPhone message");
+      assert.equal(macHistory[0].text, "Hello team — let's start.");
+      assert.equal(macHistory[0].role, "user");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a reconnecting client catches up to messages it missed", () => {
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const iPhone = h.connect("iphone");
+      const mac = h.connect("mac");
+
+      // Mac drops off the network mid-session.
+      h.disconnect(mac);
+
+      // iPhone sends two messages while Mac is gone — these only land
+      // in chatHistory + on iPhone, not on the offline Mac.
+      h.sendUserMessage(iPhone, "First message", "2026-05-08T10:01:00Z");
+      h.sendUserMessage(iPhone, "Second message", "2026-05-08T10:02:00Z");
+
+      // Mac comes back. Connect handler must replay the FULL current
+      // history, not just messages broadcast after the reconnect.
+      const macAgain = h.connect("mac");
+      const replayed = lastChatHistory(macAgain);
+      assert.equal(replayed.length, 2, "reconnecting Mac must catch up to 2 missed messages");
+      assert.deepEqual(
+        replayed.map((m) => m.text),
+        ["First message", "Second message"],
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("new_chat broadcasts empty chat_history to ALL peers, not just the initiator", () => {
+    // Regression: new_chat only sent `init` to peers; the chat panel on
+    // peer devices kept showing the old messages until reconnect.
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const iPhone = h.connect("iphone");
+      const mac = h.connect("mac");
+
+      h.sendUserMessage(iPhone, "Old message", "2026-05-09T10:00:00Z");
+      assert.equal(lastChatHistory(mac).length, 1, "mac has old message");
+
+      h.newChat(iPhone); // initiator clears, broadcasts to all
+
+      assert.equal(
+        lastChatHistory(mac).length,
+        0,
+        "mac must receive empty chat_history after new_chat"
+      );
+      assert.equal(
+        lastChatHistory(iPhone).length,
+        0,
+        "iPhone must also receive empty chat_history",
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("history persists to disk; a fresh server boot still has the messages", () => {
+    const { root, cleanup } = tmpHome();
+    try {
+      // First "boot": one client sends a message, then everyone leaves.
+      {
+        const h = new ServerHarness(root);
+        const iPhone = h.connect("iphone");
+        h.sendUserMessage(iPhone, "Pre-restart message", "2026-05-08T10:00:00Z");
+        h.disconnect(iPhone);
+      }
+      // Second "boot": fresh harness, same baseDir → must replay history.
+      const h2 = new ServerHarness(root);
+      const mac = h2.connect("mac");
+      const replayed = lastChatHistory(mac);
+      assert.equal(replayed.length, 1);
+      assert.equal(replayed[0].text, "Pre-restart message");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─── Bug 2: facilitator forgets project context ───────────────────────────
+
+describe("facilitator project memory survives", () => {
+  test(
+    "after facilitator_start, agent prompt MUST mention the brief",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const iPhone = h.connect("iphone");
+        h.facilitatorSeed(
+          iPhone,
+          "Build a photo gallery with auth and offline mode.",
+          new Date("2026-05-08T10:00:00Z"),
+        );
+        const prompt = h.promptFor(iPhone, "manager#1");
+        assert.match(
+          prompt,
+          /Project Memory/,
+          "prompt must include the Project Memory section once a brief is seeded",
+        );
+        assert.match(
+          prompt,
+          /photo gallery/,
+          "prompt must reference the actual brief content, not be empty",
+        );
+        assert.match(
+          prompt,
+          /If asked which project you're working on, ground answers in this brief/,
+          "prompt must instruct the agent NOT to ask 'what project'",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a device ALREADY connected when seed lands also gets project context",
+    () => {
+      // Regression: previously `clientProjectContext.set(ws, …)` ran only
+      // on the sending ws. A peer device that was already connected when
+      // facilitator_start fired kept its old (or empty) context until it
+      // reconnected — so its agent dispatches asked "what project are we in?"
+      // even though the brief was already on disk.
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        // iPhone runs facilitator_start AFTER both clients are already
+        // connected. Mac must still see the brief in its prompt.
+        h.facilitatorSeed(
+          iPhone,
+          "Ship a Slack bot for stand-ups.",
+          new Date("2026-05-09T10:00:00Z"),
+        );
+        const macPrompt = h.promptFor(mac, "tech-lead#1");
+        assert.match(
+          macPrompt,
+          /Slack bot/,
+          "Mac was connected at seed time → must inherit the brief without reconnect",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a second device that joins after the seed sees the same project context",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const iPhone = h.connect("iphone");
+        h.facilitatorSeed(
+          iPhone,
+          "Build a photo gallery with auth and offline mode.",
+          new Date("2026-05-08T10:00:00Z"),
+        );
+        // Mac connects later — it must inherit the project memory via
+        // team_memory.txt restore (mirrors server.ts:loadTeamMemory).
+        const mac = h.connect("mac");
+        const macPrompt = h.promptFor(mac, "tech-lead#1");
+        assert.match(macPrompt, /photo gallery/, "Mac's prompt must reference brief from team memory");
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "after a reconnect (new ws), the agent prompt still has the brief",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const iPhone = h.connect("iphone");
+        h.facilitatorSeed(
+          iPhone,
+          "Build an iOS habit tracker with widgets.",
+          new Date("2026-05-08T10:00:00Z"),
+        );
+        h.disconnect(iPhone);
+        // Fresh ws session — no in-memory state. Reconnect MUST restore
+        // the brief into the new client's project context.
+        const iPhoneAgain = h.connect("iphone");
+        const promptAfter = h.promptFor(iPhoneAgain, "manager#1");
+        assert.match(
+          promptAfter,
+          /habit tracker/,
+          "reconnecting iPhone must still see the brief, not lose project context",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a fresh server boot replays facilitator output to new clients",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        // Boot 1: seed a brief, then everyone leaves.
+        {
+          const h = new ServerHarness(root);
+          const iPhone = h.connect("iphone");
+          h.facilitatorSeed(
+            iPhone,
+            "Wire DeepSeek as a third backend.",
+            new Date("2026-05-08T10:00:00Z"),
+          );
+          h.disconnect(iPhone);
+        }
+        // Boot 2: server restarts. The brief must survive — every new
+        // device that joins gets the project context from team_memory.txt.
+        const h2 = new ServerHarness(root);
+        const mac = h2.connect("mac");
+        const prompt = h2.promptFor(mac, "tech-lead#1");
+        assert.match(
+          prompt,
+          /DeepSeek/,
+          "post-restart prompt must still ground in the brief from disk",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+});
+
+// ─── Bug 3: set_project leaves peer devices on the OLD project ───────────
+
+describe("set_project sync across connected clients", () => {
+  test(
+    "switching project re-inits all connected clients, not just sender",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        // Pre-seed projectB with a different brief on disk so we can
+        // assert peers actually reload it.
+        mkdirSync(projectB, { recursive: true });
+        writeFileSync(
+          join(projectB, "team_memory.txt"),
+          "Project B: ship Slack integration.",
+        );
+
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.sendUserMessage(mac, "msg in project A", "2026-05-09T10:00:00Z");
+        // Sanity: both clients see the projectA message.
+        assert.equal(lastChatHistory(iPhone).length, 1);
+
+        // Mac switches to project B. iPhone is still connected.
+        h.setProject(mac, projectB);
+
+        // iPhone (peer) MUST be re-inited to project B without reconnect.
+        const iPhoneInits = iPhone.received.filter(
+          (m) => m.type === "init",
+        ) as Array<{ workingDirectory: string }>;
+        assert.equal(
+          iPhoneInits[iPhoneInits.length - 1].workingDirectory,
+          projectB,
+          "peer iPhone should receive an init pointing at the new project",
+        );
+        // iPhone's chat view must reflect projectB's empty history, not
+        // projectA's stale snapshot.
+        assert.equal(
+          lastChatHistory(iPhone).length,
+          0,
+          "peer iPhone's chat must reset to projectB's history",
+        );
+        // iPhone's project memory must reload to projectB's brief.
+        assert.match(
+          h.clientProjectContext.get(iPhone.id) ?? "",
+          /Slack integration/,
+          "peer iPhone's project memory must reflect projectB's brief",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+
+  test(
+    "switching project clears peer scratch state, not just sender's",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.sendUserMessage(iPhone, "first", "2026-05-09T10:00:00Z");
+        h.sendUserMessage(iPhone, "second", "2026-05-09T10:01:00Z");
+        assert.equal(h.clientScratch.get(iPhone.id)?.msgsSeen, 2);
+
+        // Mac switches projects. iPhone's scratch should reset too —
+        // otherwise stale per-ws state from project A bleeds into B.
+        h.setProject(mac, projectB);
+        assert.equal(
+          h.clientScratch.get(iPhone.id)?.msgsSeen,
+          0,
+          "peer iPhone's scratch must be cleared when project switches",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 4: set_game_state leaves peer ws's clientGameState stale ────────
+
+describe("set_game_state peer sync", () => {
+  test(
+    "Mac hires an agent → server-side iPhone roster reflects it without reconnect",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // Mac hires roster R1 (has manager + coder).
+        const r1 = {
+          instances: {
+            "manager#1": { roleType: "manager", nickname: "m" },
+            "coder#1": { roleType: "coder", nickname: "c" },
+          },
+        };
+        h.setGameState(mac, r1, 1_000);
+
+        // iPhone (peer) sees the broadcast on the wire AND server-side
+        // its per-ws clientGameState now matches — its next dispatch
+        // would see "coder#1" as a hired instance.
+        const iphoneSync = iPhone.received.find(
+          (m) => m.type === "game_state_sync",
+        );
+        assert.ok(iphoneSync, "iPhone should receive game_state_sync from broadcast");
+        assert.deepEqual(
+          h.clientGameState.get(iPhone.id),
+          r1,
+          "server-side iPhone roster must update on broadcast, not stay stale",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "stale write rejected and authoritative roster is pushed back",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+
+        // Mac sets ts=2000 first.
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          2_000,
+        );
+
+        // Late-arriving stale write at ts=1000 must be rejected, and the
+        // sender pushed the current authoritative state back so it converges.
+        const before = mac.received.length;
+        h.setGameState(
+          mac,
+          { instances: { "coder#1": { roleType: "coder", nickname: "c" } } },
+          1_000,
+        );
+        const echoed = mac.received.slice(before).find(
+          (m) => m.type === "game_state_sync",
+        ) as { stateUpdatedAt: number } | undefined;
+        assert.ok(echoed, "stale writer must receive an authoritative bounce-back");
+        assert.equal(echoed.stateUpdatedAt, 2_000);
+        assert.equal(
+          h.latestStateUpdatedAt,
+          2_000,
+          "authoritative roster must NOT regress on a stale write",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a late-joining client inherits current roster server-side",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const r1 = {
+          instances: { "manager#1": { roleType: "manager", nickname: "m" } },
+        };
+        h.setGameState(mac, r1, 1_000);
+        // iPhone joins after roster is set.
+        const iPhone = h.connect("iphone");
+        assert.deepEqual(
+          h.clientGameState.get(iPhone.id),
+          r1,
+          "fresh client's server-side roster must match the authoritative state",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+});
+
+// ─── Bug 5: project switch leaves stale per-project caches behind ───────
+
+describe("project switch reloads per-project caches", () => {
+  test(
+    "switching projects clears the OLD roster so the new project reads its own disk",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        // projectA: a peer roster R_A.
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const rA = {
+          instances: { "manager#1": { roleType: "manager", nickname: "m_A" } },
+        };
+        h.setGameState(mac, rA, 1_000);
+
+        // Pre-seed projectB on disk with a different roster so the
+        // post-switch state must come from disk, not RAM.
+        mkdirSync(projectB, { recursive: true });
+        const rB = {
+          instances: {
+            "tech-lead#1": { roleType: "tech-lead", nickname: "tl_B" },
+          },
+        };
+        writeFileSync(join(projectB, "game_state.json"), JSON.stringify(rB));
+
+        h.setProject(mac, projectB);
+
+        // Server-side authoritative state must reflect projectB, not A.
+        assert.deepEqual(
+          h.latestFullGameState,
+          rB,
+          "post-switch authoritative roster must come from projectB's disk",
+        );
+        // Mac's per-ws clientGameState must also match projectB's roster.
+        assert.deepEqual(
+          h.clientGameState.get(mac.id),
+          rB,
+          "Mac's per-ws roster updates to projectB after switch",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+
+  test(
+    "switching to a fresh project drops the prior facilitator output",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        h.facilitatorSeed(
+          mac,
+          "Build projectA: a thing.",
+          new Date("2026-05-09T10:00:00Z"),
+        );
+        assert.ok(h.latestFacilitatorOutput, "projectA seeded the cache");
+
+        // projectB has nothing on disk.
+        mkdirSync(projectB, { recursive: true });
+        h.setProject(mac, projectB);
+
+        assert.equal(
+          h.latestFacilitatorOutput,
+          null,
+          "fresh projectB must clear projectA's cached facilitator output",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 6: provider keys typed on one device don't reach the others ─────
+
+describe("provider key cross-device propagation", () => {
+  test(
+    "key typed on Mac is available to iPhone server-side without iPhone retyping",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // Mac forwards its DeepSeek key with set_game_state. iPhone never
+        // typed one — its UI's deepseekAuthProvider returns null.
+        h.setGameState(
+          mac,
+          {
+            instances: { "manager#1": { roleType: "manager", nickname: "m" } },
+          },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-mac" },
+        );
+
+        // iPhone's server-side per-ws key now has Mac's value, so iPhone's
+        // next dispatch to a deepseek-backed agent succeeds the
+        // `clientDeepSeekKey.get(iPhoneWs)` check.
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          "sk-deepseek-mac",
+          "peer iPhone must inherit Mac's DeepSeek key without retyping",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a peer's locally-typed key is NOT overwritten by a propagated one",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+
+        // iPhone forwards its own key first.
+        h.setGameState(
+          iPhone,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-iphone" },
+        );
+        // Mac later forwards a different key — iPhone's local entry must win.
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          2_000,
+          { deepseekApiKey: "sk-deepseek-mac" },
+        );
+
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          "sk-deepseek-iphone",
+          "iPhone's locally-typed key must not be clobbered by Mac's propagation",
+        );
+        assert.equal(
+          h.clientDeepSeekKey.get(mac.id),
+          "sk-deepseek-mac",
+          "Mac sees its own key on its own ws",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "a late-joining device inherits the most-recent provider key",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-mac", kimiApiKey: "sk-kimi-mac" },
+        );
+
+        // iPhone joins after the keys were already forwarded.
+        const iPhone = h.connect("iphone");
+        assert.equal(h.clientDeepSeekKey.get(iPhone.id), "sk-deepseek-mac");
+        assert.equal(h.clientKimiKey.get(iPhone.id), "sk-kimi-mac");
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "switching project clears all provider keys (different account possible)",
+    () => {
+      const { root: projectA, cleanup: cleanA } = tmpHome();
+      const { root: projectB, cleanup: cleanB } = tmpHome();
+      try {
+        const h = new ServerHarness(projectA);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.setGameState(
+          mac,
+          { instances: { "manager#1": { roleType: "manager", nickname: "m" } } },
+          1_000,
+          { deepseekApiKey: "sk-deepseek-projA" },
+        );
+        // Sanity: both clients have the key.
+        assert.equal(h.clientDeepSeekKey.get(mac.id), "sk-deepseek-projA");
+        assert.equal(h.clientDeepSeekKey.get(iPhone.id), "sk-deepseek-projA");
+
+        h.setProject(mac, projectB);
+        assert.equal(
+          h.clientDeepSeekKey.get(mac.id),
+          undefined,
+          "sender's key cleared on project switch",
+        );
+        assert.equal(
+          h.clientDeepSeekKey.get(iPhone.id),
+          undefined,
+          "peer's key cleared on project switch",
+        );
+        // A late joiner to projectB MUST NOT inherit projectA's key.
+        const newDevice = h.connect("ipad");
+        assert.equal(
+          h.clientDeepSeekKey.get(newDevice.id),
+          undefined,
+          "late-joiner to projectB inherits no key from projectA",
+        );
+      } finally {
+        cleanA();
+        cleanB();
+      }
+    },
+  );
+});
+
+// ─── Bug 7: viewers stuck in stale "no primary" after release+reclaim ────
+
+describe("session presence — primary handover visibility", () => {
+  function lastSessionStatus(c: FakeClient) {
+    for (let i = c.received.length - 1; i >= 0; i--) {
+      const m = c.received[i];
+      if (m.type === "session_status") return m;
+    }
+    return undefined;
+  }
+
+  test(
+    "after release+claim, peer viewers learn the new primary's name",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac = h.connect("mac");
+        const iPhone = h.connect("iphone");
+        h.identify(mac, "client-mac", "Mac");
+        h.identify(iPhone, "client-iphone", "iPhone");
+        // Mac is primary (claimed first), iPhone is viewer.
+        assert.equal(lastSessionStatus(mac)?.mode, "primary");
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, "Mac");
+
+        // Mac releases. Both clients become viewers with no primary.
+        h.sessionRelease(mac);
+        assert.equal(lastSessionStatus(mac)?.mode, "viewer");
+        assert.equal(lastSessionStatus(mac)?.primaryDevice, undefined);
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, undefined);
+
+        // A new device claims by identifying.
+        const iPad = h.connect("ipad");
+        h.identify(iPad, "client-ipad", "iPad");
+
+        // iPad sees primary, Mac (existing viewer) MUST learn iPad is the
+        // new primary — without the broadcast fix, Mac stayed at "viewer
+        // / no primary" forever.
+        assert.equal(lastSessionStatus(iPad)?.mode, "primary");
+        assert.equal(lastSessionStatus(mac)?.mode, "viewer");
+        assert.equal(
+          lastSessionStatus(mac)?.primaryDevice,
+          "iPad",
+          "Mac (existing viewer) must learn iPad is now primary",
+        );
+        assert.equal(lastSessionStatus(iPhone)?.mode, "viewer");
+        assert.equal(lastSessionStatus(iPhone)?.primaryDevice, "iPad");
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  test(
+    "reconnect of the previous primary's clientId reclaims the slot and notifies peers",
+    () => {
+      const { root, cleanup } = tmpHome();
+      try {
+        const h = new ServerHarness(root);
+        const mac1 = h.connect("mac1");
+        const iPhone = h.connect("iphone");
+        h.identify(mac1, "client-mac", "Mac");
+        h.identify(iPhone, "client-iphone", "iPhone");
+        // Mac drops; iPhone is its only peer.
+        h.disconnect(mac1);
+        // Auto-promotion isn't modelled here (the fix targets identify
+        // path); simulate a clean release before reconnect.
+        h.activeSession = null;
+
+        // Mac comes back as new ws but same clientId. Should reclaim.
+        const mac2 = h.connect("mac2");
+        h.identify(mac2, "client-mac", "Mac");
+        assert.equal(lastSessionStatus(mac2)?.mode, "primary");
+        // iPhone (still viewer) must learn Mac is primary again.
+        assert.equal(
+          lastSessionStatus(iPhone)?.primaryDevice,
+          "Mac",
+          "iPhone must see Mac as the primary after Mac reclaims",
+        );
+      } finally {
+        cleanup();
+      }
+    },
+  );
+});
+
+// ─── push_facilitator_output broadcasts to peers ──────────────────────────
+
+describe("push_facilitator_output peer sync", () => {
+  test("when device A pushes output after server restart, device B gets facilitator_output_sync", () => {
+    // Scenario: server restarted (no latestFacilitatorOutput). Device A has
+    // local data and pushes it. Device B is already connected but has nothing.
+    // Previously Device B would never learn about A's push until reconnect.
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const deviceA = h.connect("device-a");
+      const deviceB = h.connect("device-b");
+
+      assert.equal(
+        deviceB.received.filter((m) => m.type === "facilitator_output_sync").length,
+        0,
+        "B has nothing yet",
+      );
+
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "build auth" }));
+
+      const bSync = deviceB.received.filter((m) => m.type === "facilitator_output_sync");
+      assert.equal(bSync.length, 1, "B must receive facilitator_output_sync after A's push");
+      assert.ok(bSync[0].outputJson, "sync must include outputJson");
+
+      // A itself must NOT receive an echo of its own push.
+      const aSync = deviceA.received.filter((m) => m.type === "facilitator_output_sync");
+      assert.equal(aSync.length, 0, "A must not receive a self-echo");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("push is ignored when server already has output (no double-write)", () => {
+    const { root, cleanup } = tmpHome();
+    try {
+      const h = new ServerHarness(root);
+      const deviceA = h.connect("device-a");
+      const deviceB = h.connect("device-b");
+
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "first" }));
+      const beforeCount = deviceB.received.filter((m) => m.type === "facilitator_output_sync").length;
+      assert.equal(beforeCount, 1);
+
+      // Second push — server has output, must be ignored.
+      h.pushFacilitatorOutput(deviceA, JSON.stringify({ quest: "second" }));
+      const afterCount = deviceB.received.filter((m) => m.type === "facilitator_output_sync").length;
+      assert.equal(afterCount, 1, "B must not receive a second sync from a rejected push");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─── deriveProjectMemoryFromBrief unit-level guarantees ───────────────────
+
+describe("deriveProjectMemoryFromBrief", () => {
+  test("includes the brief verbatim when short", () => {
+    const out = deriveProjectMemoryFromBrief(
+      "Photo gallery with auth.",
+      new Date("2026-05-08T10:00:00Z"),
+    );
+    assert.match(out, /Photo gallery with auth\./);
+    assert.match(out, /seeded 2026-05-08/);
+  });
+
+  test("caps long briefs at ~280 chars + ellipsis", () => {
+    const long = "a".repeat(500);
+    const out = deriveProjectMemoryFromBrief(long, new Date("2026-05-08T00:00:00Z"));
+    assert.ok(out.includes("…"), "long brief must end with an ellipsis");
+    // The summary line itself shouldn't blow past ~290 chars.
+    const summaryLine = out.split("\n")[1];
+    assert.ok(summaryLine.length <= 290, `summary line was ${summaryLine.length} chars`);
+  });
+
+  test("normalizes whitespace so multi-line briefs render cleanly", () => {
+    const messy = "Build a thing\n\n   that does\tstuff   ";
+    const out = deriveProjectMemoryFromBrief(messy, new Date("2026-05-08T00:00:00Z"));
+    assert.match(out, /Build a thing that does stuff/);
+    assert.ok(!out.match(/\n\n\n/), "no triple newlines");
+  });
+});

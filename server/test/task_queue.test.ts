@@ -339,3 +339,35 @@ test("critical inserted last still dequeues first", () => {
 
   assert.equal(queue.dequeue()?.id, "critical-1");
 });
+
+// ─── clear (project-switch path) ───────────────────────────────────────────
+
+test("clear() drops every task regardless of priority or owning ws", () => {
+  const queue = new TaskQueue();
+  queue.enqueue(makeTask("c", "critical", mockWs));
+  queue.enqueue(makeTask("h", "high", mockWs2));
+  queue.enqueue(makeTask("n", "normal", mockWs));
+  queue.enqueue(makeTask("l", "low", mockWs3));
+
+  const dropped = queue.clear();
+  assert.equal(dropped, 4);
+  assert.ok(queue.isEmpty);
+  assert.equal(queue.size, 0);
+  assert.equal(queue.dequeue(), undefined);
+});
+
+test("clear() on an empty queue is a no-op and returns 0", () => {
+  const queue = new TaskQueue();
+  assert.equal(queue.clear(), 0);
+  assert.ok(queue.isEmpty);
+});
+
+test("clear() leaves the queue usable for fresh enqueues", () => {
+  const queue = new TaskQueue();
+  queue.enqueue(makeTask("a", "high"));
+  queue.enqueue(makeTask("b", "high"));
+  queue.clear();
+  queue.enqueue(makeTask("c", "high"));
+  assert.equal(queue.dequeue()?.id, "c");
+  assert.ok(queue.isEmpty);
+});

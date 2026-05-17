@@ -37,6 +37,9 @@ import {
   type GameStateData,
   type HiredAgentInfo,
 } from "./agents.js";
+import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./board_persistence.js";
+import { MAX_AGENT_LOAD, pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
+import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
 import { KimiBackend } from "./kimi_backend.js";
@@ -47,26 +50,39 @@ import {
 
 const localGemini = new LocalGeminiRunner();
 import { runDungeon, getChallenge } from "./dungeon.js";
-import { FacilitatorRunner, type RunnerState } from "./facilitator/runner.js";
+import { FacilitatorRunner } from "./facilitator/runner.js";
 import { GeneratorRegistry } from "./facilitator/output_generator.js";
 import {
   ClaudeQuestLineGenerator,
   ClaudeMissionBriefingGenerator,
   ClaudeMilestoneTreeGenerator,
+  callClaude,
 } from "./facilitator/llm_generators.js";
 import {
   parseStartRequest as parseFacilitatorStart,
   handleStartRequest as handleFacilitatorStart,
 } from "./facilitator/ws_handler.js";
+import { generateTeamReactions } from "./facilitator/team_reactions.js";
+import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
+import { UsageLogger, usageLogFile, newRunId } from "./usage_log.js";
+import { AgentRunStore, agentRunsFile } from "./agent_run.js";
+import {
+  applyReactionsToChat,
+  deriveProjectMemoryFromBrief,
+  recordTaskCompletion,
+} from "./conversational_loop.js";
 import type { ClientMessage, ServerMessage, TaskCardData, TaskAttachmentData, TaskColumnKey, StickyColorKey, TaskPriorityKey, ConnectedClientInfo } from "./protocol.js";
 import {
   loadTraits, saveTraits, recordLesson, removeLesson,
-  formatTraitsForPrompt, getAllTraits,
+  formatTraitsForPrompt, getAllTraits, getLessonsForAgent,
   isConsentEnabled, setConsent, getAllConsent,
   type TraitStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
+import { ChatQueryRegistry } from "./chat_query_registry.js";
+import { CircuitBreaker } from "./circuit_breaker.js";
+import { HeartbeatMonitor } from "./heartbeat.js";
 import { ChatHistory } from "./chat_history.js";
 import { AgentContextPreparer } from "./agent_context.js";
 import { injectLearnedContext, applyLlmLessons, type LlmLesson } from "./personalization.js";
@@ -76,6 +92,7 @@ import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./heal
 import type { HealthItemId } from "./protocol.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { handleAdminRequest, recordLog, type AdminContext } from "./admin.js";
+import { runBuildDoctor, publishBuildFix } from "./build_doctor.js";
 
 // ─── Config (file → env → CLI flags, highest precedence last) ───────────────
 
@@ -297,9 +314,10 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       // Top-level assistant message — this is the addressed agent talking
       const text = extractText(asst);
       if (text) {
-        chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        const timestamp = new Date().toISOString();
+        chatHistory.add({ role: "assistant", text, agentId: targetAgentId, timestamp, id: asst.uuid });
         chatHistory.save(historyFilePath(PROJECT_CWD));
-        broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId });
+        broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId: targetAgentId, timestamp });
         clientSentAssistantMessage.set(ws, true);
       }
 
@@ -444,10 +462,11 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       // Fallback: if the agent finished without sending a visible chat message
       // (e.g. the model ended silently after tool use), surface the SDK result text.
       if (resultText && !clientSentAssistantMessage.get(ws)) {
+        const timestamp = new Date().toISOString();
         const fallbackId = `fallback-${Date.now()}`;
-        chatHistory.add({ role: "assistant", text: resultText, agentId: targetAgentId, timestamp: new Date().toISOString() });
+        chatHistory.add({ role: "assistant", text: resultText, agentId: targetAgentId, timestamp, id: fallbackId });
         chatHistory.save(historyFilePath(PROJECT_CWD));
-        broadcastAll({ type: "assistant_message_done", messageId: fallbackId, text: resultText, agentId: targetAgentId });
+        broadcastAll({ type: "assistant_message_done", messageId: fallbackId, text: resultText, agentId: targetAgentId, timestamp });
         dbg("info", "sdk", `Surfaced SDK result as fallback chat message (${resultText.length} chars)`);
       }
 
@@ -493,8 +512,80 @@ function historyFilePath(projectCwd: string): string {
   return join(homedir(), ".claude", "projects", cwdKey, "chat_history.json");
 }
 
+/** Returns the path where shared team memory is persisted for a given project dir. */
+function teamMemoryFile(projectCwd: string): string {
+  const cwdKey = projectCwd.replace(/\//g, "-").replace(/^-/, "");
+  return join(homedir(), ".claude", "projects", cwdKey, "team_memory.txt");
+}
+
+function loadTeamMemory(projectCwd: string): string | null {
+  try {
+    const f = teamMemoryFile(projectCwd);
+    return existsSync(f) ? readFileSync(f, "utf-8") : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveTeamMemory(projectCwd: string, memories: string): void {
+  try {
+    const f = teamMemoryFile(projectCwd);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, memories, "utf-8");
+  } catch (e) {
+    dbg("warn", "project", `Failed to save team memory: ${e}`);
+  }
+}
+
 const chatHistory = new ChatHistory();
 chatHistory.load(historyFilePath(PROJECT_CWD));
+
+// Tech-lead digest — append-only log of board completions. Replays from
+// disk on boot so the tech-lead agent has continuous awareness across
+// server restarts. Best-effort: any IO failure is swallowed by the module.
+const techLeadDigest = new TechLeadDigest(digestFile(PROJECT_CWD));
+techLeadDigest.loadFromDisk();
+
+// C.2 — Per-role usage log. Records {runId, role, taskType, agentId,
+// tokens, cost, duration, numTurns, numToolCalls, startedAt, completedAt}
+// per SDK query. Append-only JSONL, no in-memory aggregation; a future
+// analyzer reads the file to compute empirical baselines (median / p95
+// per `{role, taskType}`) for outlier detection in the facilitator UI.
+const usageLogger = new UsageLogger(usageLogFile(PROJECT_CWD));
+
+// C.2 — Persistent AgentRun entity. Records lifecycle of every SDK query
+// (status: running → completed / failed / interrupted / cancelled) so the
+// UI can answer "what happened while I was offline" and "did my task
+// actually run" after a server respawn. Replayed on boot; any leftover
+// `running` rows from a prior process are promoted to `interrupted` and
+// the affected agents are surfaced through the standard active-agents
+// broadcast (see boot sweep below).
+const agentRunStore = new AgentRunStore(agentRunsFile(PROJECT_CWD));
+agentRunStore.load();
+{
+  const orphaned = agentRunStore.markRunningAsInterrupted("server-respawn");
+  if (orphaned.length > 0) {
+    dbg("warn", "session",
+      `Boot sweep: ${orphaned.length} run(s) orphaned by previous process — marked interrupted`);
+    // Surface the partial text of each orphan into chatHistory so the
+    // chat flow itself shows what the agent had typed before the crash,
+    // not just the banner. Idempotent on re-boot via chatHistory.add's
+    // id dedupe (key = runId).
+    for (const r of orphaned) {
+      if (r.partialOutput && r.partialOutput.length > 0) {
+        chatHistory.add({
+          role: "assistant",
+          text: r.partialOutput,
+          agentId: r.agentId,
+          timestamp: r.completedAt ?? new Date().toISOString(),
+          id: r.runId,
+        });
+      }
+    }
+    // Persist once after the loop — avoids N writes for N orphans.
+    if (orphaned.length > 0) chatHistory.save(historyFilePath(PROJECT_CWD));
+  }
+}
 
 // Personalization layer (Phase 4.5.1) — extends each query's system prompt
 // with the agent's learned-context fragment. Kill-switch via env var.
@@ -583,6 +674,17 @@ const clientGameState = new WeakMap<WebSocket, GameStateData>();
 const clientDeepSeekKey = new WeakMap<WebSocket, string>();
 /** Per-client Kimi API key, forwarded from client SharedPreferences. */
 const clientKimiKey = new WeakMap<WebSocket, string>();
+/**
+ * Most-recent provider key seen on any ws. The server is single-tenant
+ * (no auth boundary), so a key the user typed on Mac is the same user's
+ * key everywhere. Late-joining devices inherit from these on connect, so
+ * iPhone that never typed the key can still dispatch to a DeepSeek agent
+ * that Mac hired. Local-typed keys on a peer always win — see
+ * `set_game_state` propagation. Cleared on `set_project` (different
+ * project may use a different account).
+ */
+let lastSeenDeepSeekKey: string | undefined;
+let lastSeenKimiKey: string | undefined;
 
 /**
  * Registry of non-streaming providers keyed by `AgentProviderType` enum index.
@@ -612,14 +714,6 @@ const nonStreamingProviders = new Map<number, NonStreamingProviderConfig>([
 ]);
 
 /**
- * Per-client Facilitator System runtime state. Survives across messages on
- * the same WS so subsequent ticks/switches see the same fire-log + style.
- * Lost on reconnect (acceptable for the vertical slice; persistence lands
- * with the personalization integration).
- */
-const clientFacilitatorState = new WeakMap<WebSocket, RunnerState>();
-
-/**
  * Singleton runner with LLM-backed generators wired in at boot.
  * Tests continue to use GeneratorRegistry with stubs via RunnerDeps injection.
  */
@@ -645,15 +739,38 @@ function gameStateFile(projectPath: string): string {
 function loadPersistedGameState(): void {
   const file = gameStateFile(PROJECT_CWD);
   if (!existsSync(file)) return;
+  let rawText: string;
   try {
-    const raw = JSON.parse(readFileSync(file, "utf-8")) as { fullState?: string; updatedAt?: number };
-    if (typeof raw.fullState === "string" && typeof raw.updatedAt === "number") {
-      latestFullGameState = raw.fullState;
-      latestStateUpdatedAt = raw.updatedAt;
-      dbg("info", "game", `Loaded persisted game state (updatedAt=${raw.updatedAt})`);
-    }
+    rawText = readFileSync(file, "utf-8");
   } catch (e) {
-    dbg("warn", "game", `Failed to load persisted game state: ${e}`);
+    dbg("warn", "game", `Failed to read persisted game state: ${e}`);
+    return;
+  }
+
+  const result = classifyPersistedGameState(rawText);
+  switch (result.kind) {
+    case "loaded":
+      latestFullGameState = result.envelope.fullState;
+      latestStateUpdatedAt = result.envelope.updatedAt;
+      dbg("info", "game", `Loaded persisted game state (updatedAt=${result.envelope.updatedAt})`);
+      return;
+    case "shape_mismatch":
+      dbg("warn", "game", `Persisted game state has wrong shape; ignoring (${result.reason})`);
+      return;
+    case "quarantine_outer":
+    case "quarantine_inner": {
+      const target = `${file}.broken-${Date.now()}`;
+      try { writeFileSync(target, rawText); } catch { /* best effort */ }
+      try { rmSync(file); } catch { /* best effort */ }
+      dbg(
+        "warn",
+        "game",
+        `Game state quarantined to ${target} (${result.kind === "quarantine_outer" ? "outer" : "inner"} parse: ${result.reason})`,
+      );
+      return;
+    }
+    case "fresh":
+      return;
   }
 }
 
@@ -721,6 +838,33 @@ const taskQueue = new TaskQueue();
 
 /** Global agent runner — manages independent sub-agent query() calls. */
 const agentRunner = new AgentRunner();
+
+/** Global chat query registry — tracks main manager queries so the UI
+ *  can list/cancel them. Disconnect cleanup goes through cancelForWs. */
+const chatQueryRegistry = new ChatQueryRegistry();
+
+// ─── Heartbeat ──────────────────────────────────────────────────────────────
+//
+// Server-driven WS ping cycle. TCP keep-alive isn't enough on mobile networks:
+// a Wi-Fi↔LTE handoff or NAT timeout can leave a half-open socket where neither
+// side notices the peer is gone. The monitor pings every HEARTBEAT_INTERVAL_MS,
+// and any client that misses MAX_MISSED_PINGS in a row gets terminated — fast
+// enough that "Active agents" UI doesn't lie about a long-dead peer, slow
+// enough to survive the occasional dropped packet.
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const heartbeatMonitor = new HeartbeatMonitor<WebSocket>({ maxMissedPings: 3 });
+const heartbeatTimer = setInterval(() => {
+  const { terminate, ping } = heartbeatMonitor.tick();
+  for (const ws of terminate) {
+    const info = connectedClients.get(ws);
+    dbg("warn", "ws", `Heartbeat timeout — terminating ${info?.deviceName ?? "unknown"} (${info?.platform ?? "?"})`);
+    try { ws.terminate(); } catch { /* socket already dead */ }
+  }
+  for (const ws of ping) {
+    try { ws.ping(); } catch { /* will be picked up on next tick */ }
+  }
+}, HEARTBEAT_INTERVAL_MS);
+heartbeatTimer.unref?.();
 
 /** Per-client flag: whether the manager is currently processing a query. */
 const managerBusy = new WeakMap<WebSocket, boolean>();
@@ -940,6 +1084,14 @@ function sendTraits(ws: WebSocket): void {
   send(ws, { type: "agent_traits", traits: getAllTraits(traitStore) });
 }
 
+/** Broadcast updated traits to every connected client after a write. */
+function broadcastTraits(): void {
+  const msg: ServerMessage = { type: "agent_traits", traits: getAllTraits(traitStore) };
+  for (const c of wss.clients) {
+    if (c.readyState === WebSocket.OPEN) send(c, msg);
+  }
+}
+
 /**
  * Record an auto-detected lesson from runtime signals (rework, errors, clean runs).
  * Broadcasts updated traits to the client.
@@ -959,7 +1111,7 @@ function autoLearnLesson(
   });
   dbg("info", "traits", `${type === "weakness" ? "⚡" : "✦"} [${agentId}] ${tag} (freq=${result.frequency}): ${lesson}`);
   sendDebug(ws, "info", "traits", `Lesson ${type === "weakness" ? "learned" : "confirmed"}: [${agentId}] ${lesson} (×${result.frequency})`);
-  sendTraits(ws);
+  broadcastTraits();
 }
 
 // ─── Activity log ───────────────────────────────────────────────────────────
@@ -1245,7 +1397,7 @@ function createDispatchServer(ws: WebSocket) {
       // Dispatch the sub-agent
       const projectMemory = clientProjectContext.get(ws);
       const gameState = clientGameState.get(ws);
-      const bypassPermissions = clientBypassPermissions.get(ws);
+      const bypassPermissions = clientBypassPermissions.get(ws) ?? true;
 
       const dispatchId = agentRunner.dispatch({
         agentId,
@@ -1256,6 +1408,10 @@ function createDispatchServer(ws: WebSocket) {
         projectMemory,
         traitStore,
         bypassPermissions,
+        techLeadDigest: techLeadDigest.renderForPrompt(15),
+        usageLogger,
+        agentRunStore,
+        role: roleTypeOf(agentId, gameState),
         onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
         onComplete: (result) => handleSubAgentComplete(ws, result),
         onError: (agId, dId, error) => handleSubAgentError(ws, agId, dId, error),
@@ -1269,6 +1425,7 @@ function createDispatchServer(ws: WebSocket) {
         task: taskDesc,
         priority,
       } as ServerMessage);
+      broadcastActiveAgents(ws);
 
       // Set agent status to running
       send(ws, {
@@ -1301,28 +1458,43 @@ function createDispatchServer(ws: WebSocket) {
 
   const teamStatusTool = tool(
     "team_status",
-    "Check which agents are currently busy, idle, or queued. Use this before dispatching to balance workload.",
+    `Check which agents are currently busy, idle, or at capacity. Use this before dispatching to balance workload. Each agent has a board card limit of ${MAX_AGENT_LOAD} concurrent in-progress tasks — do NOT dispatch to agents marked AT CAPACITY.`,
     {},
     async () => {
       const running = agentRunner.getStatus();
       const queuedCount = taskQueue.size;
+
+      // Count in-progress board cards per agent.
+      const cardLoad = new Map<string, number>();
+      for (const task of boardTasks.values()) {
+        if (task.column === "in_progress" || task.column === "testing") {
+          for (const aid of task.assignedAgents) {
+            cardLoad.set(aid, (cardLoad.get(aid) ?? 0) + 1);
+          }
+        }
+      }
 
       const lines: string[] = [];
 
       for (const agent of agentInfoForClient(ws)) {
         if (agent.roleType === "manager") continue;
         const runEntry = running.find(r => r.agentId === agent.id);
-        if (runEntry) {
-          const elapsed = Math.round(runEntry.elapsedMs / 1000);
-          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): BUSY — "${runEntry.task.slice(0, 60)}" (${elapsed}s)`);
-        } else {
-          lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): idle`);
-        }
+        const load = cardLoad.get(agent.id) ?? 0;
+        const atCap = load >= MAX_AGENT_LOAD;
+        const taskStatus = runEntry
+          ? `BUSY — "${runEntry.task.slice(0, 60)}" (${Math.round(runEntry.elapsedMs / 1000)}s)`
+          : "idle";
+        const loadStatus = atCap
+          ? `board: ${load}/${MAX_AGENT_LOAD} — ⛔ AT CAPACITY`
+          : `board: ${load}/${MAX_AGENT_LOAD}`;
+        lines.push(`- **${agent.id}** (${agent.name}, ${agent.role}): ${taskStatus} | ${loadStatus}`);
       }
 
       if (queuedCount > 0) {
         lines.push(`\n${queuedCount} task(s) in queue.`);
       }
+
+      lines.push(`\nRule: never assign to an agent with ${MAX_AGENT_LOAD}/${MAX_AGENT_LOAD} board cards.`);
 
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -1430,14 +1602,23 @@ function createDispatchServer(ws: WebSocket) {
     async (args) => {
       const task = boardTasks.get(args.taskId);
       if (!task) return { content: [{ type: "text" as const, text: `Unknown taskId: ${args.taskId}` }] };
+      let warning = "";
       if (args.assign) {
-        if (!task.assignedAgents.includes(args.agentId)) task.assignedAgents.push(args.agentId);
+        if (!task.assignedAgents.includes(args.agentId)) {
+          const currentLoad = [...boardTasks.values()].filter(
+            t => (t.column === "in_progress" || t.column === "testing") && t.assignedAgents.includes(args.agentId)
+          ).length;
+          if (currentLoad >= MAX_AGENT_LOAD) {
+            warning = ` ⚠️ WARNING: ${args.agentId} already has ${currentLoad}/${MAX_AGENT_LOAD} in-progress cards — they are AT CAPACITY. Assign to a free agent instead.`;
+          }
+          task.assignedAgents.push(args.agentId);
+        }
       } else {
         task.assignedAgents = task.assignedAgents.filter((a) => a !== args.agentId);
       }
       task.updatedAt = new Date().toISOString();
       broadcastBoardState();
-      return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.` }] };
+      return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.${warning}` }] };
     },
   );
 
@@ -1470,11 +1651,55 @@ function createDispatchServer(ws: WebSocket) {
   });
 }
 
+// ─── Sub-agent mirror helpers (pure, exported for tests) ─────────────────────
+
+/** Payload sent to the manager's chat to surface a sub-agent tool-use in a thread. */
+export function subAgentMirrorToolUse(
+  managerAgentId: string,
+  toolUseId: string,
+  toolName: string,
+  status: string,
+  threadId: string,
+) {
+  return {
+    type: "subagent_thread_event" as const,
+    agentId: managerAgentId,
+    toolUseId: toolUseId + "_m",
+    toolName,
+    status,
+    threadId,
+  };
+}
+
+/** Payload sent to the manager's chat to surface a sub-agent final message in a thread. */
+export function subAgentMirrorMessage(
+  managerAgentId: string,
+  messageId: string,
+  text: string,
+  threadId: string,
+) {
+  return { type: "assistant_message_done" as const, messageId: messageId + "_m", text, agentId: managerAgentId, threadId };
+}
+
+/** Payload sent to the manager's chat to surface a sub-agent streaming delta in a thread. */
+export function subAgentMirrorDelta(
+  managerAgentId: string,
+  text: string,
+  threadId: string,
+) {
+  return { type: "assistant_text" as const, text, isPartial: true as const, agentId: managerAgentId, threadId };
+}
+
 // ─── Sub-agent message handling ─────────────────────────────────────────────
 
 /** Handle real-time messages from independently running sub-agents. */
 function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: string, dispatchId: string): void {
-  if (ws.readyState !== WebSocket.OPEN) return;
+  // Do NOT gate on ws.readyState: a sub-agent dispatch survives client
+  // disconnect (C.2.1), but its final assistant message must still land in
+  // chatHistory and reach any other connected device via broadcastAll().
+  // Direct send(ws, ...) calls below are already individually no-ops when
+  // the owning ws is closed (see send() at the top of this file).
+  const managerAgentId = resolveRoleInstance(ws, "manager");
 
   try {
     switch (message.type) {
@@ -1493,6 +1718,8 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
               status,
               threadId: dispatchId,
             });
+            // Mirror to manager's chat so the captain sees sub-agent activity as a thread
+            broadcastAll(subAgentMirrorToolUse(managerAgentId, block.id, block.name, status, dispatchId));
             emitActivity(ws, agentId, "tool_use", status);
           }
         }
@@ -1500,9 +1727,12 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         // Forward text as chat messages from this agent
         const text = extractText(asst);
         if (text && !asst.parent_tool_use_id) {
-          chatHistory.add({ role: "assistant", text, agentId, timestamp: new Date().toISOString() });
+          const timestamp = new Date().toISOString();
+          chatHistory.add({ role: "assistant", text, agentId, timestamp, id: asst.uuid });
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId });
+          broadcastAll({ type: "assistant_message_done", messageId: asst.uuid, text, agentId, threadId: dispatchId, timestamp });
+          // Mirror result to manager's thread
+          broadcastAll(subAgentMirrorMessage(managerAgentId, asst.uuid, text, dispatchId));
         }
         break;
       }
@@ -1513,6 +1743,8 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
         const event = partial.event;
         if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
           broadcastAll({ type: "assistant_text", text: event.delta.text, isPartial: true, agentId, threadId: dispatchId });
+          // Mirror streaming to manager's thread
+          broadcastAll(subAgentMirrorDelta(managerAgentId, event.delta.text, dispatchId));
         }
         break;
       }
@@ -1537,6 +1769,9 @@ function handleSubAgentMessage(ws: WebSocket, message: SDKMessage, agentId: stri
 /** Handle sub-agent completion — enqueue result for manager acknowledgement. */
 function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
   dbg("info", "dispatch", `Agent ${result.agentId} completed (${result.dispatchId}): ${result.text.slice(0, 100)}`);
+
+  // Refresh "Active agents" UI — dispatch has left the runner.
+  broadcastActiveAgents(ws);
 
   // Set agent back to idle
   send(ws, {
@@ -1588,6 +1823,9 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
 /** Handle sub-agent error. */
 function handleSubAgentError(ws: WebSocket, agentId: string, dispatchId: string, error: string): void {
   dbg("error", "dispatch", `Agent ${agentId} error (${dispatchId}): ${error}`);
+
+  // Refresh "Active agents" UI — dispatch has left the runner.
+  broadcastActiveAgents(ws);
 
   send(ws, {
     type: "agent_status",
@@ -1669,6 +1907,69 @@ function sendQueueStatus(ws: WebSocket): void {
   } as ServerMessage);
 }
 
+/** Build the active_agents payload for a single ws — union of sub-agent
+ *  dispatches and main chat queries owned by this socket. */
+function buildActiveAgentsMessage(ws: WebSocket): ServerMessage {
+  const entries: Array<{
+    kind: "dispatch" | "chat";
+    id: string;
+    agentId: string;
+    task: string;
+    elapsedMs: number;
+  }> = [];
+  for (const r of agentRunner.getStatus()) {
+    entries.push({ kind: "dispatch", id: r.dispatchId, agentId: r.agentId, task: r.task, elapsedMs: r.elapsedMs });
+  }
+  for (const q of chatQueryRegistry.list({ ws })) {
+    entries.push({ kind: "chat", id: q.queryId, agentId: q.agentId, task: q.userMessage, elapsedMs: q.elapsedMs });
+  }
+  return { type: "active_agents", entries };
+}
+
+function broadcastActiveAgents(ws: WebSocket): void {
+  send(ws, buildActiveAgentsMessage(ws));
+}
+
+/**
+ * C.2 — persist a run's partial assistant text into `chatHistory` so it
+ * shows up in the chat flow itself (not just the interrupted-banner)
+ * on reconnect. Keyed by runId — idempotent if called twice for the
+ * same run (boot sweep + runtime catch can both fire). No-op for empty
+ * partials and explicit user cancels.
+ *
+ * Side-effects: appends to chatHistory, persists to disk, and broadcasts
+ * the new snapshot to every connected client so a still-online peer also
+ * sees the message land. Failures swallowed — losing one partial flush
+ * is acceptable; breaking a live error path is not.
+ */
+function commitPartialToChatHistory(
+  runId: string,
+  agentId: string,
+  partial: string | undefined,
+  status: "interrupted" | "failed" | "cancelled",
+  completedAt: string,
+): void {
+  if (!partial || partial.length === 0) return;
+  // Cancelled = explicit user action; they don't need to see what was
+  // being typed at the moment they hit stop. Interrupted / failed are
+  // the cases where the partial is genuinely useful.
+  if (status === "cancelled") return;
+  try {
+    chatHistory.add({
+      role: "assistant",
+      text: partial,
+      agentId,
+      timestamp: completedAt,
+      id: runId,
+    });
+    chatHistory.save(historyFilePath(PROJECT_CWD));
+    broadcastAll(chatHistory.snapshot());
+  } catch (e) {
+    dbg("warn", "session",
+      `commitPartialToChatHistory failed for run ${runId}: ${(e as Error).message}`);
+  }
+}
+
 // ─── Run query for a client ─────────────────────────────────────────────────
 
 /**
@@ -1684,6 +1985,29 @@ function detectImageMimeType(base64: string): "image/jpeg" | "image/png" | "imag
 }
 
 async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string, images?: string[]): Promise<void> {
+  let _queryTimedOut = false;
+  // C.2.4 hoisted so the catch block can read trip state when the SDK
+  // throws an AbortError after we tripped the breaker.
+  let _breaker: CircuitBreaker | null = null;
+  let _breakerTripped = false;
+  // C.2 usage log — captured at top of the function so both the success
+  // path (after the for-await loop) and the catch can write a usage entry
+  // for the same runId.
+  const _runId = newRunId("chat");
+  const _startedAt = new Date().toISOString();
+  let _resultDurationMs = 0;
+  let _resultCostUsd = 0;
+  let _resultNumTurns = 0;
+  // C.2 — open a persistent run record. Status flips to terminal in the
+  // success / catch / cancel paths below.
+  agentRunStore.start({
+    runId: _runId,
+    agentId: targetAgentId,
+    taskType: "chat",
+    userMessageSnippet: userMessage.slice(0, 200),
+    startedAt: _startedAt,
+  });
+  let _runFinalText = "";
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -1709,7 +2033,16 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     const projectMemory = clientProjectContext.get(ws);
     const agentTraits = formatTraitsForPrompt(traitStore, targetAgentId);
     const gameState = clientGameState.get(ws);
-    const systemPrompt = buildOfficePrompt(targetAgentId, projectMemory, agentTraits, gameState);
+    // Inject tech-lead digest only for the architect role; buildOfficePrompt
+    // gates on isTechLead internally so it's safe to render unconditionally.
+    const digestBlock = techLeadDigest.renderForPrompt(15);
+    const systemPrompt = buildOfficePrompt(
+      targetAgentId,
+      projectMemory,
+      agentTraits,
+      gameState,
+      digestBlock,
+    );
 
     // Append the personalization fragment. Always safe — falls back to vanilla
     // systemPrompt on any failure, controlled by PIXELCODE_PERSONALIZATION env var.
@@ -1773,6 +2106,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       ? { dispatch: createDispatchServer(ws) }
       : undefined;
 
+    const queryAbort = new AbortController();
     const queryOptions = {
       systemPrompt: finalSystemPrompt,
       model: targetModel,
@@ -1780,10 +2114,13 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       ...(mcpServers ? { mcpServers } : {}),
       cwd: PROJECT_CWD,
       includePartialMessages: true,
-      permissionMode: (clientBypassPermissions.get(ws) ? "bypassPermissions" : "acceptEdits") as "bypassPermissions" | "acceptEdits",
-      maxTurns: 50,
+      permissionMode: "bypassPermissions" as const,
+      // C.2.4 circuit breaker iteration cap. Was 50; lowered to 30 to match
+      // the documented safety-net policy ($5 cost cap + 30 turn cap).
+      maxTurns: 30,
       persistSession: true,
       continue: false,
+      abortController: queryAbort,
       ...(hasSession ? { resume: existingSessionId } : {}),
     };
 
@@ -1903,6 +2240,29 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
             options: queryOptions,
           });
 
+    // Abort after 5 minutes — a hung API call would lock withSessionLock
+    // forever, blocking every subsequent manager query.
+    const _queryTimeoutId = setTimeout(() => {
+      _queryTimedOut = true;
+      queryAbort.abort();
+    }, 5 * 60_000);
+
+    // Register in chat query registry so the "Active agents" UI can cancel
+    // this externally. Unregistered in finally.
+    const _chatQueryId = chatQueryRegistry.register({
+      ws,
+      agentId: targetAgentId,
+      userMessage,
+      abortController: queryAbort,
+    });
+    broadcastActiveAgents(ws);
+
+    // C.2.4 circuit breaker — safety net for runaway loops. Tracks
+    // cumulative cost + tool-call count from `assistant` SDK messages and
+    // aborts the AbortController if either cap is crossed.
+    _breaker = new CircuitBreaker(targetModel);
+
+    try {
     let messageCount = 0;
     for await (const message of q) {
       messageCount++;
@@ -1934,6 +2294,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       // Track inter-agent communication from delegation
       if (message.type === "assistant") {
         const asst = message as SDKAssistantMessage;
+        let _runAssistantText = "";
         for (const block of asst.message.content) {
           if (block.type === "tool_use" && (block.name === "Agent" || block.name === "Task")) {
             const input = block.input as Record<string, unknown>;
@@ -1943,7 +2304,48 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
               : targetAgentId;
             trackComm(ws, delegateFrom, delegateTo);
           }
+          // C.2 persistent run record — capture tool_use + assistant text
+          // for crash-recovery and reconnect snapshot. Text is appended
+          // (concatenated across blocks within a single SDK message); the
+          // running buffer is flushed to disk via `partialOutput` below.
+          if (block.type === "tool_use") {
+            agentRunStore.appendToolCall(_runId, {
+              name: block.name,
+              id: block.id,
+              at: new Date().toISOString(),
+            });
+          }
+          if (block.type === "text") {
+            _runAssistantText += block.text;
+          }
         }
+        if (_runAssistantText) {
+          _runFinalText += _runAssistantText;
+          agentRunStore.update(_runId, { partialOutput: _runFinalText });
+        }
+        // C.2.4 circuit breaker — observe usage + tool_use counts.
+        const trip = _breaker.observeAssistantMessage(
+          asst.message.usage as unknown as
+            | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+            | null
+            | undefined,
+          asst.message.content,
+        );
+        if (trip) {
+          _breakerTripped = true;
+          dbg("warn", "breaker", `Circuit breaker tripped: ${trip.message}`);
+          sendDebug(ws, "warn", "breaker", `Aborted: ${trip.message}`);
+          queryAbort.abort();
+        }
+      }
+
+      // C.2 usage log — capture totals from the SDK's terminating result
+      // message before handleSDKMessage forwards it to the client.
+      if (message.type === "result") {
+        const r = message as SDKResultMessage;
+        _resultDurationMs = r.duration_ms ?? 0;
+        _resultCostUsd = r.total_cost_usd ?? 0;
+        _resultNumTurns = r.num_turns ?? 0;
       }
 
       handleSDKMessage(ws, message, targetAgentId);
@@ -1957,10 +2359,126 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     sendDebug(ws, "info", "session",
       `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${currentSessionId?.slice(0, 12) ?? "?"}…`
     );
+
+    // C.2 usage log — append a completed-run entry. Breaker snapshot
+    // gives us cumulative tokens / tool-calls; result message gives us
+    // cost / duration / num_turns. Disk failures are swallowed inside
+    // the logger so a full disk never breaks a live query.
+    if (_breaker) {
+      const snap = _breaker.snapshot();
+      usageLogger.record({
+        runId: _runId,
+        role: roleTypeOf(targetAgentId, clientGameState.get(ws)),
+        taskType: "chat",
+        agentId: targetAgentId,
+        inputTokens: snap.inputTokens,
+        outputTokens: snap.outputTokens,
+        cacheCreationTokens: snap.cacheCreateTokens,
+        cacheReadTokens: snap.cacheReadTokens,
+        costUsd: _resultCostUsd || snap.costUsd,
+        durationMs: _resultDurationMs,
+        numTurns: _resultNumTurns,
+        numToolCalls: snap.toolCalls,
+        startedAt: _startedAt,
+        completedAt: new Date().toISOString(),
+      });
+      agentRunStore.update(_runId, {
+        status: "completed",
+        finalOutput: _runFinalText,
+        usage: {
+          inputTokens: snap.inputTokens,
+          outputTokens: snap.outputTokens,
+          cacheCreationTokens: snap.cacheCreateTokens,
+          cacheReadTokens: snap.cacheReadTokens,
+          costUsd: _resultCostUsd || snap.costUsd,
+          numTurns: _resultNumTurns,
+          numToolCalls: snap.toolCalls,
+        },
+      });
+    } else {
+      agentRunStore.update(_runId, {
+        status: "completed",
+        finalOutput: _runFinalText,
+      });
+    }
+    } finally {
+      clearTimeout(_queryTimeoutId);
+      chatQueryRegistry.unregister(_chatQueryId);
+      broadcastActiveAgents(ws);
+    }
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const breakerTrip = _breakerTripped ? _breaker?.snapshot().tripped ?? null : null;
+    const errMsg = breakerTrip
+      ? `Circuit breaker — ${breakerTrip.message}. Перезапустіть запит або змініть scope.`
+      : _queryTimedOut
+        ? `Manager query timed out after 5 minutes — API may be unresponsive`
+        : err instanceof Error ? err.message : String(err);
     dbg("error", "session", `Query failed: ${errMsg}`);
     sendDebug(ws, "error", "session", `Query FAILED: ${errMsg}`);
+
+    // C.2 usage log — interrupted runs still consume tokens and belong
+    // in the baseline distribution. Skip if the breaker never spun up
+    // (failure before the SDK loop even started, no usage to record).
+    if (_breaker) {
+      const snap = _breaker.snapshot();
+      usageLogger.record({
+        runId: _runId,
+        role: roleTypeOf(targetAgentId, clientGameState.get(ws)),
+        taskType: "chat",
+        agentId: targetAgentId,
+        inputTokens: snap.inputTokens,
+        outputTokens: snap.outputTokens,
+        cacheCreationTokens: snap.cacheCreateTokens,
+        cacheReadTokens: snap.cacheReadTokens,
+        costUsd: snap.costUsd,
+        durationMs: Date.now() - new Date(_startedAt).getTime(),
+        numTurns: _resultNumTurns,
+        numToolCalls: snap.toolCalls,
+        startedAt: _startedAt,
+        completedAt: new Date().toISOString(),
+      });
+    }
+    // C.2 — flip run status to its terminal form. Explicit user cancel
+    // (abort with neither breaker nor timeout) → cancelled; everything
+    // else interrupting the SDK loop → interrupted / failed.
+    {
+      const explicitCancel =
+        !_breakerTripped &&
+        !_queryTimedOut &&
+        err instanceof Error &&
+        (err.name === "AbortError" || /aborted/i.test(err.message));
+      const status = explicitCancel
+        ? "cancelled"
+        : _breakerTripped || _queryTimedOut
+          ? "interrupted"
+          : "failed";
+      const snap = _breaker?.snapshot();
+      const completedAt = new Date().toISOString();
+      agentRunStore.update(_runId, {
+        status,
+        reason: errMsg,
+        partialOutput: _runFinalText || undefined,
+        completedAt,
+        usage: snap
+          ? {
+              inputTokens: snap.inputTokens,
+              outputTokens: snap.outputTokens,
+              cacheCreationTokens: snap.cacheCreateTokens,
+              cacheReadTokens: snap.cacheReadTokens,
+              costUsd: snap.costUsd,
+              numTurns: _resultNumTurns,
+              numToolCalls: snap.toolCalls,
+            }
+          : undefined,
+      });
+      commitPartialToChatHistory(
+        _runId,
+        targetAgentId,
+        _runFinalText,
+        status,
+        completedAt,
+      );
+    }
     // If the persisted session is unrecoverable (binary deleted the JSONL,
     // version drift, etc.), drop it so the next query starts fresh. We detect
     // this by message text since the SDK doesn't expose a typed error.
@@ -1978,33 +2496,121 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
   }
 }
 
-// ─── Task Board (shared across all clients) ────────────────────────────────
+// ─── Task Board (persisted, shared across all clients) ─────────────────────
+//
+// On boot we hydrate from ~/.pixelcode/projects/{key}/board.json so a server
+// restart no longer wipes the kanban. Mutations go through `boardWriter`
+// which debounces disk writes (250ms) and writes atomically (tmp+rename).
+// `flushBoard()` is wired into the SIGINT/SIGTERM handlers below.
 
 const boardTasks: Map<string, TaskCardData> = new Map();
 let boardTaskCounter = 0;
+const boardWriter = new BoardWriter(PROJECT_CWD);
+
+/**
+ * Monotonically increasing revision. Bumped after every successful
+ * mutation, *before* commitBoardChange()/broadcast so all observers see the
+ * same number. Reconnecting clients can pass it back via
+ * `board_get_state{since}` to skip a full snapshot when nothing changed.
+ */
+let boardRevision = 0;
+
+(function hydrateBoard() {
+  const r = loadBoard(PROJECT_CWD);
+  for (const t of r.tasks) boardTasks.set(t.id, t);
+  boardTaskCounter = r.taskCounter;
+  if (r.source === "loaded") {
+    dbg("info", "board", `Loaded ${r.tasks.length} persisted task(s) (counter=${r.taskCounter})`);
+  } else if (r.source === "quarantined") {
+    dbg("warn", "board", `Persisted board was unreadable; quarantined to ${r.quarantinedAs ?? "?"}`);
+  }
+})();
+
+/** Bump revision and persist. Call exactly once per applied mutation. */
+function commitBoardChange(): void {
+  boardRevision++;
+  boardWriter.schedule(Array.from(boardTasks.values()));
+}
+
+/**
+ * Push a task into the tech-lead digest when it transitions into "done"
+ * and broadcast the freshened pulse so the Hub strip updates without a
+ * poll. Wraps the pure helper in `conversational_loop.ts` with the
+ * server-only side effects (websocket broadcast).
+ */
+function recordTaskCompletionToDigest(task: TaskCardData): void {
+  // Resolve the agent's top lesson (by frequency) at completion time,
+  // so the digest entry carries a concrete "they learned X" hint the
+  // tech-lead can ground its replies in. Strength lessons map to
+  // frequency-1 strengths; weakness lessons surface things to watch.
+  recordTaskCompletion(techLeadDigest, task, (agentId) => {
+    const lessons = getLessonsForAgent(traitStore, agentId);
+    const top = lessons[0];
+    if (!top) return undefined;
+    return {
+      tag: top.tag,
+      lesson: top.lesson,
+      type: top.type === "strength" ? "strength" : "weakness",
+    };
+  });
+  broadcastAll({
+    type: "tech_lead_pulse",
+    entries: techLeadDigest.recent(20),
+  } as ServerMessage);
+}
+
+export function flushBoard(): void {
+  boardWriter.flush();
+}
 
 function broadcastBoardState(): void {
   const tasks = Array.from(boardTasks.values());
-  const msg: ServerMessage = { type: "board_state", tasks };
+  const msg: ServerMessage = { type: "board_state", tasks, revision: boardRevision };
+  const payload = JSON.stringify(msg);
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(msg));
+      client.send(payload);
     }
   }
 }
 
-function sendBoardState(ws: WebSocket): void {
+function sendBoardState(ws: WebSocket, since?: number): void {
+  if (typeof since === "number" && since === boardRevision) {
+    // Client is already current — no need to ship every task again.
+    send(ws, { type: "board_state_unchanged", revision: boardRevision });
+    return;
+  }
   const tasks = Array.from(boardTasks.values());
-  send(ws, { type: "board_state", tasks });
+  send(ws, { type: "board_state", tasks, revision: boardRevision });
 }
 
 function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
+  // The transport-level JSON parse only narrows by `type`; the rest of the
+  // payload is untrusted (a stale client, a buggy script, or a future
+  // version can send unexpected shapes). Wrap the whole switch so a
+  // malformed message can never break the WebSocket — it just drops the
+  // command and logs.
+  try {
+    handleBoardMessageInner(ws, msg);
+  } catch (e) {
+    dbg("warn", "board", `Dropped malformed board message (${msg.type}): ${e}`);
+  }
+}
+
+function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
   switch (msg.type) {
     case "board_get_state":
-      sendBoardState(ws);
+      sendBoardState(ws, msg.since);
       break;
 
     case "board_create_task": {
+      // Reject empty or non-string titles silently — they correspond to a
+      // buggy client that should fix itself, but should not crash the
+      // server or pollute the board with blank cards.
+      if (typeof msg.title !== "string" || msg.title.trim().length === 0) {
+        dbg("warn", "board", `Rejected board_create_task: empty/invalid title`);
+        break;
+      }
       const id = `task_${++boardTaskCounter}_${Date.now()}`;
       const now = new Date().toISOString();
       const task: TaskCardData = {
@@ -2024,17 +2630,31 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       };
       boardTasks.set(id, task);
       dbg("info", "board", `Created task: ${task.title} (${id})`);
+      commitBoardChange();
       broadcastBoardState();
       break;
     }
 
     case "board_move_task": {
+      if (!isValidBoardColumn(msg.column)) {
+        dbg("warn", "board", `Rejected board_move_task: invalid column "${msg.column}"`);
+        break;
+      }
       const task = boardTasks.get(msg.taskId);
       if (task) {
         const oldColumn = task.column;
-        task.column = msg.column as TaskColumnKey;
+        task.column = msg.column;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Moved task ${msg.taskId}: ${oldColumn} → ${task.column}`);
+        commitBoardChange();
+        // Done is the archive — losing a completion in the 250ms debounce
+        // window (e.g. SIGKILL from launcher) destroys progress the player
+        // can't recreate. Skip the debounce on transitions into done so the
+        // file is written before we ack.
+        if (task.column === "done") boardWriter.flush();
+        if (task.column === "done" && oldColumn !== "done") {
+          recordTaskCompletionToDigest(task);
+        }
         broadcastBoardState();
 
         // Auto-enqueue board tasks moved to in_progress for the manager
@@ -2066,6 +2686,11 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       const task = boardTasks.get(msg.taskId);
       if (task) {
         const updates = msg.updates;
+        if (updates.column !== undefined && !isValidBoardColumn(updates.column)) {
+          dbg("warn", "board", `Rejected board_update_task: invalid column "${updates.column}"`);
+          break;
+        }
+        const oldColumn = task.column;
         if (updates.title !== undefined) task.title = updates.title;
         if (updates.description !== undefined) task.description = updates.description;
         if (updates.priority !== undefined) task.priority = updates.priority;
@@ -2073,6 +2698,11 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         if (updates.column !== undefined) task.column = updates.column;
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Updated task ${msg.taskId}`);
+        commitBoardChange();
+        if (task.column === "done") boardWriter.flush();
+        if (task.column === "done" && oldColumn !== "done") {
+          recordTaskCompletionToDigest(task);
+        }
         broadcastBoardState();
       }
       break;
@@ -2081,6 +2711,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
     case "board_delete_task": {
       if (boardTasks.delete(msg.taskId)) {
         dbg("info", "board", `Deleted task ${msg.taskId}`);
+        commitBoardChange();
         broadcastBoardState();
       }
       break;
@@ -2098,6 +2729,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
         }
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `${msg.assign ? "Assigned" : "Unassigned"} ${msg.agentId} on task ${msg.taskId}`);
+        commitBoardChange();
         broadcastBoardState();
       }
       break;
@@ -2122,6 +2754,7 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       task.attachments = [...(task.attachments ?? []), attachment];
       task.updatedAt = attachment.uploadedAt;
       dbg("info", "board", `Added attachment "${msg.name}" (${msg.sizeBytes}B) to ${msg.taskId}`);
+      commitBoardChange();
       broadcastBoardState();
       break;
     }
@@ -2134,8 +2767,82 @@ function handleBoardMessage(ws: WebSocket, msg: ClientMessage): void {
       if (task.attachments.length !== before) {
         task.updatedAt = new Date().toISOString();
         dbg("info", "board", `Removed attachment ${msg.attachmentId} from ${msg.taskId}`);
+        commitBoardChange();
         broadcastBoardState();
       }
+      break;
+    }
+
+    case "board_seed_batch": {
+      // Atomic insert. planSeedBatch is pure: it validates every entry
+      // first; if any fail, no state mutates. This protects the kanban
+      // from the partial-seed failure mode where the facilitator
+      // pipeline could leave 4 of 10 expected tasks before erroring.
+      const plan = planSeedBatch(msg.tasks ?? [], {
+        counter: boardTaskCounter,
+        now: () => new Date(),
+        idToken: () => Date.now(),
+        sourceTag: msg.source,
+      });
+      if (!plan.ok) {
+        dbg(
+          "warn",
+          "board",
+          `Rejected board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.errors.length} validation error(s)`,
+        );
+        send(ws, {
+          type: "board_seed_batch_result",
+          batchId: msg.batchId,
+          ok: false,
+          committedIds: [],
+          errors: plan.errors,
+        });
+        break;
+      }
+      // Commit + auto-dispatch. The manager-LLM was previously the only
+      // one who could route a freshly-seeded backlog onto agents; this
+      // MVP picks deterministic assignees so the daily flow doesn't
+      // demand 10 manual drags after every facilitator intake.
+      const gs = clientGameState.get(ws);
+      const load = activeAgentTasks.get(ws);
+      const dispatchSummary: string[] = [];
+      for (const t of plan.tasks) {
+        boardTasks.set(t.id, t);
+        if (gs && shouldAutoDispatch(t)) {
+          const pick = pickAssignee(t, {
+            instances: gs.instances,
+            load: load ?? new Map<string, number>(),
+            enabled: true,
+          });
+          if (pick) {
+            t.assignedAgents = [pick];
+            t.column = "in_progress";
+            // Bump the in-memory load so the next task in the same
+            // batch sees the updated picture and we spread the work.
+            const tasks = activeAgentTasks.get(ws) ?? new Map();
+            tasks.set(pick, (tasks.get(pick) ?? 0) + 1);
+            activeAgentTasks.set(ws, tasks);
+            dispatchSummary.push(`${t.id}→${pick}`);
+          }
+        }
+      }
+      boardTaskCounter = plan.nextCounter;
+      dbg(
+        "info",
+        "board",
+        `Committed board_seed_batch (batchId=${msg.batchId ?? "-"}): ${plan.tasks.length} task(s)${
+          dispatchSummary.length ? `; auto-dispatched: ${dispatchSummary.join(", ")}` : ""
+        }`,
+      );
+      commitBoardChange();
+      broadcastBoardState();
+      send(ws, {
+        type: "board_seed_batch_result",
+        batchId: msg.batchId,
+        ok: true,
+        committedIds: plan.tasks.map((t) => t.id),
+        errors: [],
+      });
       break;
     }
   }
@@ -2232,6 +2939,7 @@ let tailscaleUrl: string | null = null;
 /** Shared HTTP request handler — serves /admin/* and OTA artifacts (IPA + manifest). */
 function makeOtaHandler() {
   return async (req: IncomingMessage, res: ServerResponse) => {
+    try {
     const url = req.url ?? "/";
 
     // Admin UI + API takes precedence over OTA. Loopback-only inside the handler.
@@ -2292,6 +3000,13 @@ function makeOtaHandler() {
       "Content-Type": contentType[ext] ?? "application/octet-stream",
     });
     res.end(readFileSync(filePath));
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500);
+        res.end("Internal server error");
+      }
+      console.error("[server] HTTP handler error:", err);
+    }
   };
 }
 
@@ -2753,6 +3468,41 @@ async function androidDeployListDevices(ws: WebSocket): Promise<void> {
   send(ws, { type: "android_deploy_status", subtype: "devices_list", devices } as any);
 }
 
+// ─── Android device watcher (push on change, 3 s poll) ────────────────────
+
+const activeDeviceWatchers = new Map<WebSocket, ReturnType<typeof setInterval>>();
+const lastSentDeviceList = new Map<WebSocket, string>();
+
+async function androidDeployWatchDevices(ws: WebSocket): Promise<void> {
+  androidDeployUnwatchDevices(ws);
+  const adbPath = findAdb();
+
+  const poll = async () => {
+    try {
+      const devices = adbPath ? await listAndroidDevices(adbPath) : [];
+      const json = JSON.stringify(devices);
+      if (json !== lastSentDeviceList.get(ws)) {
+        lastSentDeviceList.set(ws, json);
+        send(ws, { type: "android_deploy_status", subtype: "devices_list", devices } as any);
+      }
+    } catch {
+      // silently skip failed poll — next tick will retry
+    }
+  };
+
+  await poll();
+  activeDeviceWatchers.set(ws, setInterval(poll, 3000));
+}
+
+function androidDeployUnwatchDevices(ws: WebSocket): void {
+  const timer = activeDeviceWatchers.get(ws);
+  if (timer !== undefined) {
+    clearInterval(timer);
+    activeDeviceWatchers.delete(ws);
+    lastSentDeviceList.delete(ws);
+  }
+}
+
 /** Try to install APK silently via adb. Returns true on success. */
 async function tryAdbInstall(ws: WebSocket, adbPath: string, apkPath: string, serial: string): Promise<boolean> {
   sendAndroidDeployLog(ws, `Встановлення на "${serial}"...`);
@@ -2829,38 +3579,80 @@ async function androidDeployStart(ws: WebSocket, requestedSerial?: string): Prom
 
   const flutterBin = findFlutter() ?? "flutter";
 
-  sendAndroidDeployLog(ws, "Побудова Android APK...");
-  sendAndroidDeployLog(ws, `Команда: ${flutterBin} build apk --release`);
+  const runFlutterBuild = async (): Promise<{ exitCode: number | null; log: string }> => {
+    sendAndroidDeployLog(ws, "Побудова Android APK...");
+    sendAndroidDeployLog(ws, `Команда: ${flutterBin} build apk --release`);
 
-  const buildProcess = spawn(flutterBin, ["build", "apk", "--release"], {
-    cwd: PROJECT_CWD,
-  });
-  activeAndroidDeployProcess.set(ws, buildProcess);
+    const proc = spawn(flutterBin, ["build", "apk", "--release"], { cwd: PROJECT_CWD });
+    activeAndroidDeployProcess.set(ws, proc);
 
-  buildProcess.stdout.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (line.trim()) sendAndroidDeployLog(ws, line.trim());
-    }
-  });
-  buildProcess.stderr.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (line.trim()) sendAndroidDeployError(ws, line.trim());
-    }
-  });
+    const logLines: string[] = [];
 
-  const buildExitCode = await new Promise<number | null>((resolve) => {
-    buildProcess.on("close", resolve);
-    buildProcess.on("error", (err) => {
-      sendAndroidDeployError(ws, `Помилка при побудові: ${err.message}`);
-      resolve(1);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        const t = line.trim();
+        if (t) { sendAndroidDeployLog(ws, t); logLines.push(t); }
+      }
     });
-  });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      for (const line of chunk.toString().split("\n")) {
+        const t = line.trim();
+        if (t) { sendAndroidDeployError(ws, t); logLines.push(t); }
+      }
+    });
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      proc.on("close", resolve);
+      proc.on("error", (err) => {
+        sendAndroidDeployError(ws, `Помилка при побудові: ${err.message}`);
+        resolve(1);
+      });
+    });
+
+    return { exitCode, log: logLines.join("\n") };
+  };
+
+  let { exitCode: buildExitCode, log: buildLog } = await runFlutterBuild();
 
   if (buildExitCode !== 0) {
-    sendAndroidDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
-    send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
-    activeAndroidDeployProcess.delete(ws);
-    return;
+    sendAndroidDeployLog(ws, "");
+    sendAndroidDeployLog(ws, "── Build Doctor ─────────────────────────────────");
+    sendAndroidDeployLog(ws, "Білд впав. Запускаю AI Doctor для діагностики...");
+
+    const doctorResult = await runBuildDoctor(
+      buildLog,
+      PROJECT_CWD,
+      (msg) => sendAndroidDeployLog(ws, msg),
+    );
+
+    if (doctorResult.fixed) {
+      sendAndroidDeployLog(ws, "");
+      sendAndroidDeployLog(ws, "── Retry Build ──────────────────────────────────");
+      sendAndroidDeployLog(ws, "Фікс застосовано. Повторний білд...");
+      sendAndroidDeployLog(ws, "");
+
+      ({ exitCode: buildExitCode, log: buildLog } = await runFlutterBuild());
+    }
+
+    if (buildExitCode !== 0) {
+      sendAndroidDeployError(ws, `Помилка при побудові. Код виходу: ${buildExitCode}`);
+      send(ws, { type: "android_deploy_status", subtype: "complete", success: false } as any);
+      activeAndroidDeployProcess.delete(ws);
+      return;
+    }
+
+    sendAndroidDeployLog(ws, "");
+    sendAndroidDeployLog(ws, "Retry успішний!");
+    sendAndroidDeployLog(ws, "");
+
+    // Publish doctor's changes to git
+    sendAndroidDeployLog(ws, "── Git ──────────────────────────────────────────");
+    await publishBuildFix(
+      PROJECT_CWD,
+      doctorResult.summary,
+      (msg) => sendAndroidDeployLog(ws, msg),
+    );
+    sendAndroidDeployLog(ws, "");
   }
 
   const apkCandidates = [
@@ -3190,7 +3982,10 @@ function buildHealthContext(): HealthContext {
 
 /** Unpublish mDNS, give "goodbye" packets a moment to fly, then exit with `code`. */
 function gracefulExit(code: number, reason: string): void {
-  dbg("info", "shutdown", `${reason} (exit=${code}) — unpublishing mDNS…`);
+  dbg("info", "shutdown", `${reason} (exit=${code}) — flushing board, unpublishing mDNS…`);
+  // Flush any pending debounced board writes before exit so the last user
+  // action survives a Ctrl+C.
+  try { flushBoard(); } catch (e) { dbg("warn", "shutdown", `flushBoard failed: ${e}`); }
   let exited = false;
   const doExit = () => { if (!exited) { exited = true; process.exit(code); } };
   bonjour.unpublishAll(() => {
@@ -3206,6 +4001,23 @@ function shutdownMdns(signal: string): void {
 
 process.on("SIGINT", () => shutdownMdns("SIGINT"));
 process.on("SIGTERM", () => shutdownMdns("SIGTERM"));
+
+// Prevent unhandled promise rejections from crashing the server —
+// individual handler failures (bad JSON, SDK timeout) must not kill all
+// connected sessions.
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] Unhandled rejection:", reason);
+});
+
+// For uncaught synchronous exceptions the process is in undefined state;
+// flush the board and let the launcher restart.
+let _uncaughtExiting = false;
+process.on("uncaughtException", (err) => {
+  if (_uncaughtExiting) return;
+  _uncaughtExiting = true;
+  console.error("[server] Uncaught exception:", err);
+  gracefulExit(1, `uncaughtException: ${err.message}`);
+});
 
 // ─── Admin context (status / config / restart / stop / logs) ────────────────
 
@@ -3226,12 +4038,15 @@ adminContext = {
   getConnectedClients: () => buildClientsList(),
   getMdnsActive: () => mdnsActive,
   getTailscaleUrl: () => tailscaleUrl,
+  getQueuedTaskCount: () => taskQueue.size,
+  getActiveAgentCount: () => agentRunner.getStatus().length,
   scheduleExit: (code, reason) => {
     // Defer slightly so the HTTP response flushes before we tear down.
     setTimeout(() => gracefulExit(code, reason), 100);
   },
 };
 process.on("exit", () => {
+  try { flushBoard(); } catch { /* best effort */ }
   bonjour.unpublishAll();
   bonjour.destroy();
 });
@@ -3252,6 +4067,17 @@ function broadcastExcept(sender: WebSocket, msg: ServerMessage): void {
   }
 }
 
+/**
+ * Apply a project-memory update to every currently-connected client.
+ * `clientProjectContext` is a per-ws WeakMap, but PROJECT_CWD is global —
+ * if we only set on the sender, peer devices keep stale/empty memory until
+ * they reconnect, and their next agent dispatch literally asks
+ * "what project are we in?". Mirrors `chatHistory.snapshot` broadcasts.
+ */
+function setTeamMemoryEverywhere(memory: string): void {
+  for (const client of wss.clients) clientProjectContext.set(client, memory);
+}
+
 /** Send the full chat history snapshot to a single client (e.g. on connect).
  *  Always sent — even when empty — so the client can transition out of the
  *  `syncing` state on resumed sessions with no prior messages. */
@@ -3266,10 +4092,20 @@ console.log(`   Config file:     ${__configSource.filePath}`);
 console.log(`   Roles available: ${Object.keys(roleCatalog).join(", ")}`);
 console.log(`   Trait memory:    ${getAllTraits(traitStore).length} lessons loaded`);
 
+wss.on("error", (err) => {
+  console.error("[server] WebSocketServer error:", err);
+});
+httpServer.on("error", (err) => {
+  console.error("[server] HTTP server error:", err);
+});
+
 wss.on("connection", (ws, request) => {
   wsClientsReady = true;
   const remoteAddress = request.socket.remoteAddress ?? "unknown";
   dbg("info", "ws", `Client connected from ${remoteAddress}`);
+
+  heartbeatMonitor.onConnect(ws);
+  ws.on("pong", () => heartbeatMonitor.onPong(ws));
 
   // Register with placeholder info until client_info arrives
   connectedClients.set(ws, {
@@ -3310,6 +4146,13 @@ wss.on("connection", (ws, request) => {
   }
   sendBoardState(ws);
   sendTraits(ws);
+  // Restore shared team memory for this project so every client (incl. mobile) gets captain context
+  const savedMemory = loadTeamMemory(PROJECT_CWD);
+  if (savedMemory) clientProjectContext.set(ws, savedMemory);
+  // Inherit any provider keys another device on this server already
+  // forwarded. Single-tenant model: keys identify the user, not the ws.
+  if (lastSeenDeepSeekKey) clientDeepSeekKey.set(ws, lastSeenDeepSeekKey);
+  if (lastSeenKimiKey) clientKimiKey.set(ws, lastSeenKimiKey);
   // Send existing chat history so new clients are in sync
   sendChatHistory(ws);
   // Send stored game state for cross-device sync
@@ -3319,6 +4162,17 @@ wss.on("connection", (ws, request) => {
       fullState: latestFullGameState,
       stateUpdatedAt: latestStateUpdatedAt,
     } as any);
+    // Inherit the authoritative roster into this ws's clientGameState
+    // so its first dispatch/validation reads a real roster instead of
+    // undefined. Without this, peers that join after a hire have an
+    // empty server-side roster until they send their own set_game_state.
+    try {
+      const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
+      if (parsed.instances) clientGameState.set(ws, parsed as GameStateData);
+    } catch {
+      // Persisted blob is malformed; leave clientGameState unset so the
+      // first set_game_state from this ws seeds it cleanly.
+    }
     dbg("info", "game", `Sent stored game state to new client (updatedAt=${latestStateUpdatedAt})`);
   }
   ws.on("message", async (data) => {
@@ -3363,11 +4217,11 @@ wss.on("connection", (ws, request) => {
             ? `${msg.content}\n\n[System note: This task may exceed your current skill level. If you cannot complete it confidently, say so explicitly and describe what skill level would be needed.]`
             : msg.content;
 
-          // Store user message and broadcast snapshot to all other clients.
-          // (Sender already added the message optimistically in the UI.)
-          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), ...(images?.length ? { images } : {}) });
+          // Store user message and broadcast snapshot to all clients (including sender,
+          // so the sender receives the canonical server id to replace its optimistic message).
+          chatHistory.add({ role: "user", text: msg.content, agentId: targetAgent, timestamp: new Date().toISOString(), id: msg.localId, ...(images?.length ? { images } : {}) });
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          broadcastExcept(ws, chatHistory.snapshot());
+          broadcastAll(chatHistory.snapshot());
 
           // Enqueue instead of blocking — manager stays available for new messages
           taskQueue.enqueue({
@@ -3404,7 +4258,9 @@ wss.on("connection", (ws, request) => {
           persistSession();
           chatHistory.clear();
           chatHistory.save(historyFilePath(PROJECT_CWD));
-          // Broadcast cleared init to all clients so every device resets.
+          // Broadcast cleared init + empty chat_history to all clients so
+          // every device's chat panel clears — without chat_history peers
+          // keep showing the old messages until reconnect.
           for (const c of wss.clients) {
             if (c.readyState !== WebSocket.OPEN) continue;
             send(c as WebSocket, {
@@ -3413,6 +4269,7 @@ wss.on("connection", (ws, request) => {
               agents: agentInfoForClient(c as WebSocket),
               workingDirectory: PROJECT_CWD,
             });
+            sendChatHistory(c as WebSocket);
           }
           break;
         }
@@ -3478,29 +4335,102 @@ wss.on("connection", (ws, request) => {
           dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
-          // Clear per-client UI/state
-          clientProjectContext.delete(ws);
-          clientGameState.delete(ws);
-          getCommLog(ws).length = 0;
-          getMetrics(ws).clear();
-          getActiveTasks(ws).clear();
-          getAgentMap(ws).clear();
-          getEmittedTools(ws).clear();
-          // Send fresh init with the resolved session for this project
-          send(ws, {
-            type: "init",
-            sessionId: currentSessionId ?? "pending",
-            agents: agentInfoForClient(ws),
-            workingDirectory: PROJECT_CWD,
-          });
+          // Reload other per-project caches so peers don't read the OLD
+          // project's roster / facilitator output on the new project — and
+          // so the next persist doesn't clobber the new project's disk
+          // file with stale data from the previous one.
+          latestFullGameState = null;
+          latestStateUpdatedAt = 0;
+          latestFacilitatorOutput = null;
+          loadPersistedGameState();
+          loadPersistedFacilitatorOutput();
+          // Cancel in-flight agents and drop queued tasks: they reference
+          // the OLD PROJECT_CWD via the runner's read-at-dispatch-time
+          // global, so executing them now would run under the wrong
+          // project's filesystem. The user has to redispatch — small UX
+          // cost vs. the alternative of running rm/edit in the wrong tree.
+          agentRunner.cancelAll();
+          const dropped = taskQueue.clear();
+          if (dropped > 0) {
+            dbg("info", "queue", `Dropped ${dropped} queued task(s) on project switch`);
+          }
+          // Kill in-flight iOS / Android deploy processes — their cwd and
+          // build output paths point at projectA, so leaving them running
+          // after a switch produces artifacts attributed to projectB.
+          for (const peer of wss.clients) {
+            if (peer.readyState !== WebSocket.OPEN) continue;
+            iosDeployCancel(peer);
+            androidDeployCancel(peer);
+          }
+          // PROJECT_CWD is global — every connected client now lives in the
+          // new project. Clear per-ws scratch + restore team memory for ALL
+          // peers, not just the sender. Otherwise iPhone keeps operating on
+          // the OLD project's metrics/log/active-tasks until it reconnects,
+          // and its agent dispatches grab the wrong project context.
+          const newMemory = loadTeamMemory(PROJECT_CWD);
+          // Different project may belong to a different account; force each
+          // client to re-supply provider keys instead of leaking the prior
+          // project's keys into a context they may not own.
+          lastSeenDeepSeekKey = undefined;
+          lastSeenKimiKey = undefined;
+          for (const peer of wss.clients) {
+            if (peer.readyState !== WebSocket.OPEN) continue;
+            if (newMemory) clientProjectContext.set(peer, newMemory);
+            else clientProjectContext.delete(peer);
+            clientGameState.delete(peer);
+            getCommLog(peer).length = 0;
+            getMetrics(peer).clear();
+            getActiveTasks(peer).clear();
+            getAgentMap(peer).clear();
+            getEmittedTools(peer).clear();
+            clientDeepSeekKey.delete(peer);
+            clientKimiKey.delete(peer);
+            // In-flight flags reset because we just cancelled every running
+            // agent above. Without these resets a peer's manager appears
+            // busy forever (manager_busy guard never lifts) and the
+            // first message after switch can be silently swallowed.
+            clientSentAssistantMessage.delete(peer);
+            managerBusy.delete(peer);
+            // Tool-use → agent map is keyed by tool_use_id from the OLD
+            // project's running agents; nothing in it is reachable now.
+            toolUseIdToAgent.get(peer)?.clear();
+            // Activity ring is the UI log for the prior project.
+            clientQueryActivities.get(peer)?.splice(0);
+            // Re-init every peer so their UI re-syncs to the new project.
+            send(peer, {
+              type: "init",
+              sessionId: currentSessionId ?? "pending",
+              agents: agentInfoForClient(peer),
+              workingDirectory: PROJECT_CWD,
+            });
+            sendTraits(peer);
+            // Push the new project's roster + facilitator output so peers
+            // don't keep the prior project's UI state until first reload.
+            if (latestFullGameState) {
+              send(peer, {
+                type: "game_state_sync",
+                fullState: latestFullGameState,
+                stateUpdatedAt: latestStateUpdatedAt,
+              } as any);
+              try {
+                const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
+                if (parsed.instances) clientGameState.set(peer, parsed as GameStateData);
+              } catch { /* malformed blob; let next set_game_state seed it */ }
+            }
+            if (latestFacilitatorOutput) {
+              send(peer, { type: "facilitator_output_sync", ...(latestFacilitatorOutput as object) } as any);
+            }
+          }
           sendDebug(ws, "info", "project", `Switched to: ${newPath}`);
-          sendTraits(ws);
+          // Refresh chat history view for everyone — it just changed.
+          broadcastAll(chatHistory.snapshot());
           break;
         }
 
         case "set_project_context": {
           const memories = (msg as { type: "set_project_context"; memories: string }).memories;
-          clientProjectContext.set(ws, memories);
+          setTeamMemoryEverywhere(memories);
+          saveTeamMemory(PROJECT_CWD, memories);
           dbg("info", "project", `Project memory set (${memories.length} chars)`);
           sendDebug(ws, "info", "project", `Team memory loaded (${memories.length} chars)`);
           break;
@@ -3510,9 +4440,70 @@ wss.on("connection", (ws, request) => {
 
         case "set_game_state": {
           const gs: GameStateData = { instances: msg.instances };
+
+          // Stash any newly-arrived API keys before validating so an
+          // instance whose key arrives in the same message is accepted.
+          // Propagate to every peer ws too: the keys identify the *user*
+          // (this server is single-tenant, no auth boundary). Otherwise
+          // Mac types the key, hires a deepseek agent → broadcast lands
+          // on iPhone, but iPhone's `clientDeepSeekKey[ws]` is empty so
+          // iPhone's first dispatch to that agent fails server-side.
+          // Don't overwrite a peer's existing key — they may have typed
+          // their own in Settings; let an explicit local entry win.
+          if (msg.deepseekApiKey) {
+            clientDeepSeekKey.set(ws, msg.deepseekApiKey);
+            lastSeenDeepSeekKey = msg.deepseekApiKey;
+            for (const peer of wss.clients) {
+              if (peer === ws || peer.readyState !== WebSocket.OPEN) continue;
+              if (!clientDeepSeekKey.has(peer)) clientDeepSeekKey.set(peer, msg.deepseekApiKey);
+            }
+          }
+          if (msg.kimiApiKey) {
+            clientKimiKey.set(ws, msg.kimiApiKey);
+            lastSeenKimiKey = msg.kimiApiKey;
+            for (const peer of wss.clients) {
+              if (peer === ws || peer.readyState !== WebSocket.OPEN) continue;
+              if (!clientKimiKey.has(peer)) clientKimiKey.set(peer, msg.kimiApiKey);
+            }
+          }
+
+          // Pre-validate the payload — bad role types, two managers,
+          // out-of-range stats, or non-Claude hires without a session key
+          // are rejected up front. The user gets a clear, structured
+          // error instead of a cryptic dispatch-time failure.
+          const validation = validateGameState(gs, {
+            hasDeepseekKey: !!clientDeepSeekKey.get(ws),
+            hasKimiKey: !!clientKimiKey.get(ws),
+          });
+          if (!validation.ok) {
+            send(ws, { type: "set_game_state_error", errors: validation.errors });
+            dbg(
+              "warn",
+              "game",
+              `Rejected set_game_state: ${validation.errors.length} validation error(s)`,
+            );
+            for (const e of validation.errors) {
+              dbg("warn", "game", `  ${e.code} on ${e.instanceId}: ${e.message}`);
+            }
+            break;
+          }
+
+          // Diff against the previous accepted roster so we can clean up
+          // any in-flight bookkeeping for instances that just got fired.
+          const prevState = clientGameState.get(ws);
+          const fired = firedInstanceIds(prevState, gs);
+
           clientGameState.set(ws, gs);
-          if (msg.deepseekApiKey) clientDeepSeekKey.set(ws, msg.deepseekApiKey);
-          if (msg.kimiApiKey) clientKimiKey.set(ws, msg.kimiApiKey);
+
+          if (fired.length > 0) {
+            const tasks = activeAgentTasks.get(ws);
+            for (const id of fired) {
+              tasks?.delete(id);
+              send(ws, { type: "agent_fired", instanceId: id });
+              dbg("info", "game", `Fired instance ${id}; cleared in-flight bookkeeping`);
+            }
+          }
+
           const instanceIds = Object.keys(gs.instances);
           const teamSummary = instanceIds
             .map((id) => `${id} (${gs.instances[id].nickname}, hw=${gs.instances[id].hardware})`)
@@ -3541,6 +4532,15 @@ wss.on("connection", (ws, request) => {
               latestFullGameState = msg.fullState;
               latestStateUpdatedAt = incomingTs;
               persistGameState();
+              // Mirror the new roster into EVERY peer's clientGameState so
+              // their server-side dispatch/validation paths don't read a
+              // stale roster after another device hires/fires. The sender's
+              // entry was already updated above (line: `clientGameState.set(ws, gs)`).
+              for (const peer of wss.clients) {
+                if (peer === ws) continue;
+                if (peer.readyState !== WebSocket.OPEN) continue;
+                clientGameState.set(peer, gs);
+              }
               broadcastExcept(ws, {
                 type: "game_state_sync",
                 fullState: msg.fullState,
@@ -3616,25 +4616,73 @@ wss.on("connection", (ws, request) => {
           const parsed = parseFacilitatorStart(msg);
           if (!parsed.ok) {
             sendDebug(ws, "warn", "facilitator", `Bad start payload: ${parsed.error}`);
-            send(ws, { type: "facilitator_error", error: parsed.error } as any);
+            send(ws, {
+              type: "facilitator_error",
+              error: parsed.error,
+              code: "unknown",
+            } as any);
             break;
           }
+          // Kick off the team-reaction scene in parallel with seed generation.
+          // Reactions are decorative — failure is swallowed inside the helper,
+          // so we never await rejection and never block the seed pipeline.
+          const reactionsPromise = generateTeamReactions(
+            {
+              projectDescription: parsed.value.projectDescription,
+              validRoles: Object.keys(roleCatalog),
+              projectPath: PROJECT_CWD,
+            },
+            { caller: callClaude, runOptions: { timeoutMs: 30_000, retries: 0 } },
+          )
+            .then((reactions) => {
+              if (reactions.length === 0) return;
+              applyReactionsToChat(chatHistory, reactions, new Date().toISOString());
+              chatHistory.save(historyFilePath(PROJECT_CWD));
+              broadcastAll(chatHistory.snapshot());
+              dbg(
+                "info",
+                "facilitator",
+                `Team reactions: ${reactions.map((r) => r.role).join(", ")}`,
+              );
+            })
+            .catch(() => {
+              // Defensive: generateTeamReactions never throws, but belt-and-braces.
+            });
+
           const result = await handleFacilitatorStart(
             facilitatorRunner,
             PROJECT_CWD,
             parsed.value,
           );
+          // Make sure reactions land in chat history before we close the handler,
+          // even if the seed itself raced ahead. Non-blocking for the user
+          // because broadcasts already happened above.
+          await reactionsPromise;
           if (!result.ok) {
-            sendDebug(ws, "error", "facilitator", `Seed failed: ${result.error}`);
-            send(ws, { type: "facilitator_error", error: result.error } as any);
+            sendDebug(ws, "error", "facilitator", `Seed failed (${result.code}): ${result.error}`);
+            send(ws, {
+              type: "facilitator_error",
+              error: result.error,
+              code: result.code,
+            } as any);
             break;
           }
-          clientFacilitatorState.set(ws, result.state);
           dbg(
             "info",
             "facilitator",
             `Seeded "${parsed.value.style.id}" → ${result.seed.outputFormat} (${result.seed.outputJson.length}B)`,
           );
+          // Distil project memory from the brief so EVERY agent prompt
+          // (now and after reconnect) has grounding. Without this the
+          // chat path runs `clientProjectContext.get(ws) → undefined`
+          // and the agent literally asks "what project are we in?" mid-
+          // conversation. Persist to team_memory.txt so reconnects on
+          // any device pick it up via the on-connect loadTeamMemory.
+          const projectMemory = deriveProjectMemoryFromBrief(
+            parsed.value.projectDescription,
+          );
+          setTeamMemoryEverywhere(projectMemory);
+          saveTeamMemory(PROJECT_CWD, projectMemory);
           const facilitatorPayload = {
             styleId: parsed.value.style.id,
             finalScore: result.seed.finalScore,
@@ -3656,6 +4704,15 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        case "get_tech_lead_pulse": {
+          const limit = typeof msg.limit === "number" && msg.limit > 0 ? msg.limit : 20;
+          send(ws, {
+            type: "tech_lead_pulse",
+            entries: techLeadDigest.recent(limit),
+          } as ServerMessage);
+          break;
+        }
+
         case "push_facilitator_output": {
           // Client pushes its local output so the server can serve other devices.
           // Only accept if server has nothing — prevents stale client data from
@@ -3669,6 +4726,13 @@ wss.on("connection", (ws, request) => {
             };
             persistFacilitatorOutput();
             dbg("info", "facilitator", `Accepted push_facilitator_output from client (${msg.outputJson.length}B)`);
+            // Broadcast to all OTHER connected devices — this runs after server
+            // restart when one device has local output and others are online
+            // but haven't seeded yet.
+            broadcastExcept(ws, {
+              type: "facilitator_output_sync",
+              ...latestFacilitatorOutput,
+            } as any);
           }
           break;
         }
@@ -3708,7 +4772,7 @@ wss.on("connection", (ws, request) => {
           });
           dbg("info", "traits", `Manual lesson recorded: [${msg.agentId}] ${msg.tag} (freq=${lesson.frequency})`);
           sendDebug(ws, "info", "traits", `Lesson recorded for ${msg.agentId}: ${msg.lesson}`);
-          sendTraits(ws);
+          broadcastTraits();
           break;
         }
 
@@ -3718,7 +4782,7 @@ wss.on("connection", (ws, request) => {
             dbg("info", "traits", `Lesson removed: ${msg.lessonId}`);
             sendDebug(ws, "info", "traits", `Lesson removed: ${msg.lessonId}`);
           }
-          sendTraits(ws);
+          broadcastTraits();
           break;
         }
 
@@ -3779,6 +4843,16 @@ wss.on("connection", (ws, request) => {
           androidDeployListDevices(ws).catch((err) => {
             sendAndroidDeployError(ws, `List devices failed: ${err}`);
           });
+          break;
+
+        case "android_deploy_watch_devices":
+          androidDeployWatchDevices(ws).catch((err) => {
+            sendAndroidDeployError(ws, `Watch devices failed: ${err}`);
+          });
+          break;
+
+        case "android_deploy_unwatch_devices":
+          androidDeployUnwatchDevices(ws);
           break;
 
         case "android_deploy_start": {
@@ -3904,7 +4978,11 @@ wss.on("connection", (ws, request) => {
           // Everyone else → viewer.
           if (!activeSession || activeSession.clientId === info.clientId) {
             claimSession(ws);
-            send(ws, { type: "session_status", mode: "primary" } as any);
+            // Broadcast (not just self) — peers stuck in "viewer, no primary"
+            // after a session_release need to learn who the new primary is.
+            // Without this, their UI keeps showing stale session state until
+            // the next primary handover or reconnect.
+            broadcastSessionStatus();
           } else {
             send(ws, {
               type: "session_status",
@@ -3927,6 +5005,44 @@ wss.on("connection", (ws, request) => {
           if (!isPrimary(ws)) break;
           activeSession = null;
           broadcastSessionStatus();
+          break;
+        }
+
+        // ─── Active-agents control (Settings → "Активні агенти") ─────────
+        case "list_active_agents": {
+          send(ws, buildActiveAgentsMessage(ws));
+          break;
+        }
+
+        case "cancel_dispatch_agent": {
+          const ok = agentRunner.cancel(msg.dispatchId);
+          dbg("info", "cancel", `cancel_dispatch_agent ${msg.dispatchId} → ${ok}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
+        case "cancel_chat_query": {
+          const ok = chatQueryRegistry.cancel(msg.queryId);
+          dbg("info", "cancel", `cancel_chat_query ${msg.queryId} → ${ok}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
+        case "cancel_all_active": {
+          const sub = agentRunner.cancelAll(ws);
+          const chat = chatQueryRegistry.cancelForWs(ws);
+          dbg("info", "cancel", `cancel_all_active: sub=${sub ?? "?"} chat=${chat}`);
+          broadcastActiveAgents(ws);
+          break;
+        }
+
+        // C.2 — client reconnect picks up runs that landed offline.
+        // `sinceRunId === null/undefined` returns every known run; otherwise
+        // only the strictly newer suffix. Reply is bounded by the store's
+        // in-memory size, so the client should sliding-window if it grows.
+        case "list_runs_since": {
+          const runs = agentRunStore.since(msg.sinceRunId ?? null);
+          send(ws, { type: "runs_since", runs } as ServerMessage);
           break;
         }
 
@@ -3965,16 +5081,36 @@ wss.on("connection", (ws, request) => {
     }
   });
 
+  // Without this handler, network errors (ECONNRESET etc.) propagate as
+  // uncaught exceptions and crash the entire server for one bad connection.
+  ws.on("error", (err) => {
+    const label = connectedClients.get(ws)?.deviceName ?? "unknown";
+    dbg("warn", "ws", `WebSocket error from ${label}: ${err.message}`);
+  });
+
   ws.on("close", () => {
     const clientInfo = connectedClients.get(ws);
     const disconnectLabel = clientInfo?.deviceName || "unknown";
     dbg("info", "ws", `Client disconnected: ${disconnectLabel} (${clientInfo?.platform ?? "?"}). Shared session: ${currentSessionId ?? "none"}`);
-    // Clean up task queue and running agents for this client
+    // Drop NOT-YET-STARTED queued tasks for this client. Tasks that haven't
+    // hit `runQuery` yet are pure intent and lose nothing by being cancelled
+    // — the user can resubmit on reconnect with current context.
     const removed = taskQueue.removeForClient(ws);
     if (removed > 0) dbg("info", "queue", `Removed ${removed} queued tasks for disconnected client`);
-    agentRunner.cancelAll(ws);
+    // C.2.1: do NOT cancel in-flight agents or chat queries on disconnect.
+    // The work runs server-side and persists via chatHistory; on reconnect
+    // the client receives the full snapshot via sendChatHistory(). Explicit
+    // cancel stays available through the "Активні агенти" Settings tab
+    // (cancel_dispatch_agent / cancel_chat_query / cancel_all_active).
+    androidDeployUnwatchDevices(ws);
+    // Disconnecting client may have an iOS/Android deploy in flight; the
+    // child process is keyed on this ws and there's nobody left to cancel
+    // it via UI. Without these calls the build keeps running orphaned and
+    // its temp artifacts pile up under ~/.pixelcode until next restart.
+    iosDeployCancel(ws);
+    androidDeployCancel(ws);
+    heartbeatMonitor.onDisconnect(ws);
     connectedClients.delete(ws);
-    clientFacilitatorState.delete(ws);
     // Session presence: if primary disconnected, promote a viewer
     if (activeSession?.ws === ws) handlePrimaryDisconnect();
   });

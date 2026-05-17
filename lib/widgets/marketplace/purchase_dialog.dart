@@ -103,6 +103,7 @@ class _PurchaseDialogState extends State<PurchaseDialog> {
           onPressed: hasEnoughFunds && !_isProcessing
               ? () async {
                   setState(() => _isProcessing = true);
+                  final nav = Navigator.of(context);
                   // Simulate purchase (would call service in real app)
                   await Future.delayed(const Duration(milliseconds: 500));
 
@@ -113,7 +114,7 @@ class _PurchaseDialogState extends State<PurchaseDialog> {
 
                   if (mounted) {
                     widget.onPurchaseResult(result);
-                    Navigator.pop(context);
+                    nav.pop();
                   }
                 }
               : null,

@@ -9,6 +9,7 @@ import {
   ClaudeMilestoneTreeGenerator,
   type CallerFn,
 } from "../src/facilitator/llm_generators.js";
+import { LLMGenerationError } from "../src/facilitator/llm_runner.js";
 import type { GeneratorInput } from "../src/facilitator/output_generator.js";
 import type { FacilitatorStyle } from "../src/facilitator/types.js";
 import type { ScopeScore } from "../src/quest/scope_scorer.js";
@@ -103,8 +104,13 @@ describe("extractJson", () => {
     assert.equal(extractJson(text), '{"format":"mission_briefing"}');
   });
 
-  test("returns trimmed text if no braces found", () => {
-    assert.equal(extractJson("  no json here  "), "no json here");
+  test("returns null when no JSON-shaped block is present", () => {
+    // Previously this fell through to text.trim(), which produced
+    // confusing JSON.parse errors downstream. Now the caller has to
+    // detect missing JSON explicitly.
+    assert.equal(extractJson("  no json here  "), null);
+    assert.equal(extractJson(""), null);
+    assert.equal(extractJson("just an opening { without close"), null);
   });
 });
 
@@ -205,7 +211,7 @@ describe("ClaudeQuestLineGenerator", () => {
     const gen = new ClaudeQuestLineGenerator("/tmp/proj", mockCaller);
     await assert.rejects(
       () => gen.generate(makeInput(gameMasterStyle)),
-      /ClaudeQuestLineGenerator failed/,
+      LLMGenerationError,
     );
   });
 
@@ -216,7 +222,7 @@ describe("ClaudeQuestLineGenerator", () => {
     const gen = new ClaudeQuestLineGenerator("/tmp/proj", mockCaller);
     await assert.rejects(
       () => gen.generate(makeInput(gameMasterStyle)),
-      /ClaudeQuestLineGenerator failed/,
+      LLMGenerationError,
     );
   });
 
@@ -289,7 +295,7 @@ describe("ClaudeMissionBriefingGenerator", () => {
     const gen = new ClaudeMissionBriefingGenerator("/tmp/proj", mockCaller);
     await assert.rejects(
       () => gen.generate(makeInput(drillStyle)),
-      /ClaudeMissionBriefingGenerator failed/,
+      LLMGenerationError,
     );
   });
 
@@ -359,7 +365,7 @@ describe("ClaudeMilestoneTreeGenerator", () => {
     const gen = new ClaudeMilestoneTreeGenerator("/tmp/proj", mockCaller);
     await assert.rejects(
       () => gen.generate(makeInput(mariyaStyle)),
-      /ClaudeMilestoneTreeGenerator failed/,
+      LLMGenerationError,
     );
   });
 

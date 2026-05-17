@@ -109,9 +109,12 @@ sealed class ServerMessage {
       'assistant_text' => AssistantTextMessage.fromJson(json),
       'assistant_message_done' => AssistantDoneMessage.fromJson(json),
       'agent_status' => AgentStatusMessage.fromJson(json),
+      'active_agents' => ActiveAgentsMessage.fromJson(json),
+      'runs_since' => RunsSinceMessage.fromJson(json),
       'subagent_start' => SubagentStartMessage.fromJson(json),
       'subagent_stop' => SubagentStopMessage.fromJson(json),
       'tool_use' => ToolUseMessage.fromJson(json),
+      'subagent_thread_event' => SubagentThreadEventMessage.fromJson(json),
       'tool_done' => ToolDoneMessage.fromJson(json),
       'result' => ResultMessage.fromJson(json),
       'team_metrics' => TeamMetricsMessage.fromJson(json),
@@ -120,6 +123,10 @@ sealed class ServerMessage {
       'debug_log' => DebugLogMessage.fromJson(json),
       'error' => ErrorMessage.fromJson(json),
       'board_state' => BoardStateMessage.fromJson(json),
+      'board_state_unchanged' => BoardStateUnchangedMessage.fromJson(json),
+      'board_seed_batch_result' => BoardSeedBatchResultMessage.fromJson(json),
+      'set_game_state_error' => SetGameStateErrorMessage.fromJson(json),
+      'agent_fired' => AgentFiredMessage.fromJson(json),
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
       'input_text' => InputTextMessage.fromJson(json),
@@ -146,6 +153,7 @@ sealed class ServerMessage {
       'facilitator_output_sync' => FacilitatorOutputSyncMessage.fromJson(json),
       'session_status' => SessionStatusMessage.fromJson(json),
       'session_taken' => SessionTakenMessage.fromJson(json),
+      'tech_lead_pulse' => TechLeadPulseMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -185,13 +193,15 @@ class AssistantDoneMessage implements ServerMessage {
   final String text;
   final String agentId;
   final String? threadId;
-  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager', this.threadId});
+  final String? timestamp; // server-canonical ISO8601 timestamp
+  AssistantDoneMessage({required this.messageId, required this.text, this.agentId = 'manager', this.threadId, this.timestamp});
   factory AssistantDoneMessage.fromJson(Map<String, dynamic> json) =>
       AssistantDoneMessage(
         messageId: json['messageId'] as String,
         text: json['text'] as String,
         agentId: json['agentId'] as String? ?? 'manager',
         threadId: json['threadId'] as String?,
+        timestamp: json['timestamp'] as String?,
       );
 }
 
@@ -222,6 +232,173 @@ class AgentStatusMessage implements ServerMessage {
         tools: (json['tools'] as List)
             .map((t) => ToolActivity.fromJson(t as Map<String, dynamic>))
             .toList(),
+      );
+}
+
+enum ActiveAgentKind { dispatch, chat }
+
+class ActiveAgentEntry {
+  final ActiveAgentKind kind;
+  final String id;
+  final String agentId;
+  final String task;
+  final int elapsedMs;
+  const ActiveAgentEntry({
+    required this.kind,
+    required this.id,
+    required this.agentId,
+    required this.task,
+    required this.elapsedMs,
+  });
+  factory ActiveAgentEntry.fromJson(Map<String, dynamic> json) =>
+      ActiveAgentEntry(
+        kind: (json['kind'] as String) == 'chat'
+            ? ActiveAgentKind.chat
+            : ActiveAgentKind.dispatch,
+        id: json['id'] as String,
+        agentId: json['agentId'] as String,
+        task: (json['task'] as String?) ?? '',
+        elapsedMs: (json['elapsedMs'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class ActiveAgentsMessage implements ServerMessage {
+  final List<ActiveAgentEntry> entries;
+  const ActiveAgentsMessage({required this.entries});
+  factory ActiveAgentsMessage.fromJson(Map<String, dynamic> json) =>
+      ActiveAgentsMessage(
+        entries: (json['entries'] as List)
+            .map((e) => ActiveAgentEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// Run lifecycle states — mirrors `AgentRunStatusWire` in server/src/protocol.ts.
+/// Order is significant for filtering ("everything that isn't running is
+/// terminal"); do not reorder without also updating [AgentRunSnapshot.isTerminal].
+enum AgentRunStatus { running, completed, failed, interrupted, cancelled }
+
+AgentRunStatus _agentRunStatusFromJson(String raw) => switch (raw) {
+      'running' => AgentRunStatus.running,
+      'completed' => AgentRunStatus.completed,
+      'failed' => AgentRunStatus.failed,
+      'interrupted' => AgentRunStatus.interrupted,
+      'cancelled' => AgentRunStatus.cancelled,
+      _ => AgentRunStatus.failed,
+    };
+
+enum AgentRunTaskType { chat, dispatch }
+
+class AgentRunUsage {
+  final int inputTokens;
+  final int outputTokens;
+  final int cacheCreationTokens;
+  final int cacheReadTokens;
+  final double costUsd;
+  final int numTurns;
+  final int numToolCalls;
+  const AgentRunUsage({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.cacheCreationTokens,
+    required this.cacheReadTokens,
+    required this.costUsd,
+    required this.numTurns,
+    required this.numToolCalls,
+  });
+  factory AgentRunUsage.fromJson(Map<String, dynamic> json) => AgentRunUsage(
+        inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+        outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+        cacheCreationTokens:
+            (json['cacheCreationTokens'] as num?)?.toInt() ?? 0,
+        cacheReadTokens: (json['cacheReadTokens'] as num?)?.toInt() ?? 0,
+        costUsd: (json['costUsd'] as num?)?.toDouble() ?? 0,
+        numTurns: (json['numTurns'] as num?)?.toInt() ?? 0,
+        numToolCalls: (json['numToolCalls'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class AgentRunToolCall {
+  final String name;
+  final String id;
+  final String at;
+  const AgentRunToolCall({required this.name, required this.id, required this.at});
+  factory AgentRunToolCall.fromJson(Map<String, dynamic> json) =>
+      AgentRunToolCall(
+        name: json['name'] as String,
+        id: json['id'] as String,
+        at: (json['at'] as String?) ?? '',
+      );
+}
+
+/// Wire snapshot of an `AgentRun` from the server — used by reconnect /
+/// `runs?since=` flow to surface what happened while the client was offline.
+class AgentRunSnapshot {
+  final String runId;
+  final String agentId;
+  final AgentRunTaskType taskType;
+  final AgentRunStatus status;
+  final String? userMessageId;
+  final String? userMessageSnippet;
+  final String? partialOutput;
+  final String? finalOutput;
+  final List<AgentRunToolCall> toolCalls;
+  final String startedAt;
+  final String? completedAt;
+  final AgentRunUsage? usage;
+  final String? reason;
+
+  const AgentRunSnapshot({
+    required this.runId,
+    required this.agentId,
+    required this.taskType,
+    required this.status,
+    required this.toolCalls,
+    required this.startedAt,
+    this.userMessageId,
+    this.userMessageSnippet,
+    this.partialOutput,
+    this.finalOutput,
+    this.completedAt,
+    this.usage,
+    this.reason,
+  });
+
+  bool get isTerminal => status != AgentRunStatus.running;
+
+  factory AgentRunSnapshot.fromJson(Map<String, dynamic> json) {
+    return AgentRunSnapshot(
+      runId: json['runId'] as String,
+      agentId: json['agentId'] as String,
+      taskType: (json['taskType'] as String) == 'dispatch'
+          ? AgentRunTaskType.dispatch
+          : AgentRunTaskType.chat,
+      status: _agentRunStatusFromJson(json['status'] as String),
+      userMessageId: json['userMessageId'] as String?,
+      userMessageSnippet: json['userMessageSnippet'] as String?,
+      partialOutput: json['partialOutput'] as String?,
+      finalOutput: json['finalOutput'] as String?,
+      toolCalls: ((json['toolCalls'] as List?) ?? const [])
+          .map((e) => AgentRunToolCall.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false),
+      startedAt: json['startedAt'] as String,
+      completedAt: json['completedAt'] as String?,
+      usage: json['usage'] is Map<String, dynamic>
+          ? AgentRunUsage.fromJson(json['usage'] as Map<String, dynamic>)
+          : null,
+      reason: json['reason'] as String?,
+    );
+  }
+}
+
+class RunsSinceMessage implements ServerMessage {
+  final List<AgentRunSnapshot> runs;
+  const RunsSinceMessage({required this.runs});
+  factory RunsSinceMessage.fromJson(Map<String, dynamic> json) =>
+      RunsSinceMessage(
+        runs: ((json['runs'] as List?) ?? const [])
+            .map((e) => AgentRunSnapshot.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
       );
 }
 
@@ -271,6 +448,35 @@ class ToolUseMessage implements ServerMessage {
         toolName: json['toolName'] as String,
         status: json['status'] as String,
         threadId: json['threadId'] as String?,
+      );
+}
+
+/// Thread-only mirror of a sub-agent's tool use, surfaced under the captain's
+/// chat so the user can follow the dispatched work as a nested thread.
+///
+/// Distinct from [ToolUseMessage] on purpose: this message MUST NOT touch the
+/// agent status indicator. The captain isn't running the tool — the sub-agent
+/// is. The captain's status reflects only their own activity.
+class SubagentThreadEventMessage implements ServerMessage {
+  final String agentId;
+  final String toolUseId;
+  final String toolName;
+  final String status;
+  final String threadId;
+  SubagentThreadEventMessage({
+    required this.agentId,
+    required this.toolUseId,
+    required this.toolName,
+    required this.status,
+    required this.threadId,
+  });
+  factory SubagentThreadEventMessage.fromJson(Map<String, dynamic> json) =>
+      SubagentThreadEventMessage(
+        agentId: json['agentId'] as String,
+        toolUseId: json['toolUseId'] as String,
+        toolName: json['toolName'] as String,
+        status: json['status'] as String,
+        threadId: json['threadId'] as String,
       );
 }
 
@@ -406,7 +612,14 @@ class ErrorMessage implements ServerMessage {
 
 class BoardStateMessage implements ServerMessage {
   final BoardState boardState;
-  BoardStateMessage({required this.boardState});
+
+  /// Server-side monotonic revision. Optional for backward compatibility
+  /// with pre-WP2 servers that omit the field; null means "unknown" and
+  /// the client just keeps its previous revision marker.
+  final int? revision;
+
+  BoardStateMessage({required this.boardState, this.revision});
+
   factory BoardStateMessage.fromJson(Map<String, dynamic> json) =>
       BoardStateMessage(
         boardState: BoardState(
@@ -415,7 +628,103 @@ class BoardStateMessage implements ServerMessage {
                   .toList() ??
               [],
         ),
+        revision: json['revision'] is int ? json['revision'] as int : null,
       );
+}
+
+/// Server replied to `board_get_state{since: r}` and r matches the current
+/// revision — no full snapshot needed. Lets a reconnecting client confirm
+/// its cached state without re-shipping every task.
+class BoardStateUnchangedMessage implements ServerMessage {
+  final int revision;
+  BoardStateUnchangedMessage({required this.revision});
+  factory BoardStateUnchangedMessage.fromJson(Map<String, dynamic> json) =>
+      BoardStateUnchangedMessage(revision: json['revision'] as int);
+}
+
+/// Acknowledgement of a `board_seed_batch` — either every task committed
+/// (`ok=true` plus `committedIds`) or none did (`ok=false` plus `errors`).
+class BoardSeedBatchResultMessage implements ServerMessage {
+  final String? batchId;
+  final bool ok;
+  final List<String> committedIds;
+  final List<BoardSeedBatchError> errors;
+  BoardSeedBatchResultMessage({
+    required this.batchId,
+    required this.ok,
+    required this.committedIds,
+    required this.errors,
+  });
+  factory BoardSeedBatchResultMessage.fromJson(Map<String, dynamic> json) =>
+      BoardSeedBatchResultMessage(
+        batchId: json['batchId'] as String?,
+        ok: json['ok'] == true,
+        committedIds: (json['committedIds'] as List?)
+                ?.map((e) => e as String)
+                .toList() ??
+            const [],
+        errors: (json['errors'] as List?)
+                ?.map((e) =>
+                    BoardSeedBatchError.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+class BoardSeedBatchError {
+  final int index;
+  final String reason;
+  BoardSeedBatchError({required this.index, required this.reason});
+  factory BoardSeedBatchError.fromJson(Map<String, dynamic> json) =>
+      BoardSeedBatchError(
+        index: json['index'] as int,
+        reason: json['reason'] as String,
+      );
+}
+
+/// Server rejected a `set_game_state` payload during validation. The
+/// previous accepted state is unchanged on the server — the client is
+/// expected to surface `errors` (toast/dialog) and roll back the
+/// offending mutation.
+class SetGameStateErrorMessage implements ServerMessage {
+  final List<RosterValidationError> errors;
+  SetGameStateErrorMessage({required this.errors});
+  factory SetGameStateErrorMessage.fromJson(Map<String, dynamic> json) =>
+      SetGameStateErrorMessage(
+        errors: (json['errors'] as List?)
+                ?.map((e) => RosterValidationError.fromJson(
+                    e as Map<String, dynamic>))
+                .toList() ??
+            const [],
+      );
+}
+
+class RosterValidationError {
+  /// instanceId or "*" for collection-level errors (e.g. manager singleton).
+  final String instanceId;
+  final String code;
+  final String message;
+  RosterValidationError({
+    required this.instanceId,
+    required this.code,
+    required this.message,
+  });
+  factory RosterValidationError.fromJson(Map<String, dynamic> json) =>
+      RosterValidationError(
+        instanceId: json['instanceId'] as String? ?? '*',
+        code: json['code'] as String? ?? 'unknown',
+        message: json['message'] as String? ?? '',
+      );
+}
+
+/// Emitted right after a successful `set_game_state` for every
+/// instanceId that disappeared from the roster. Lets the client clean up
+/// per-agent UI (open chats, busy badges) without diff'ing snapshots.
+class AgentFiredMessage implements ServerMessage {
+  final String instanceId;
+  AgentFiredMessage({required this.instanceId});
+  factory AgentFiredMessage.fromJson(Map<String, dynamic> json) =>
+      AgentFiredMessage(instanceId: json['instanceId'] as String);
 }
 
 class SummaryResultMessage implements ServerMessage {
@@ -920,11 +1229,50 @@ class FacilitatorSeededMessage implements ServerMessage {
       );
 }
 
+/// Reason the server returned `facilitator_error`. Lets the UI pick the
+/// right copy and action (retry vs. settings prompt vs. style picker).
+enum FacilitatorErrorCode {
+  /// LLM call exceeded its time budget; user should retry.
+  timeout,
+
+  /// LLM returned no/invalid JSON; user should retry or pick another style.
+  parse,
+
+  /// Provider rate-limited; back off and retry.
+  rateLimit,
+
+  /// API key missing or rejected; route the user to Settings.
+  auth,
+
+  /// Anything else — generic message + retry.
+  unknown;
+
+  static FacilitatorErrorCode fromKey(String? key) => switch (key) {
+        'timeout' => FacilitatorErrorCode.timeout,
+        'parse' => FacilitatorErrorCode.parse,
+        'rate_limit' => FacilitatorErrorCode.rateLimit,
+        'auth' => FacilitatorErrorCode.auth,
+        _ => FacilitatorErrorCode.unknown,
+      };
+}
+
 class FacilitatorErrorMessage implements ServerMessage {
   final String error;
-  FacilitatorErrorMessage({required this.error});
+
+  /// Optional typed code from the server (WP4). Pre-WP4 servers omit it
+  /// and the client falls back to [FacilitatorErrorCode.unknown].
+  final FacilitatorErrorCode code;
+
+  FacilitatorErrorMessage({
+    required this.error,
+    this.code = FacilitatorErrorCode.unknown,
+  });
+
   factory FacilitatorErrorMessage.fromJson(Map<String, dynamic> json) =>
-      FacilitatorErrorMessage(error: json['error'] as String? ?? '');
+      FacilitatorErrorMessage(
+        error: json['error'] as String? ?? '',
+        code: FacilitatorErrorCode.fromKey(json['code'] as String?),
+      );
 }
 
 /// Cross-device sync — same payload shape as [FacilitatorSeededMessage],
@@ -952,6 +1300,85 @@ class FacilitatorOutputSyncMessage implements ServerMessage {
           : const ScopeScore.empty(),
       outputFormat: OutputFormat.fromKey(json['outputFormat'] as String? ?? ''),
       outputJson: json['outputJson'] as String? ?? '',
+    );
+  }
+}
+
+// ─── Tech-lead pulse ────────────────────────────────────────────────────────
+
+/// Compact snapshot of an agent's most-frequent lesson at the moment
+/// a task completed. Optional: present only when the server-side
+/// resolver had something to return. Surfaced in tooltips and richer
+/// growth views.
+class TechLeadPulseLesson {
+  final String tag;
+  final String lesson;
+  /// "strength" or "weakness" — kept as a String to stay forward-compat
+  /// with future lesson types without breaking the parser.
+  final String type;
+
+  const TechLeadPulseLesson({
+    required this.tag,
+    required this.lesson,
+    required this.type,
+  });
+
+  factory TechLeadPulseLesson.fromJson(Map<String, dynamic> json) =>
+      TechLeadPulseLesson(
+        tag: json['tag'] as String? ?? '',
+        lesson: json['lesson'] as String? ?? '',
+        type: json['type'] as String? ?? 'strength',
+      );
+}
+
+/// One entry in the tech-lead digest: a recently completed board task.
+class TechLeadPulseEntry {
+  final String taskId;
+  final String title;
+  final String agentId;
+  final String role;
+  final DateTime ts;
+  final TechLeadPulseLesson? topLesson;
+
+  const TechLeadPulseEntry({
+    required this.taskId,
+    required this.title,
+    required this.agentId,
+    required this.role,
+    required this.ts,
+    this.topLesson,
+  });
+
+  factory TechLeadPulseEntry.fromJson(Map<String, dynamic> json) {
+    final rawLesson = json['topLesson'];
+    return TechLeadPulseEntry(
+      taskId: json['taskId'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      agentId: json['agentId'] as String? ?? '',
+      role: json['role'] as String? ?? '',
+      ts: DateTime.tryParse(json['ts'] as String? ?? '')?.toUtc() ??
+          DateTime.now().toUtc(),
+      topLesson: rawLesson is Map<String, dynamic>
+          ? TechLeadPulseLesson.fromJson(rawLesson)
+          : null,
+    );
+  }
+}
+
+/// Server pushes the recent task-completion digest. Sent in reply to
+/// `get_tech_lead_pulse` AND broadcast on every new completion so the UI
+/// can update without polling. Newest entry last.
+class TechLeadPulseMessage implements ServerMessage {
+  final List<TechLeadPulseEntry> entries;
+  TechLeadPulseMessage({required this.entries});
+  factory TechLeadPulseMessage.fromJson(Map<String, dynamic> json) {
+    final rawEntries = json['entries'];
+    if (rawEntries is! List) return TechLeadPulseMessage(entries: const []);
+    return TechLeadPulseMessage(
+      entries: [
+        for (final e in rawEntries)
+          if (e is Map<String, dynamic>) TechLeadPulseEntry.fromJson(e),
+      ],
     );
   }
 }
@@ -998,12 +1425,17 @@ enum MessageCategory {
 
   /// A board task was added — rendered as a board-linkage announcement row.
   taskLinked,
+
+  /// Sentinel that marks an explicit thematic break between message packs.
+  /// Never rendered as a bubble — only used by buildChatItems to flush bursts.
+  packBreak,
 }
 
 MessageCategory? _parseCategory(String? s) => switch (s) {
       'awaitingReply' => MessageCategory.awaitingReply,
       'status' => MessageCategory.status,
       'taskLinked' => MessageCategory.taskLinked,
+      'packBreak' => MessageCategory.packBreak,
       _ => null,
     };
 
@@ -1021,6 +1453,10 @@ class ChatMessage {
   /// Optional semantic category used to select visual treatment.
   final MessageCategory? category;
 
+  /// Stable message identifier — server-generated for canonical messages,
+  /// or client-generated locally. Used for deduplication across devices.
+  final String? id;
+
   ChatMessage({
     required this.role,
     required this.text,
@@ -1030,6 +1466,7 @@ class ChatMessage {
     this.imageBase64s = const [],
     this.threadId,
     this.category,
+    this.id,
   }) : timestamp = timestamp ?? DateTime.now();
 
   ChatMessage copyWith({
@@ -1037,6 +1474,7 @@ class ChatMessage {
     bool? isStreaming,
     String? threadId,
     MessageCategory? category,
+    String? id,
   }) =>
       ChatMessage(
         role: role,
@@ -1047,6 +1485,7 @@ class ChatMessage {
         imageBase64s: imageBase64s,
         threadId: threadId ?? this.threadId,
         category: category ?? this.category,
+        id: id ?? this.id,
       );
 
   Map<String, dynamic> toJson() => {
@@ -1057,6 +1496,7 @@ class ChatMessage {
         if (imageBase64s.isNotEmpty) 'images': imageBase64s,
         if (threadId != null) 'threadId': threadId,
         if (category != null) 'category': category!.name,
+        if (id != null) 'id': id,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -1067,5 +1507,6 @@ class ChatMessage {
         imageBase64s: (json['images'] as List?)?.cast<String>() ?? const [],
         threadId: json['threadId'] as String?,
         category: _parseCategory(json['category'] as String?),
+        id: json['id'] as String?,
       );
 }

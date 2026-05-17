@@ -52,6 +52,50 @@ test("ChatHistory.add appends messages in order", () => {
   assert.equal(snap.messages[2].text, "msg3");
 });
 
+test("ChatHistory.add is idempotent on caller-supplied id", () => {
+  const history = new ChatHistory();
+  const msg: StoredChatMessage = {
+    role: "user",
+    text: "hello",
+    agentId: "coder#1",
+    timestamp: "2026-05-09T10:00:00Z",
+    id: "client-msg-1",
+  };
+  history.add(msg);
+  history.add(msg); // replay path: same id arrives twice
+
+  const snap = history.snapshot();
+  assert.equal(snap.messages.length, 1, "second add with same id must be skipped");
+});
+
+test("ChatHistory.add still appends when id differs even if other fields match", () => {
+  const history = new ChatHistory();
+  history.add({
+    role: "user",
+    text: "hello",
+    agentId: "coder#1",
+    timestamp: "2026-05-09T10:00:00Z",
+    id: "msg-1",
+  });
+  history.add({
+    role: "user",
+    text: "hello",
+    agentId: "coder#1",
+    timestamp: "2026-05-09T10:00:00Z",
+    id: "msg-2",
+  });
+
+  assert.equal(history.snapshot().messages.length, 2);
+});
+
+test("ChatHistory.add without id always appends (no fingerprint dedup)", () => {
+  const history = new ChatHistory();
+  history.add(makeMsg("user", "hello"));
+  history.add(makeMsg("user", "hello"));
+  // No id supplied → server generates fresh UUIDs → both rows kept.
+  assert.equal(history.snapshot().messages.length, 2);
+});
+
 test("ChatHistory.clear removes all messages", () => {
   const history = new ChatHistory();
   history.add(makeMsg("user", "hello"));

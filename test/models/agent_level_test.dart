@@ -173,6 +173,36 @@ void main() {
       );
     });
 
+    test('creative profile — character-artist also uses creative weights', () {
+      // creative cap = 0.25*8 + 0.2*8 + 0.2*8 + 0.35*12 = 9.4 → sonnet
+      // (default profile would give 0.4*8 + 0.3*8 + 0.2*8 + 0.1*12 = 8.4 — same tier
+      // but the formula must match the creative one to stay in sync with server)
+      expect(
+        capabilityModelForSkills(
+          precision: 8,
+          creativity: 12,
+          insight: 8,
+          reliability: 8,
+          roleType: 'character-artist',
+        ),
+        'sonnet',
+      );
+    });
+
+    test('character-artist Lv1 starter (1/4/6/1/1) → haiku', () {
+      // creative cap = 0.25*1 + 0.2*4 + 0.2*1 + 0.35*6 = 3.35
+      expect(
+        capabilityModelForSkills(
+          precision: 4,
+          creativity: 6,
+          insight: 1,
+          reliability: 1,
+          roleType: 'character-artist',
+        ),
+        'haiku',
+      );
+    });
+
     test('default profile applied for unknown roleType', () {
       // capability = 0.4*8 + 0.3*8 + 0.2*8 + 0.1*12 = 8.4 → sonnet
       expect(

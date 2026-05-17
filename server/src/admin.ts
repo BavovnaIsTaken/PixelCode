@@ -63,6 +63,10 @@ export interface AdminContext {
   getMdnsActive: () => boolean;
   /** Tailscale Funnel URL (or null if not configured). */
   getTailscaleUrl: () => string | null;
+  /** Pending tasks in the manager queue (size of TaskQueue). */
+  getQueuedTaskCount: () => number;
+  /** Currently running sub-agent dispatches. */
+  getActiveAgentCount: () => number;
   /** Server boot time (ms epoch). */
   bootedAtMs: number;
   /**
@@ -70,6 +74,72 @@ export interface AdminContext {
    * exit-code 75; for `stop` we use 0.
    */
   scheduleExit: (code: number, reason: string) => void;
+}
+
+// ─── Metrics sampler ────────────────────────────────────────────────────────
+
+interface CpuSample {
+  /** process.cpuUsage() snapshot (microseconds, monotonically increasing). */
+  usage: NodeJS.CpuUsage;
+  /** Wall-clock ms at the sample time. */
+  atMs: number;
+}
+
+let __lastCpuSample: CpuSample | null = null;
+
+interface MetricsSnapshot {
+  memory: {
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+  };
+  /** CPU percent over the interval since the previous sample. Null on first call. */
+  cpuPercent: number | null;
+  /** Cumulative CPU microseconds since process start. */
+  cpuUserUs: number;
+  cpuSystemUs: number;
+  queuedTasks: number;
+  activeAgents: number;
+  nodeVersion: string;
+  platform: string;
+}
+
+function sampleMetrics(ctx: AdminContext): MetricsSnapshot {
+  const mem = process.memoryUsage();
+  const usage = process.cpuUsage();
+  const nowMs = Date.now();
+
+  let cpuPercent: number | null = null;
+  if (__lastCpuSample) {
+    const elapsedMs = nowMs - __lastCpuSample.atMs;
+    if (elapsedMs > 0) {
+      const deltaUs =
+        usage.user - __lastCpuSample.usage.user +
+        (usage.system - __lastCpuSample.usage.system);
+      // deltaUs is microseconds of CPU across N cores; elapsedMs * 1000 is the
+      // wall-clock window in microseconds. Ratio = single-core utilisation.
+      cpuPercent = (deltaUs / (elapsedMs * 1000)) * 100;
+      if (cpuPercent < 0) cpuPercent = 0;
+    }
+  }
+  __lastCpuSample = { usage, atMs: nowMs };
+
+  return {
+    memory: {
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal,
+      external: mem.external,
+    },
+    cpuPercent,
+    cpuUserUs: usage.user,
+    cpuSystemUs: usage.system,
+    queuedTasks: ctx.getQueuedTaskCount(),
+    activeAgents: ctx.getActiveAgentCount(),
+    nodeVersion: process.version,
+    platform: process.platform,
+  };
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -130,6 +200,7 @@ function handleStatus(ctx: AdminContext, res: ServerResponse): void {
     tailscaleUrl: ctx.getTailscaleUrl(),
     nodeVersion: process.version,
     platform: process.platform,
+    metrics: sampleMetrics(ctx),
   });
 }
 

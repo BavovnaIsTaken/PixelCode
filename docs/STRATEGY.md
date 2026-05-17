@@ -134,6 +134,14 @@ UI інтеграція попереду; технічна основа гото
 - Cloud inference = energy spend
 - Training credits = окремий ресурс для adapter updates
 
+### Permissions runtime: bypass-by-default
+
+PixelCode runtime **ніколи** не показує користувачу permission prompt. `permissionMode: "bypassPermissions"` — обов'язковий інваріант для всіх `query()`-call-ів у [server/src/](../server/src/), регресійно перевіряється у [server/test/permissions_invariant.test.ts](../server/test/permissions_invariant.test.ts).
+
+Обґрунтування: користувач, що запустив PixelCode, делегував агентам контроль над project working directory на час сесії. Кор-петля гри ("команда агентів виконує роботу") програє в момент, коли середина task-у переривається на "Allow this Edit?" модал. Дизайнерські обмеження на дії агента виражаються через **`tools: [...]` allowlist** — не давати тулу в принципі, не питати про неї runtime.
+
+Trade-off усвідомлений: ми обмінюємо theoretical defense-in-depth (захист від agent-mistake без явного user-confirm) на **continuous flow** і **predictable agent behavior**. Це частина дизайнерського контракту з користувачем — як `git push --force` після `git pull`: інструмент дає тобі мотузку, бо ти знаєш що робиш.
+
 ### Economy без pay-to-win
 
 F2P гравець може досягти топу, граючи довго. Pay-to-progress прискорює, не разблоковує. Це принципово для community trust.

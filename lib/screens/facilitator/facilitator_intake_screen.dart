@@ -198,19 +198,21 @@ class _IntakeQuestionField extends StatelessWidget {
             ),
           )
         else
-          Column(
-            children: [
-              for (final choice in question.choices)
-                RadioListTile<String>(
-                  key: Key('intake-choice-${question.id}-$choice'),
-                  title: Text(choice),
-                  value: choice,
-                  groupValue: choiceValue,
-                  onChanged: onChoice,
-                  contentPadding: EdgeInsets.zero,
-                  visualDensity: VisualDensity.compact,
-                ),
-            ],
+          RadioGroup<String>(
+            groupValue: choiceValue,
+            onChanged: onChoice,
+            child: Column(
+              children: [
+                for (final choice in question.choices)
+                  RadioListTile<String>(
+                    key: Key('intake-choice-${question.id}-$choice'),
+                    title: Text(choice),
+                    value: choice,
+                    contentPadding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
           ),
       ],
     );

@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
+import 'ws_outbox.dart';
 
 class AgentWsService {
   WebSocket? _ws;
@@ -22,6 +23,13 @@ class AgentWsService {
   bool _isConnected = false;
   bool _disposed = false;
   Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+
+  /// Outbox for messages submitted while the socket is down. Drained in
+  /// FIFO order after the next successful (re)connect, immediately after
+  /// the `client_info` handshake. Capped + ephemeral-type denylist live
+  /// inside `WsOutbox`; the service just forwards.
+  final WsOutbox _outbox = WsOutbox();
 
   /// Short status token (≤5 chars) shown by the connection terminal widget.
   /// `null` once a session is established — the widget hides itself.
@@ -61,6 +69,13 @@ class AgentWsService {
   /// can find it before the disk write completes (eliminates the race window
   /// between server connect and FacilitatorAutoOnboarder._maybeRun).
   FacilitatorOutputSyncMessage? lastFacilitatorOutputSync;
+
+  /// Last received init — buffered so late subscribers (notably
+  /// WorkingDirectoryNotifier on mobile cold-start) can read the working
+  /// directory even if their first `ref.read` happens after the InitMessage
+  /// already passed through the broadcast controller. Without this buffer
+  /// the value stays `null` until a reconnect.
+  InitMessage? lastInit;
 
   Stream<ServerMessage> get messages => _messageController.stream;
 
@@ -125,13 +140,25 @@ class AgentWsService {
           .timeout(const Duration(seconds: 10));
       // dispose() may have been called while we were awaiting the connection.
       if (_disposed) { await _ws?.close(); return; }
+      // Heartbeat: dart:io's WebSocket sends a Ping every [pingInterval] and
+      // expects a Pong within the same window — if the peer is silent the
+      // socket closes with 1006, which fires onDone and triggers reconnect.
+      // Pairs with the server-side ping cycle in server.ts: either side can
+      // notice a half-open socket within ~30 s on mobile Wi-Fi↔LTE handoffs.
+      _ws!.pingInterval = const Duration(seconds: 30);
       _isConnected = true;
+      _reconnectAttempt = 0;
       if (!_connectionController.isClosed) _connectionController.add(true);
       _emitPhase(null);
       _reconnectTimer?.cancel();
       _log('Connected to $url');
       _sendClientInfo();
+      setBypassPermissions(true);
       getTraits();
+      // Drain anything queued during the outage. Order: client_info first
+      // so the server has re-identified this device before user-action
+      // replays land — keeps session presence stable across the gap.
+      _drainOutbox();
 
       _wsSub = _ws!.listen(
         (data) {
@@ -143,6 +170,8 @@ class AgentWsService {
             if (msg is ChatHistoryMessage) lastChatHistory = msg;
             // Buffer facilitator sync so onboarding skips before disk check
             if (msg is FacilitatorOutputSyncMessage) lastFacilitatorOutputSync = msg;
+            // Buffer init so WorkingDirectoryNotifier can seed from it
+            if (msg is InitMessage) lastInit = msg;
             if (!_messageController.isClosed) _messageController.add(msg);
           } catch (e) {
             if (!_messageController.isClosed) {
@@ -233,12 +262,14 @@ class AgentWsService {
     String content, {
     String agentId = 'manager',
     List<String>? images,
+    String? localId,
   }) {
     _send({
       'type': 'send_message',
       'content': content,
       'agentId': agentId,
       if (images != null && images.isNotEmpty) 'images': images,
+      'localId': ?localId,
     });
   }
 
@@ -260,8 +291,45 @@ class AgentWsService {
 
   // ─── Task board ──────────────────────────────────────────────────────────
 
-  void boardGetState() {
-    _send({'type': 'board_get_state'});
+  /// Request the current board state.
+  ///
+  /// On reconnect, pass [since] = last applied revision so the server can
+  /// reply with a cheap `board_state_unchanged` instead of re-shipping
+  /// every task. Pre-WP2 servers ignore the field and always send a full
+  /// snapshot.
+  void boardGetState({int? since}) {
+    _send({
+      'type': 'board_get_state',
+      'since': ?since,
+    });
+  }
+
+  /// Pull the tech-lead pulse (recent task-completion digest) from the
+  /// server. Server replies with a [TechLeadPulseMessage] regardless of
+  /// whether the digest has any entries — clients use the response to
+  /// transition out of a loading state.
+  void getTechLeadPulse({int? limit}) {
+    _send({
+      'type': 'get_tech_lead_pulse',
+      'limit': ?limit,
+    });
+  }
+
+  /// Atomically seed multiple tasks. Server validates every entry first;
+  /// on any failure none are committed and a `board_seed_batch_result`
+  /// with `ok: false` is returned. [source] is stamped onto each task so
+  /// the manager auto-dispatcher can recognise facilitator-emitted tasks.
+  void boardSeedBatch({
+    String? batchId,
+    String? source,
+    required List<Map<String, dynamic>> tasks,
+  }) {
+    _send({
+      'type': 'board_seed_batch',
+      'batchId': ?batchId,
+      'source': ?source,
+      'tasks': tasks,
+    });
   }
 
   void boardCreateTask({
@@ -384,6 +452,27 @@ class AgentWsService {
   void claimSession() => _send({'type': 'session_claim'});
   void releaseSession() => _send({'type': 'session_release'});
 
+  // ─── Active agents ───────────────────────────────────────────────────────
+
+  void listActiveAgents() => _send({'type': 'list_active_agents'});
+  void cancelDispatchAgent(String dispatchId) =>
+      _send({'type': 'cancel_dispatch_agent', 'dispatchId': dispatchId});
+  void cancelChatQuery(String queryId) =>
+      _send({'type': 'cancel_chat_query', 'queryId': queryId});
+  void cancelAllActive() => _send({'type': 'cancel_all_active'});
+
+  // ─── Run history ─────────────────────────────────────────────────────────
+
+  /// Ask the server for every run that started after [sinceRunId]. A null
+  /// cursor returns everything the server knows about — used on first connect
+  /// and after server respawn so the UI can show interrupted runs.
+  void listRunsSince(String? sinceRunId) {
+    _send({
+      'type': 'list_runs_since',
+      'sinceRunId': ?sinceRunId,
+    });
+  }
+
   // ─── Agent traits ────────────────────────────────────────────────────────
 
   void getTraits() {
@@ -503,8 +592,12 @@ class AgentWsService {
     _send({'type': 'android_deploy_check'});
   }
 
-  void androidDeployListDevices() {
-    _send({'type': 'android_deploy_list_devices'});
+  void androidDeployWatchDevices() {
+    _send({'type': 'android_deploy_watch_devices'});
+  }
+
+  void androidDeployUnwatchDevices() {
+    _send({'type': 'android_deploy_unwatch_devices'});
   }
 
   void androidDeployStart({String? deviceSerial}) {
@@ -572,6 +665,23 @@ class AgentWsService {
     });
   }
 
+  /// Close the current connection without scheduling a reconnect.
+  /// Used when the app goes to background so the server receives a clean
+  /// close frame rather than a TCP timeout.
+  Future<void> disconnect() async {
+    if (_disposed) return;
+    _reconnectTimer?.cancel();
+    _wsSub?.cancel();
+    try {
+      await _ws?.close();
+    } catch (_) {}
+    _ws = null;
+    if (_isConnected) {
+      _isConnected = false;
+      if (!_connectionController.isClosed) _connectionController.add(false);
+    }
+  }
+
   /// Force-close the current connection and reconnect immediately.
   Future<void> reconnect({required String url}) async {
     if (_disposed) return;
@@ -590,22 +700,46 @@ class AgentWsService {
   void _send(Map<String, dynamic> msg) {
     if (_ws != null && _isConnected && !_disposed) {
       _ws!.add(jsonEncode(msg));
-    } else {
-      _log('Message dropped (not connected): ${msg['type']}');
+      return;
+    }
+    if (_disposed) return;
+    final type = msg['type'] as String?;
+    final result = _outbox.enqueue(msg);
+    switch (result) {
+      case EnqueueResult.droppedEphemeral:
+        _log('Ephemeral dropped (not connected): $type');
+      case EnqueueResult.evictedOldest:
+        _log('Outbox full — evicted oldest to make room for: $type');
+      case EnqueueResult.enqueued:
+        _log('Outbox queued (${_outbox.length}/${_outbox.cap}): $type');
+    }
+  }
+
+  /// Send everything sitting in the outbox in FIFO order. Called after a
+  /// reconnect once `client_info` has been resent so the server has
+  /// already re-identified this device. Server-side `ChatHistory.add` is
+  /// idempotent on caller-supplied id, so even if a queued message
+  /// originally raced past flush before onDone fired, the replay is safe.
+  void _drainOutbox() {
+    if (!_isConnected || _ws == null || _disposed) return;
+    final pending = _outbox.drainAll();
+    if (pending.isEmpty) return;
+    _log('Draining outbox (${pending.length} message(s))');
+    for (final m in pending) {
+      _ws!.add(jsonEncode(m));
     }
   }
 
   void _scheduleReconnect(String url) {
     if (_disposed) return;
-    _log('Reconnect scheduled in 3s → $url');
+    final delay = backoffDelay(_reconnectAttempt, Random().nextDouble());
+    _reconnectAttempt++;
+    _log('Reconnect in ${delay.inMilliseconds}ms (attempt $_reconnectAttempt) → $url');
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer(
-      const Duration(seconds: 3),
-      () {
-        _emitPhase('RTRY');
-        connect(url: url);
-      },
-    );
+    _reconnectTimer = Timer(delay, () {
+      _emitPhase('RTRY');
+      connect(url: url);
+    });
     // While the timer is counting down, surface a WAIT badge — but only if
     // we're not already showing a more specific terminal phase like FAIL/ERR
     // (those flip to WAIT after a brief moment so the user sees the cause first).
@@ -615,6 +749,15 @@ class AgentWsService {
       if (_reconnectTimer?.isActive != true) return;
       _emitPhase('WAIT');
     });
+  }
+
+  /// Exponential backoff with ±20% jitter. Caps at 30 s.
+  /// [jitter] is a [0, 1) random value — injectable for tests.
+  @visibleForTesting
+  static Duration backoffDelay(int attempt, double jitter) {
+    final base = min(1 << attempt, 30); // seconds: 1,2,4,8,16,30,30,…
+    final ms = (base * 1000 * (0.8 + jitter * 0.4)).round();
+    return Duration(milliseconds: ms);
   }
 
   Future<void> dispose() async {

@@ -20,6 +20,7 @@ export type ClientMessage =
       content: string;
       agentId: string;
       images?: string[];
+      localId?: string; // client-generated UUID, echoed in chat_history snapshot so client can match optimistic→canonical
       taskDifficulty?: number; // 1-5, optional; if set, server checks agent skill level
       forceSend?: boolean; // bypass skill-gate check
     }
@@ -29,7 +30,17 @@ export type ClientMessage =
   | { type: "interrupt" }
   | { type: "get_status" }
   // Task board
-  | { type: "board_get_state" }
+  | {
+      type: "board_get_state";
+      /**
+       * Last revision the client has already applied. If the current server
+       * revision matches, the server replies with `board_state_unchanged`
+       * (no payload) instead of a full `board_state`. Lets reconnecting
+       * clients avoid re-rendering identical state. Optional for backward
+       * compatibility — old clients omit it and always get full state.
+       */
+      since?: number;
+    }
   | {
       type: "board_create_task";
       title: string;
@@ -53,6 +64,36 @@ export type ClientMessage =
       dataBase64: string;
     }
   | { type: "board_remove_attachment"; taskId: string; attachmentId: string }
+  /**
+   * Atomically seed multiple board tasks in a single transaction.
+   *
+   * Used by the facilitator pipeline so a partial-seed failure cannot
+   * leave the board half-populated: either every task is committed or
+   * none are. Validation (non-empty title, valid column) runs on every
+   * task before any state mutates; the first invalid task aborts the
+   * whole batch with a `board_seed_batch_result` describing the
+   * failure.
+   */
+  | {
+      type: "board_seed_batch";
+      /** Optional client-supplied id so the response can be correlated. */
+      batchId?: string;
+      /** A `source` string the server stamps onto every task. The
+       *  facilitator pipeline passes "facilitator" so downstream
+       *  auto-dispatch can recognise these. */
+      source?: string;
+      tasks: Array<{
+        title: string;
+        description?: string;
+        color?: string;
+        priority?: string;
+        column?: string;
+        difficulty?: number;
+        allowedRoles?: string[];
+        taskType?: string;
+        assignedAgents?: string[];
+      }>;
+    }
   // Project management
   | { type: "set_project"; path: string }
   | { type: "set_project_context"; memories: string }
@@ -106,6 +147,8 @@ export type ClientMessage =
   // Android deploy
   | { type: "android_deploy_check" }
   | { type: "android_deploy_list_devices" }
+  | { type: "android_deploy_watch_devices" }
+  | { type: "android_deploy_unwatch_devices" }
   | { type: "android_deploy_start"; deviceSerial?: string }
   | { type: "android_deploy_cancel" }
   // Device screenshot (Android via adb, iOS via simctl)
@@ -131,13 +174,27 @@ export type ClientMessage =
   // Pull request: client asks server for the persisted facilitator output.
   // Server replies with `facilitator_output_sync` if one exists, or nothing.
   | { type: "get_facilitator_output" }
+  // Tech-lead pulse: client asks for the recent task-completion digest so it
+  // can surface team activity in the UI (e.g. on the Hub). Server replies
+  // with `tech_lead_pulse` (always sent, possibly with empty entries).
+  | { type: "get_tech_lead_pulse"; limit?: number }
   // Push: client uploads its locally stored facilitator output so the server
   // can serve it to other devices. Sent when client finds output on disk but
   // the server may not have it yet (e.g. after a server restart or first sync).
   | { type: "push_facilitator_output"; outputFormat: string; outputJson: string }
   // Session presence — multi-device coordination
   | { type: "session_claim" }   // viewer requests to become primary
-  | { type: "session_release" }; // primary voluntarily yields (or after takeover prompt)
+  | { type: "session_release" } // primary voluntarily yields (or after takeover prompt)
+  // Active-agents control — UI Settings → "Активні агенти" tab
+  | { type: "list_active_agents" }
+  | { type: "cancel_dispatch_agent"; dispatchId: string }
+  | { type: "cancel_chat_query"; queryId: string }
+  | { type: "cancel_all_active" }
+  // C.2 run history — client requests runs that landed after `sinceRunId`.
+  // `null` cursor returns every run the server knows about. Used on
+  // reconnect / boot so the UI can surface runs that finished offline
+  // (especially status=interrupted from a server respawn).
+  | { type: "list_runs_since"; sinceRunId?: string | null };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -157,6 +214,54 @@ export interface AgentInfo {
 
 /** Agent activity status */
 export type AgentStatus = "idle" | "thinking" | "typing" | "reading" | "running" | "waiting";
+
+// ─── Run history wire shape (C.2 runs?since= API) ─────────────────────────────
+//
+// Mirror of server/src/agent_run.ts `AgentRun` — duplicated here so the
+// protocol module stays standalone (no runtime dep on the store). If a
+// field changes shape there, this type must change in lockstep; the
+// agent_run_protocol_shape test pins the equivalence.
+
+export type AgentRunStatusWire =
+  | "running"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "cancelled";
+
+export type AgentRunTaskTypeWire = "chat" | "dispatch";
+
+export interface AgentRunUsageWire {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  numTurns: number;
+  numToolCalls: number;
+}
+
+export interface AgentRunToolCallWire {
+  name: string;
+  id: string;
+  at: string;
+}
+
+export interface AgentRunSnapshot {
+  runId: string;
+  agentId: string;
+  taskType: AgentRunTaskTypeWire;
+  status: AgentRunStatusWire;
+  userMessageId?: string;
+  userMessageSnippet?: string;
+  partialOutput?: string;
+  finalOutput?: string;
+  toolCalls: AgentRunToolCallWire[];
+  startedAt: string;
+  completedAt?: string;
+  usage?: AgentRunUsageWire;
+  reason?: string;
+}
 
 /** Tool activity within an agent */
 export interface ToolActivity {
@@ -221,6 +326,7 @@ export type ServerMessage =
       text: string;
       agentId: string;
       threadId?: string;
+      timestamp?: string; // server-canonical ISO8601 timestamp
     }
   | {
       type: "chat_history";
@@ -229,6 +335,7 @@ export type ServerMessage =
         text: string;
         agentId: string;
         timestamp: string;
+        id?: string; // stable message identifier — allows client-server deduplication across devices
         images?: string[];
       }>;
     }
@@ -237,6 +344,22 @@ export type ServerMessage =
       agentId: string;
       status: AgentStatus;
       tools: ToolActivity[];
+    }
+  | {
+      type: "active_agents";
+      /** All active work owned by this ws — sub-agent dispatches and main chat queries. */
+      entries: Array<{
+        kind: "dispatch" | "chat";
+        id: string; // dispatchId for sub-agents, queryId for chat
+        agentId: string;
+        task: string;
+        elapsedMs: number;
+      }>;
+    }
+  | {
+      type: "runs_since";
+      /** Snapshots of every run that started after the cursor. Chronological. */
+      runs: AgentRunSnapshot[];
     }
   | {
       type: "subagent_start";
@@ -256,6 +379,14 @@ export type ServerMessage =
       toolName: string;
       status: string;
       threadId?: string;
+    }
+  | {
+      type: "subagent_thread_event";
+      agentId: string;
+      toolUseId: string;
+      toolName: string;
+      status: string;
+      threadId: string;
     }
   | {
       type: "tool_done";
@@ -298,11 +429,60 @@ export type ServerMessage =
   | {
       type: "board_state";
       tasks: TaskCardData[];
+      /**
+       * Monotonically increasing revision, bumped on every server-side
+       * mutation. Clients track the last revision they applied; an older
+       * broadcast that arrives out of order can be ignored. Optional so
+       * older clients keep working — they simply ignore the field.
+       */
+      revision?: number;
+    }
+  | {
+      /**
+       * Sent in response to a `board_get_state` with a `since` matching
+       * the current server revision. Lets a reconnecting client know its
+       * cached state is current without re-shipping every task.
+       */
+      type: "board_state_unchanged";
+      revision: number;
+    }
+  /**
+   * Acknowledgement for `board_seed_batch`. Always emitted, success or
+   * failure. On `ok=true`, every task in the batch was committed and
+   * the freshly-created ids are listed; on `ok=false`, no state changed
+   * and `errors` describes the first invalid task.
+   */
+  | {
+      type: "board_seed_batch_result";
+      batchId?: string;
+      ok: boolean;
+      committedIds: string[];
+      errors: Array<{ index: number; reason: string }>;
     }
   // Project memory
   | {
       type: "summary_result";
       summary: string;
+    }
+  // Roster — server-side validation rejected the set_game_state payload.
+  // Sent only when at least one instance failed validation; the server's
+  // internal state is unchanged and the client should surface these to
+  // the user (toast / dialog) and roll back the offending mutation.
+  | {
+      type: "set_game_state_error";
+      errors: Array<{
+        instanceId: string;
+        code: string;
+        message: string;
+      }>;
+    }
+  // Roster — emitted right after a successful set_game_state for every
+  // instanceId that disappeared from the roster compared to the previous
+  // accepted state. Lets the client clean up agent-scoped UI (open chat
+  // tabs, busy indicators) without diff'ing two snapshots itself.
+  | {
+      type: "agent_fired";
+      instanceId: string;
     }
   // Live input sync
   | { type: "input_text"; text: string }
@@ -476,7 +656,21 @@ export type ServerMessage =
       outputFormat: OutputFormatKey;
       outputJson: string;
     }
-  | { type: "facilitator_error"; error: string }
+  | {
+      type: "facilitator_error";
+      /** Human-readable message; kept for backward compat. */
+      error: string;
+      /**
+       * Typed failure code so the client can surface a specific UX:
+       *   - "timeout"     — LLM call exceeded its time budget; retry
+       *   - "parse"       — LLM returned no/invalid JSON; report style
+       *   - "rate_limit"  — provider rate-limited; retry later
+       *   - "auth"        — API key missing/invalid; settings prompt
+       *   - "unknown"     — anything else (default)
+       * Optional for forward compatibility with older clients.
+       */
+      code?: "timeout" | "parse" | "rate_limit" | "auth" | "unknown";
+    }
   // Cross-device sync — sent to new clients on connect and broadcast to all
   // other clients when a new facilitator output is seeded. Same payload as
   // `facilitator_seeded` so clients can reuse the same decode path.
@@ -499,6 +693,20 @@ export type ServerMessage =
       type: "session_taken";
       /** Device name of the device that took the session. */
       byDevice: string;
+    }
+  // Tech-lead pulse — recent task-completion digest, sent in reply to
+  // `tech_lead_pulse`. Always sent (entries may be empty) so the client
+  // can transition out of a loading state. Newest entry last.
+  | {
+      type: "tech_lead_pulse";
+      entries: Array<{
+        taskId: string;
+        title: string;
+        agentId: string;
+        role: string;
+        outcome: "done";
+        ts: string;
+      }>;
     };
 
 /** IDs of all network-diagnostic checks known to the server. `clientConnected` is client-only. */

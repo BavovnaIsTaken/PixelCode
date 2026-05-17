@@ -13,6 +13,7 @@ import 'package:pixelcode/providers/agent_traits_provider.dart';
 import 'package:pixelcode/providers/deepseek_auth_provider.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/kimi_auth_provider.dart';
+import 'package:pixelcode/providers/tech_lead_pulse_provider.dart';
 import 'package:pixelcode/services/agent_export_service.dart';
 
 class AgentOverviewTab extends ConsumerWidget {
@@ -34,6 +35,8 @@ class AgentOverviewTab extends ConsumerWidget {
     final xpProgress =
         xpNeeded > 0 ? (agent.xp / xpNeeded).clamp(0.0, 1.0) : 1.0;
     final traits = ref.watch(agentTraitsProvider(instanceId));
+    final recentCompletions =
+        ref.watch(agentCompletionCountProvider(instanceId));
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -84,6 +87,10 @@ class AgentOverviewTab extends ConsumerWidget {
                     ],
                   ),
                 ),
+                if (recentCompletions > 0) ...[
+                  const SizedBox(width: 12),
+                  _RecentCompletionsBadge(count: recentCompletions),
+                ],
               ],
             ),
           ],
@@ -801,6 +808,49 @@ class _NeedsDeskBanner extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact "growth" badge — sits next to the level chip and shows how
+/// many recent task completions the agent has logged. The signal makes
+/// "this agent has done real work" visible at a glance, which the
+/// player otherwise has to infer from XP alone.
+class _RecentCompletionsBadge extends StatelessWidget {
+  final int count;
+  const _RecentCompletionsBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1F2A2C),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: const Color(0xFF00C0D1).withValues(alpha: 0.35),
+          width: 0.5,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.check_circle_outline,
+            size: 12,
+            color: const Color(0xFF00C0D1).withValues(alpha: 0.85),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$count done',
+            style: const TextStyle(
+              color: Color(0xFF00C0D1),
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],

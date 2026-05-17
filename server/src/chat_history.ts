@@ -10,6 +10,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import { randomUUID } from "node:crypto";
 import type { ServerMessage } from "./protocol.js";
 
 export interface StoredChatMessage {
@@ -17,6 +18,7 @@ export interface StoredChatMessage {
   text: string;
   agentId: string;
   timestamp: string; // ISO 8601
+  id?: string; // stable identifier for cross-device sync; generated if not provided
   images?: string[]; // base64-encoded image data
 }
 
@@ -37,8 +39,21 @@ export class ChatHistory {
   private readonly _messages: StoredChatMessage[] = [];
   private readonly _enrichedMetadata: Map<string, EnrichedChatMessage["metadata"]> = new Map();
 
+  /**
+   * Append a message. Idempotent when the caller supplies an id: a second
+   * call with the same id is ignored. Lets clients safely replay queued
+   * messages after a reconnect without producing chat duplicates — the
+   * outbox cannot tell whether the original send actually reached the
+   * server before the socket dropped.
+   */
   add(msg: StoredChatMessage): void {
-    this._messages.push(msg);
+    if (msg.id) {
+      for (const existing of this._messages) {
+        if (existing.id === msg.id) return;
+      }
+    }
+    const withId = { ...msg, id: msg.id ?? randomUUID() };
+    this._messages.push(withId);
   }
 
   clear(): void {

@@ -384,4 +384,144 @@ void main() {
       expect(crits, 0);
     });
   });
+
+  group('projectMemoryDepthBonus', () {
+    test('zero tasks yields no bonus', () {
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 0), 0.0);
+    });
+
+    test('scales at 0.01 per 5 tasks', () {
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 5), closeTo(0.01, 1e-9));
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 10), closeTo(0.02, 1e-9));
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 50), closeTo(0.10, 1e-9));
+    });
+
+    test('caps at kMaxProjectMemoryBonusInRoll', () {
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 75), closeTo(0.15, 1e-9));
+      expect(projectMemoryDepthBonus(totalTasksCompleted: 150), kMaxProjectMemoryBonusInRoll);
+    });
+  });
+
+  group('rollOutcome — project memory bonus', () {
+    test('project memory bonus raises crit rate on architecture divergent tasks',
+        () {
+      final rng = Random(41);
+      var crits = 0;
+      var critsBaseline = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 5,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              taskType: 'architecture',
+              projectMemoryBonus: 0.15,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 5,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              taskType: 'architecture',
+            ) ==
+            TaskOutcome.crit) {
+          critsBaseline++;
+        }
+      }
+      // base critChance(5) = 0.10; with +0.15 bonus → 0.25.
+      // Bonus run must be meaningfully higher (delta well above noise).
+      expect(crits - critsBaseline, greaterThan(n * 0.08));
+    });
+
+    test('project memory bonus does NOT fire on non-architecture divergent tasks',
+        () {
+      final rng = Random(43);
+      var crits = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 50,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              taskType: 'product-spec',
+              projectMemoryBonus: 0.15,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      // With +50 creativity and no memory bonus (non-architecture), expect crits.
+      // They should be from creativity alone, not inflated by projectMemoryBonus.
+      final rng2 = Random(43);
+      var crits2 = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng2,
+              precisionSkill: 15,
+              creativitySkill: 50,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              taskType: 'product-spec',
+            ) ==
+            TaskOutcome.crit) {
+          crits2++;
+        }
+      }
+      // Rates should be essentially identical (within noise).
+      final diff = (crits - crits2).abs();
+      expect(diff, lessThan(100));
+    });
+
+    test('project memory bonus does NOT fire on non-divergent tasks', () {
+      final rng = Random(47);
+      var crits = 0;
+      for (var i = 0; i < 1000; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 50,
+              reliabilitySkill: 15,
+              isDivergentTask: false,
+              taskType: 'architecture',
+              projectMemoryBonus: 0.30,
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      expect(crits, 0);
+    });
+
+    test('project memory bonus is capped at kMaxProjectMemoryBonusInRoll', () {
+      // Pass an absurd bonus; effective contribution must equal the cap.
+      // base critChance(0) = 0; with cap = 0.15 → ~15% crit on architecture.
+      final rng = Random(53);
+      var crits = 0;
+      const n = 4000;
+      for (var i = 0; i < n; i++) {
+        if (rollOutcome(
+              rng: rng,
+              precisionSkill: 15,
+              creativitySkill: 0,
+              reliabilitySkill: 15,
+              isDivergentTask: true,
+              taskType: 'architecture',
+              projectMemoryBonus: 5.0, // wildly above the cap
+            ) ==
+            TaskOutcome.crit) {
+          crits++;
+        }
+      }
+      // Should sit around 15% (the cap), never higher.
+      expect(crits, greaterThan(n * 0.08));
+      expect(crits, lessThan(n * 0.22));
+    });
+  });
 }

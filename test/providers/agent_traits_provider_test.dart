@@ -145,6 +145,147 @@ void main() {
     });
   });
 
+  group('agentTopicAffinitiesProvider', () {
+    test('returns empty list when no traits exist', () {
+      final c = _containerWith([]);
+      addTearDown(c.dispose);
+
+      expect(c.read(agentTopicAffinitiesProvider('agent-1')), isEmpty);
+    });
+
+    test('aggregates single trait with strength', () {
+      final c = _containerWith([
+        _trait(
+          id: 't1',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'arch-design',
+          category: 'architecture',
+          frequency: 3,
+        ),
+      ]);
+      addTearDown(c.dispose);
+
+      final result = c.read(agentTopicAffinitiesProvider('agent-1'));
+      expect(result.length, 1);
+      expect(result[0].category, LessonCategory.architecture);
+      expect(result[0].strengthCount, 1);
+      expect(result[0].weaknessCount, 0);
+      expect(result[0].totalFrequency, 3);
+    });
+
+    test('sums counts and frequencies within same category', () {
+      final c = _containerWith([
+        _trait(
+          id: 't1',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'test1',
+          category: 'testing',
+          frequency: 2,
+        ),
+        _trait(
+          id: 't2',
+          agentId: 'agent-1',
+          type: TraitType.weakness,
+          tag: 'test-flaky',
+          category: 'testing',
+          frequency: 4,
+        ),
+        _trait(
+          id: 't3',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'test2',
+          category: 'testing',
+          frequency: 3,
+        ),
+      ]);
+      addTearDown(c.dispose);
+
+      final result = c.read(agentTopicAffinitiesProvider('agent-1'));
+      expect(result.length, 1);
+      expect(result[0].strengthCount, 2);
+      expect(result[0].weaknessCount, 1);
+      expect(result[0].totalFrequency, 2 + 4 + 3); // 9
+    });
+
+    test('multiple categories sorted by totalFrequency descending', () {
+      final c = _containerWith([
+        _trait(
+          id: 't1',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'arch',
+          category: 'architecture',
+          frequency: 5,
+        ),
+        _trait(
+          id: 't2',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'quality',
+          category: 'code_quality',
+          frequency: 2,
+        ),
+        _trait(
+          id: 't3',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'sec',
+          category: 'security',
+          frequency: 8,
+        ),
+      ]);
+      addTearDown(c.dispose);
+
+      final result = c.read(agentTopicAffinitiesProvider('agent-1'));
+      expect(result.length, 3);
+      expect(result[0].category, LessonCategory.security); // 8
+      expect(result[1].category, LessonCategory.architecture); // 5
+      expect(result[2].category, LessonCategory.codeQuality); // 2
+    });
+
+    test('skips traits with unknown category and does not crash', () {
+      final c = _containerWith([
+        _trait(
+          id: 't1',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'valid',
+          category: 'testing',
+        ),
+        _trait(
+          id: 't2',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'invalid',
+          category: 'unknown-category',
+        ),
+      ]);
+      addTearDown(c.dispose);
+
+      final result = c.read(agentTopicAffinitiesProvider('agent-1'));
+      expect(result.length, 1);
+      expect(result[0].category, LessonCategory.testing);
+    });
+
+    test('filters by agentId and returns empty for unknown agent', () {
+      final c = _containerWith([
+        _trait(
+          id: 't1',
+          agentId: 'agent-1',
+          type: TraitType.strength,
+          tag: 'x',
+          category: 'architecture',
+        ),
+      ]);
+      addTearDown(c.dispose);
+
+      expect(c.read(agentTopicAffinitiesProvider('unknown-agent')), isEmpty);
+    });
+  });
+
   group('settingsProvider — learningConsentEnabled', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 

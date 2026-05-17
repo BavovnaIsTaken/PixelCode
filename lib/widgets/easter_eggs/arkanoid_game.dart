@@ -28,24 +28,12 @@ const _paddleH = 11.0;
 const _ballR = 5.5;
 const _baseBallSpeed = 4.2;
 const _bottomPad = 28.0;
-const _puW = 34.0;
-const _puH = 13.0;
+const _puW = 38.0;
+const _puH = 18.0;
 const _puFallSpeed = 1.8;
 const _puChance = 0.20;
 const _laserSpeed = 9.0;
 const _laserFireInterval = 28; // ticks between auto-shots
-
-// DX-Ball classic row palette (top → bottom)
-const _rowColors = [
-  Color(0xFFFF2222),
-  Color(0xFFFF8800),
-  Color(0xFFDDDD00),
-  Color(0xFF22DD22),
-  Color(0xFF00CCCC),
-  Color(0xFF2266FF),
-  Color(0xFFAA44FF),
-  Color(0xFFFF44AA),
-];
 
 // ─── Persistence keys ────────────────────────────────────────────────────────
 
@@ -61,10 +49,111 @@ enum _Phase { waitingLaunch, running, paused, gameOver, won }
 
 enum _PUType { expand, multiball, sticky, laser, thru, life, slow, blast }
 
+// Powerup palette mirrors skinDefault.clothes so falling tiles, HUD chips
+// and the matching brick row-tints stay consistent across the office reskin.
+const Color _puColorExpand = Color(0xFF059669); // coder green
+const Color _puColorMulti = Color(0xFF7C3AED); // reviewer purple
+const Color _puColorSticky = Color(0xFFCA8A04); // game-designer gold
+const Color _puColorLaser = Color(0xFFDC2626); // security red
+const Color _puColorThru = Color(0xFF2563EB); // ui-ux blue
+const Color _puColorLife = Color(0xFFDB2777); // tester pink
+const Color _puColorSlow = Color(0xFF00949F); // tech-lead teal
+const Color _puColorBlast = Color(0xFFD97706); // manager orange
+
+Color _puColor(_PUType type) => switch (type) {
+      _PUType.expand => _puColorExpand,
+      _PUType.multiball => _puColorMulti,
+      _PUType.sticky => _puColorSticky,
+      _PUType.laser => _puColorLaser,
+      _PUType.thru => _puColorThru,
+      _PUType.life => _puColorLife,
+      _PUType.slow => _puColorSlow,
+      _PUType.blast => _puColorBlast,
+    };
+
+// Pixel-art glyphs for falling powerup capsules. Row-major bitmaps,
+// '#' = filled pixel, '.' = transparent. Each '#' renders as a 2×2 px
+// block (see _paintGlyph), so a 9×7 grid maps to an 18×14 px glyph —
+// roughly 70-80% of the pill's usable area, readable at 1.8 px/frame fall.
+const Map<_PUType, List<String>> _puGlyphs = {
+  // Two outward-pointing chevrons → paddle widening.
+  _PUType.expand: [
+    '..#...#..',
+    '.##...##.',
+    '###...###',
+    '.##...##.',
+    '..#...#..',
+  ],
+  // Three spheres.
+  _PUType.multiball: [
+    '.........',
+    '##.##.##.',
+    '##.##.##.',
+    '.........',
+  ],
+  // U-magnet (open top) → catch/sticky.
+  _PUType.sticky: [
+    '##.....##',
+    '##.....##',
+    '##.....##',
+    '#########',
+    '.#######.',
+  ],
+  // Lightning bolt zigzag.
+  _PUType.laser: [
+    '..####...',
+    '.####....',
+    '####.....',
+    '#########',
+    '.....####',
+    '....####.',
+    '...####..',
+  ],
+  // Right-pointing arrow with dotted shaft → ball passes through.
+  _PUType.thru: [
+    '....#....',
+    '....##...',
+    '##.###.##',
+    '....##...',
+    '....#....',
+  ],
+  // Heart.
+  _PUType.life: [
+    '.##..##..',
+    '#########',
+    '#########',
+    '.#######.',
+    '..#####..',
+    '...###...',
+  ],
+  // Hourglass.
+  _PUType.slow: [
+    '#########',
+    '.#######.',
+    '..#####..',
+    '...###...',
+    '..#####..',
+    '.#######.',
+    '#########',
+  ],
+  // 4-arm explosion star.
+  _PUType.blast: [
+    '....#....',
+    '....#....',
+    '..#####..',
+    '#########',
+    '..#####..',
+    '....#....',
+    '....#....',
+  ],
+};
+
 class _Ball {
   double x, y, dx, dy;
   bool stuck;
   double stuckOffsetX = 0;
+  // Last 3 positions for fading motion trail (oldest → newest).
+  final List<Offset> trail = [];
   _Ball(this.x, this.y, this.dx, this.dy, {this.stuck = false});
 }
 
@@ -78,6 +167,34 @@ class _Bullet {
   double x, y;
   _Bullet(this.x, this.y);
 }
+
+class _Debris {
+  double x, y, dx, dy;
+  int life;
+  final Color color;
+  _Debris(this.x, this.y, this.dx, this.dy, this.life, this.color);
+}
+
+// Mirrors skinDefault `clothes` palette from character_skins.dart so brick
+// row-tints, powerup tiles and destruction debris all read as the same
+// office class. Module-level so both painter and game logic can use it.
+const _kAgentClothes = <Color>[
+  Color(0xFF00949F), // tech-lead
+  Color(0xFFD97706), // manager
+  Color(0xFF059669), // coder
+  Color(0xFF7C3AED), // reviewer
+  Color(0xFFDB2777), // tester
+  Color(0xFFDC2626), // security
+  Color(0xFF2563EB), // ui-ux
+  Color(0xFFCA8A04), // game-designer
+];
+
+Color _brickAccent(int type, int row) => switch (type) {
+      _bGlass || _bCracked => const Color(0xFFB0C4DE),
+      _bGold => const Color(0xFFFFD700),
+      _bBlast => const Color(0xFFD97706),
+      _ => _kAgentClothes[row % _kAgentClothes.length],
+    };
 
 // ─── Level patterns (13 × 8 = 104 elements each) ─────────────────────────────
 // 0=empty  1=normal  2=glass  4=gold  5=blast  9=steel
@@ -248,9 +365,18 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
   // Game state
   var _phase = _Phase.waitingLaunch;
   var _bricks = <int>[];
+  // Per-brick hit-flash counter: brightens brick for ~6 ticks after a hit
+  // to replace the bevel-flash feedback we lose by dropping DX-Ball gloss.
+  var _brickFlash = <int>[];
   var _balls = <_Ball>[];
   final _fallingPUs = <_FallingPU>[];
   final _bullets = <_Bullet>[];
+  final _debris = <_Debris>[];
+  // Paddle rim flash (5-tick) on bounce; sticky catch glow (6-tick) anchored
+  // at the catch x to show the player WHY the ball just stopped.
+  int _paddleFlash = 0;
+  int _stickyFlash = 0;
+  double _stickyFlashX = 0;
   double _paddleX = 0;
   int _level = 1;
   int _score = 0;
@@ -330,6 +456,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       _lives = 3;
       _bricks = _generateBricks();
     }
+    _brickFlash = List<int>.filled(_bricks.length, 0);
   }
 
   Future<void> _saveGame() async {
@@ -379,7 +506,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     _gameW = w;
     _gameH = h;
     _brickW = (w - _brickGap * (_brickCols + 1)) / _brickCols;
-    _brickH = (_brickW * 0.38).clamp(9.0, 15.0);
+    _brickH = _brickW * 0.5;
     _brickTop = h * 0.07;
     _paddleW = (w * 0.20).clamp(52.0, 88.0);
     if (!_layoutReady) {
@@ -403,6 +530,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     ];
     _fallingPUs.clear();
     _bullets.clear();
+    _debris.clear();
+    _paddleFlash = 0;
+    _stickyFlash = 0;
     _expandTicks = 0;
     _stickyTicks = 0;
     _laserTicks = 0;
@@ -484,6 +614,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     setState(() {
       _level++;
       _bricks = _generateBricks();
+      _brickFlash = List<int>.filled(_bricks.length, 0);
       _phase = _Phase.waitingLaunch;
       _resetBallPosition();
       _saveGame();
@@ -496,6 +627,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       _score = 0;
       _lives = 3;
       _bricks = _generateBricks();
+      _brickFlash = List<int>.filled(_bricks.length, 0);
       _phase = _Phase.waitingLaunch;
       _resetBallPosition();
       _clearSave();
@@ -568,6 +700,20 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
       if (_slowTicks > 0) _slowTicks--;
       if (_blastTicks > 0) _blastTicks--;
 
+      for (var i = 0; i < _brickFlash.length; i++) {
+        if (_brickFlash[i] > 0) _brickFlash[i]--;
+      }
+      if (_paddleFlash > 0) _paddleFlash--;
+      if (_stickyFlash > 0) _stickyFlash--;
+
+      _debris.removeWhere((d) {
+        d.x += d.dx;
+        d.y += d.dy;
+        d.dy += 0.10;
+        d.life--;
+        return d.life <= 0;
+      });
+
       final speed = _effectiveSpeed;
       final pw = _effectivePaddleW;
       final paddleTop = _gameH - _bottomPad - _paddleH;
@@ -621,6 +767,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.x = (_paddleX + pw / 2 + ball.stuckOffsetX)
               .clamp(_ballR, _gameW - _ballR);
           ball.y = paddleTop - _ballR;
+          ball.trail.clear();
           continue;
         }
 
@@ -630,6 +777,9 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.dx = ball.dx / mag * speed;
           ball.dy = ball.dy / mag * speed;
         }
+
+        ball.trail.add(Offset(ball.x, ball.y));
+        if (ball.trail.length > 3) ball.trail.removeAt(0);
 
         ball.x += ball.dx;
         ball.y += ball.dy;
@@ -665,6 +815,8 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ball.stuckOffsetX = (ball.x - (_paddleX + pw / 2))
                 .clamp(-pw / 2, pw / 2);
             ball.y = paddleTop - _ballR;
+            _stickyFlash = 6;
+            _stickyFlashX = ball.x;
             continue;
           }
           ball.y = paddleTop - _ballR;
@@ -673,6 +825,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
           ball.dx = speed * cos(angle);
           ball.dy = speed * sin(angle);
           if (ball.dy > -1.0) ball.dy = -1.0;
+          _paddleFlash = 5;
         }
 
         // Brick collisions
@@ -732,6 +885,8 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
     final type = _bricks[idx];
     if (type == _bEmpty || type == _bSteel) return;
 
+    _brickFlash[idx] = 6;
+
     if (type == _bGlass && !isChain && !_isBlast) {
       _bricks[idx] = _bCracked;
       return;
@@ -739,10 +894,27 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
 
     _bricks[idx] = _bEmpty;
     _score += _brickPoints(type);
+    _spawnDebris(idx, type);
     _maybeDropPowerUp(idx);
 
     if (type == _bBlast) {
       _explodeNeighbours(idx);
+    }
+  }
+
+  void _spawnDebris(int idx, int type) {
+    final col = idx % _brickCols;
+    final row = idx ~/ _brickCols;
+    final cx = _brickLeft + col * (_brickW + _brickGap) + _brickW / 2;
+    final cy = _brickTop + row * (_brickH + _brickGap) + _brickH / 2;
+    final color = _brickAccent(type, row);
+    final count = type == _bBlast ? 8 : 4;
+    final spread = type == _bBlast ? 2.4 : 1.7;
+    for (var i = 0; i < count; i++) {
+      final base = (i * 2 * pi / count);
+      final a = base + (_rng.nextDouble() - 0.5) * 0.5;
+      final s = spread * (0.7 + _rng.nextDouble() * 0.5);
+      _debris.add(_Debris(cx, cy, cos(a) * s, sin(a) * s, 7, color));
     }
   }
 
@@ -868,6 +1040,7 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                       size: Size(constraints.maxWidth, constraints.maxHeight),
                       painter: _DxBallPainter(
                         bricks: _bricks,
+                        brickFlash: _brickFlash,
                         brickW: _brickW,
                         brickH: _brickH,
                         brickTop: _brickTop,
@@ -878,6 +1051,10 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
                         balls: _balls,
                         fallingPUs: _fallingPUs,
                         bullets: _bullets,
+                        debris: _debris,
+                        paddleFlash: _paddleFlash,
+                        stickyFlash: _stickyFlash,
+                        stickyFlashX: _stickyFlashX,
                         phase: _phase,
                         isBlast: _isBlast,
                         isThru: _isThru,
@@ -955,14 +1132,14 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
             ),
           ),
           const Spacer(),
-          if (_expandTicks > 0) _puChip('EXPAND', const Color(0xFF44CC44)),
-          if (_stickyTicks > 0) _puChip('CATCH', const Color(0xFFFFCC00)),
-          if (_laserTicks > 0) _puChip('LASER', const Color(0xFFFF4444)),
-          if (_thruTicks > 0) _puChip('THRU', const Color(0xFF00CCFF)),
-          if (_slowTicks > 0) _puChip('SLOW', const Color(0xFF4488FF)),
-          if (_blastTicks > 0) _puChip('BLAST', const Color(0xFFFF8800)),
+          if (_expandTicks > 0) _puChip('EXPAND', _puColorExpand),
+          if (_stickyTicks > 0) _puChip('CATCH', _puColorSticky),
+          if (_laserTicks > 0) _puChip('LASER', _puColorLaser),
+          if (_thruTicks > 0) _puChip('THRU', _puColorThru),
+          if (_slowTicks > 0) _puChip('SLOW', _puColorSlow),
+          if (_blastTicks > 0) _puChip('BLAST', _puColorBlast),
           if (_balls.length > 1)
-            _puChip('×${_balls.length}', const Color(0xFFAA44FF)),
+            _puChip('×${_balls.length}', _puColorMulti),
           const SizedBox(width: 4),
           for (var i = 0; i < _lives.clamp(0, 7); i++)
             Padding(
@@ -1052,17 +1229,23 @@ class _ArkanoidGameState extends ConsumerState<ArkanoidGame> {
 
 class _DxBallPainter extends CustomPainter {
   final List<int> bricks;
+  final List<int> brickFlash;
   final double brickW, brickH, brickTop, brickLeft;
   final double paddleX, paddleW, bottomPad;
   final List<_Ball> balls;
   final List<_FallingPU> fallingPUs;
   final List<_Bullet> bullets;
+  final List<_Debris> debris;
+  final int paddleFlash;
+  final int stickyFlash;
+  final double stickyFlashX;
   final _Phase phase;
   final bool isBlast, isThru, isLaser, isExpand;
   final int score, highScore;
 
   _DxBallPainter({
     required this.bricks,
+    required this.brickFlash,
     required this.brickW,
     required this.brickH,
     required this.brickTop,
@@ -1073,6 +1256,10 @@ class _DxBallPainter extends CustomPainter {
     required this.balls,
     required this.fallingPUs,
     required this.bullets,
+    required this.debris,
+    required this.paddleFlash,
+    required this.stickyFlash,
+    required this.stickyFlashX,
     required this.phase,
     required this.isBlast,
     required this.isThru,
@@ -1086,6 +1273,7 @@ class _DxBallPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     _drawBackground(canvas, size);
     _drawBricks(canvas);
+    _drawDebris(canvas);
     _drawFallingPowerUps(canvas);
     _drawBullets(canvas);
     _drawPaddle(canvas, size);
@@ -1093,31 +1281,52 @@ class _DxBallPainter extends CustomPainter {
     _drawOverlay(canvas, size);
   }
 
+  // ── Debris ───────────────────────────────────────────────────────────────
+
+  void _drawDebris(Canvas canvas) {
+    for (final d in debris) {
+      final alpha = (d.life / 7.0).clamp(0.0, 1.0);
+      canvas.drawRect(
+        Rect.fromLTWH(d.x - 1, d.y - 1, 2, 2),
+        Paint()..color = d.color.withValues(alpha: alpha),
+      );
+    }
+  }
+
   // ── Background ───────────────────────────────────────────────────────────
 
   void _drawBackground(Canvas canvas, Size size) {
-    // Deep dark gradient
+    // Floor base — same dark navy as office canvas, so the arkanoid arena
+    // reads as the same physical space as the office.
+    canvas.drawRect(
+      Offset.zero & size,
+      Paint()..color = const Color(0xFF131320),
+    );
+
+    // 16-px checker tiles. Low contrast so bricks/ball stay foreground.
+    const tile = 16.0;
+    final lightTile = Paint()..color = const Color(0xFF171728);
+    for (var ty = 0.0; ty < size.height; ty += tile) {
+      for (var tx = 0.0; tx < size.width; tx += tile) {
+        final isLight =
+            (((tx / tile).floor() + (ty / tile).floor()) & 1) == 0;
+        if (isLight) {
+          canvas.drawRect(Rect.fromLTWH(tx, ty, tile, tile), lightTile);
+        }
+      }
+    }
+
+    // Radial vignette to focus the play area without competing with bricks.
     canvas.drawRect(
       Offset.zero & size,
       Paint()
-        ..shader = ui.Gradient.linear(
-          Offset.zero,
-          Offset(0, size.height),
-          [const Color(0xFF000C1A), const Color(0xFF000408)],
+        ..shader = ui.Gradient.radial(
+          Offset(size.width / 2, size.height / 2),
+          size.shortestSide * 0.75,
+          [const Color(0x00000000), const Color(0x66000000)],
+          [0.55, 1.0],
         ),
     );
-
-    // Subtle scanlines
-    final scan = Paint()..color = Colors.black.withValues(alpha: 0.10);
-    for (var y = 0.0; y < size.height; y += 4) {
-      canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), scan);
-    }
-
-    // Very faint vertical column guides (DX-Ball feel)
-    final guide = Paint()..color = Colors.white.withValues(alpha: 0.015);
-    for (var x = 0.0; x < size.width; x += size.width / _brickCols) {
-      canvas.drawRect(Rect.fromLTWH(x, 0, 1, size.height), guide);
-    }
   }
 
   // ── Bricks ───────────────────────────────────────────────────────────────
@@ -1125,130 +1334,255 @@ class _DxBallPainter extends CustomPainter {
   void _drawBricks(Canvas canvas) {
     for (var row = 0; row < _brickRows; row++) {
       for (var col = 0; col < _brickCols; col++) {
-        final type = bricks[row * _brickCols + col];
+        final idx = row * _brickCols + col;
+        final type = bricks[idx];
         if (type == _bEmpty) continue;
         final x = brickLeft + col * (brickW + _brickGap);
         final y = brickTop + row * (brickH + _brickGap);
-        _drawSingleBrick(canvas, x, y, type, row);
+        final flash = idx < brickFlash.length ? brickFlash[idx] : 0;
+        _drawSingleBrick(canvas, x, y, type, row, flash);
       }
     }
   }
 
   void _drawSingleBrick(
-      Canvas canvas, double x, double y, int type, int row) {
+      Canvas canvas, double x, double y, int type, int row, int flash) {
     final rect = Rect.fromLTWH(x, y, brickW, brickH);
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(2));
 
-    final Color base;
     switch (type) {
       case _bNormal:
-        base = _rowColors[row % _rowColors.length];
+        _paintNormalBrick(canvas, rect, row);
       case _bGlass:
-        base = const Color(0xFF88CCFF);
+        _paintGlassBrick(canvas, rect, cracked: false);
       case _bCracked:
-        base = const Color(0xFF5599BB);
+        _paintGlassBrick(canvas, rect, cracked: true);
       case _bGold:
-        base = const Color(0xFFFFCC00);
+        _paintGoldBrick(canvas, rect);
       case _bBlast:
-        base = const Color(0xFFFF4400);
+        _paintBlastBrick(canvas, rect);
       case _bSteel:
-        base = const Color(0xFF8899AA);
-      default:
-        base = Colors.white;
+        _paintSafeBrick(canvas, rect);
     }
 
-    // 3-stop gradient: lighter top → base mid → darker bottom (DX-Ball bevel)
-    final light = Color.lerp(base, Colors.white, 0.35)!;
-    final dark = Color.lerp(base, Colors.black, 0.30)!;
-    canvas.drawRRect(
-      rrect,
+    // Cyan accent rim — office signature, prevents bricks from sinking into
+    // the navy floor without resorting to glossy gradients.
+    canvas.drawRect(
+      rect.deflate(0.5),
       Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(x, y),
-          Offset(x, y + brickH),
-          [light, base, dark],
-          [0.0, 0.45, 1.0],
-        ),
+        ..color = const Color(0xFF00C0D1).withValues(alpha: 0.22)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
     );
 
-    // Top highlight strip
-    canvas.drawRect(
-      Rect.fromLTWH(x + 1, y + 1, brickW - 2, 2),
-      Paint()..color = Colors.white.withValues(alpha: 0.45),
-    );
-
-    // Bottom shadow strip
-    canvas.drawRect(
-      Rect.fromLTWH(x + 1, y + brickH - 2, brickW - 2, 1),
-      Paint()..color = Colors.black.withValues(alpha: 0.45),
-    );
-
-    // Left edge highlight
-    canvas.drawRect(
-      Rect.fromLTWH(x, y + 2, 1, brickH - 4),
-      Paint()..color = Colors.white.withValues(alpha: 0.25),
-    );
-
-    // Type-specific details
-    switch (type) {
-      case _bGlass:
-        // Glassy sheen on right side
-        canvas.drawRect(
-          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
-          Paint()..color = Colors.white.withValues(alpha: 0.22),
-        );
-      case _bCracked:
-        // Cracks + dimmer sheen
-        canvas.drawRect(
-          Rect.fromLTWH(x + brickW * 0.65, y + 2, brickW * 0.22, brickH - 4),
-          Paint()..color = Colors.white.withValues(alpha: 0.10),
-        );
-        final cp = Paint()
-          ..color = Colors.black.withValues(alpha: 0.65)
-          ..strokeWidth = 0.8
-          ..style = PaintingStyle.stroke;
-        canvas.drawLine(Offset(x + brickW * 0.35, y),
-            Offset(x + brickW * 0.55, y + brickH), cp);
-        canvas.drawLine(Offset(x + brickW * 0.55, y + brickH * 0.15),
-            Offset(x + brickW * 0.28, y + brickH * 0.72), cp);
-      case _bGold:
-        // Sparkle dots
-        final sp = Paint()..color = Colors.white.withValues(alpha: 0.75);
-        canvas.drawCircle(Offset(x + brickW * 0.2, y + brickH * 0.4), 1, sp);
-        canvas.drawCircle(Offset(x + brickW * 0.5, y + brickH * 0.6), 1, sp);
-        canvas.drawCircle(Offset(x + brickW * 0.78, y + brickH * 0.35), 1, sp);
-      case _bBlast:
-        // Explosion asterisk
-        final starP = Paint()
-          ..color = Colors.white.withValues(alpha: 0.9)
-          ..strokeWidth = 1.2
-          ..style = PaintingStyle.stroke;
-        final cx = x + brickW / 2;
-        final cy = y + brickH / 2;
-        final r = brickH * 0.28;
-        for (var i = 0; i < 4; i++) {
-          final a = i * pi / 4;
-          canvas.drawLine(
-            Offset(cx - cos(a) * r, cy - sin(a) * r),
-            Offset(cx + cos(a) * r, cy + sin(a) * r),
-            starP,
-          );
-        }
-      case _bSteel:
-        // Rivet corners + border
-        canvas.drawRRect(
-          rrect,
-          Paint()
-            ..color = Colors.white.withValues(alpha: 0.30)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 0.5,
-        );
-        final rp = Paint()..color = Colors.white.withValues(alpha: 0.45);
-        canvas.drawCircle(Offset(x + 3, y + 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + brickW - 3, y + 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + 3, y + brickH - 3), 1.2, rp);
-        canvas.drawCircle(Offset(x + brickW - 3, y + brickH - 3), 1.2, rp);
+    // Hit-flash overlay — replaces the bevel-flash feedback we lose by
+    // dropping the DX-Ball gloss. 6-tick decay → ~100ms at 60fps.
+    // Alpha 0.12/tick → max ~0.72 on impact, readable on dark bricks.
+    if (flash > 0) {
+      canvas.drawRect(
+        rect,
+        Paint()..color = Colors.white.withValues(alpha: 0.12 * flash),
+      );
     }
+  }
+
+  // ── Stone+crystal material system ────────────────────────────────────────
+  // Geometry of each brick (desk+monitor, whiteboard, trophy, server-rack,
+  // safe) is preserved from the office reskin — only the *materials* change:
+  // the outer frame becomes polished stone, and the inner accent (screen,
+  // sheet, cup, LEDs) becomes faceted crystal.
+
+  void _paintStoneBase(Canvas canvas, Rect r, {bool steel = false}) {
+    final highlight =
+        steel ? const Color(0xFFD0D0DC) : const Color(0xFFC8C8D8);
+    final mid = steel ? const Color(0xFF8A8A9A) : const Color(0xFF7A7A8C);
+    final shadow = steel ? const Color(0xFF555566) : const Color(0xFF4A4A5A);
+    const ao = Color(0xFF1A1A28);
+    const leftEdge = Color(0xFF5A5A6C);
+    const rightEdge = Color(0xFF8E8EA0);
+
+    canvas.drawRect(r, Paint()..color = mid);
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.top, r.width, 2),
+      Paint()..color = highlight,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.bottom - 2, r.width, 1),
+      Paint()..color = shadow,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.bottom - 1, r.width, 1),
+      Paint()..color = ao,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.top, 1, r.height - 1),
+      Paint()..color = leftEdge,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 1, r.top, 1, r.height - 1),
+      Paint()..color = rightEdge,
+    );
+  }
+
+  // 3-row crystal fill for any rectangular accent. Light/mid/dark stripes
+  // simulate refraction; a 1×1 specular near the top-left sells the gem.
+  void _paintCrystalRect(
+      Canvas canvas, Rect r, Color light, Color mid, Color dark) {
+    final h = r.height;
+    if (h <= 0 || r.width <= 0) return;
+    final t1 = (h / 3).clamp(1.0, h);
+    final t2 = (h * 2 / 3).clamp(t1 + 1, h);
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.top, r.width, t1),
+      Paint()..color = light,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.top + t1, r.width, t2 - t1),
+      Paint()..color = mid,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left, r.top + t2, r.width, h - t2),
+      Paint()..color = dark,
+    );
+    if (r.width >= 3 && h >= 3) {
+      canvas.drawRect(
+        Rect.fromLTWH(r.left + 1, r.top + 1, 1, 1),
+        Paint()..color = Colors.white.withValues(alpha: 0.7),
+      );
+    }
+  }
+
+  void _paintNormalBrick(Canvas canvas, Rect r, int row) {
+    _paintStoneBase(canvas, r);
+
+    // Monitor inset — same geometry as the desk+monitor reskin, but the
+    // screen is now a tinted crystal slab instead of a flat solid colour.
+    final mw = r.width * 0.45;
+    final mh = r.height * 0.62;
+    final mx = r.left + (r.width - mw) / 2;
+    final my = r.top + (r.height - mh) / 2;
+    canvas.drawRect(
+      Rect.fromLTWH(mx, my, mw, mh),
+      Paint()..color = const Color(0xFF111418),
+    );
+    final base = _kAgentClothes[row % _kAgentClothes.length];
+    _paintCrystalRect(
+      canvas,
+      Rect.fromLTWH(mx + 1, my + 1, mw - 2, mh - 2),
+      Color.lerp(base, Colors.white, 0.45)!,
+      base,
+      Color.lerp(base, Colors.black, 0.32)!,
+    );
+  }
+
+  void _paintGlassBrick(Canvas canvas, Rect r, {required bool cracked}) {
+    _paintStoneBase(canvas, r);
+
+    // Whiteboard sheet inset — full-width crystal panel (ice tint).
+    final inner =
+        Rect.fromLTWH(r.left + 2, r.top + 2, r.width - 4, r.height - 4);
+    canvas.drawRect(
+      Rect.fromLTWH(r.left + 1, r.top + 1, r.width - 2, r.height - 2),
+      Paint()..color = const Color(0xFF1F2540),
+    );
+    const ice = Color(0xFFB0C8FF);
+    _paintCrystalRect(
+      canvas,
+      inner,
+      Color.lerp(ice, Colors.white, 0.50)!,
+      ice,
+      Color.lerp(ice, Colors.black, 0.32)!,
+    );
+    if (cracked) {
+      final cp = Paint()
+        ..color = const Color(0xFF0A0A18)
+        ..strokeWidth = 1
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(
+        Offset(r.left + r.width * 0.32, r.top + r.height * 0.18),
+        Offset(r.left + r.width * 0.55, r.bottom - 3),
+        cp,
+      );
+      canvas.drawLine(
+        Offset(r.left + r.width * 0.55, r.top + r.height * 0.28),
+        Offset(r.left + r.width * 0.25, r.top + r.height * 0.70),
+        cp,
+      );
+    }
+  }
+
+  void _paintGoldBrick(Canvas canvas, Rect r) {
+    _paintStoneBase(canvas, r);
+
+    // Trophy cup silhouette — the original 3-row pattern, recoloured as
+    // citrine (light top / mid body / dark bottom) for the gem look.
+    final cx = r.center.dx;
+    final cy = r.center.dy;
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 3, cy - 2, 6, 1),
+      Paint()..color = const Color(0xFFFFF5AA),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 2, cy - 1, 4, 3),
+      Paint()..color = const Color(0xFFFFD700),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 3, cy + 2, 6, 1),
+      Paint()..color = const Color(0xFFB8860B),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 2, cy - 1, 1, 1),
+      Paint()..color = Colors.white.withValues(alpha: 0.75),
+    );
+  }
+
+  void _paintBlastBrick(Canvas canvas, Rect r) {
+    _paintStoneBase(canvas, r);
+
+    // Server-rack shelves — kept as the original two horizontal rails so
+    // the silhouette still reads as "rack" rather than a generic slab.
+    final shelf = Paint()..color = const Color(0xFF303038);
+    canvas.drawRect(
+      Rect.fromLTWH(r.left + 2, r.top + r.height * 0.32, r.width * 0.55, 1.5),
+      shelf,
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.left + 2, r.top + r.height * 0.62, r.width * 0.55, 1.5),
+      shelf,
+    );
+
+    // LED indicators — re-cast as cyan and red micro-crystals (2×2 + 1-px
+    // specular) instead of flat dots, so they share the gem language.
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.32, 2, 2),
+      Paint()..color = const Color(0xFF00E5FF),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.32, 1, 1),
+      Paint()..color = Colors.white.withValues(alpha: 0.65),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.62, 2, 2),
+      Paint()..color = const Color(0xFFDC2626),
+    );
+    canvas.drawRect(
+      Rect.fromLTWH(r.right - 4, r.top + r.height * 0.62, 1, 1),
+      Paint()..color = Colors.white.withValues(alpha: 0.65),
+    );
+  }
+
+  void _paintSafeBrick(Canvas canvas, Rect r) {
+    _paintStoneBase(canvas, r, steel: true);
+
+    // Locked stub at center — sealed safe stays inert (no crystal by design).
+    canvas.drawRect(
+      Rect.fromCenter(center: r.center, width: 4, height: 4),
+      Paint()..color = const Color(0xFF1A1A28),
+    );
+    final rivet = Paint()..color = const Color(0xFFB0B0C0);
+    canvas.drawRect(Rect.fromLTWH(r.left + 2, r.top + 2, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.right - 3, r.top + 2, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.left + 2, r.bottom - 4, 1, 1), rivet);
+    canvas.drawRect(Rect.fromLTWH(r.right - 3, r.bottom - 4, 1, 1), rivet);
   }
 
   // ── Paddle ───────────────────────────────────────────────────────────────
@@ -1292,6 +1626,33 @@ class _DxBallPainter extends CustomPainter {
         ..strokeWidth = 1.5,
     );
 
+    // Bounce flash — 2-px white rim along paddle top, fades over 5 ticks.
+    if (paddleFlash > 0) {
+      final a = (paddleFlash / 5.0) * 0.55;
+      canvas.drawRect(
+        Rect.fromLTWH(paddleX + _paddleH / 2, py, paddleW - _paddleH, 2),
+        Paint()..color = Colors.white.withValues(alpha: a),
+      );
+    }
+
+    // Sticky-catch accent — gold pillars flanking catch point + paddle glow.
+    if (stickyFlash > 0) {
+      final a = (stickyFlash / 6.0);
+      final gold = _puColorSticky;
+      canvas.drawRect(
+        Rect.fromLTWH(stickyFlashX - 4, py - 1, 1, _paddleH + 2),
+        Paint()..color = gold.withValues(alpha: 0.7 * a),
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(stickyFlashX + 3, py - 1, 1, _paddleH + 2),
+        Paint()..color = gold.withValues(alpha: 0.7 * a),
+      );
+      canvas.drawRect(
+        rect,
+        Paint()..color = gold.withValues(alpha: 0.10 * a),
+      );
+    }
+
     // Laser gun nozzles
     if (isLaser) {
       final nozzleP = Paint()..color = const Color(0xFFFF4444);
@@ -1309,8 +1670,41 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawBalls(Canvas canvas) {
     for (final ball in balls) {
+      _drawTrail(canvas, ball);
       _drawSingleBall(canvas, ball.x, ball.y);
+      if (ball.stuck) _drawCaughtRing(canvas, ball.x, ball.y);
     }
+  }
+
+  void _drawTrail(Canvas canvas, _Ball ball) {
+    if (ball.trail.isEmpty) return;
+    final base = isBlast
+        ? const Color(0xFFFF8800)
+        : isThru
+            ? const Color(0xFF00CCFF)
+            : const Color(0xFFCCDDFF);
+    final n = ball.trail.length;
+    for (var i = 0; i < n; i++) {
+      final p = ball.trail[i];
+      // newest = highest alpha. n=3 → 0.04 / 0.07 / 0.10
+      final alpha = 0.04 + (i / (n - 1).clamp(1, n)) * 0.06;
+      canvas.drawCircle(
+        Offset(p.dx, p.dy),
+        _ballR * 0.55,
+        Paint()..color = base.withValues(alpha: alpha),
+      );
+    }
+  }
+
+  void _drawCaughtRing(Canvas canvas, double x, double y) {
+    canvas.drawCircle(
+      Offset(x, y),
+      _ballR + 1.5,
+      Paint()
+        ..color = _puColorSticky.withValues(alpha: 0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
   }
 
   void _drawSingleBall(Canvas canvas, double x, double y) {
@@ -1402,12 +1796,12 @@ class _DxBallPainter extends CustomPainter {
     for (final b in bullets) {
       canvas.drawRect(
         Rect.fromCenter(center: Offset(b.x, b.y), width: 2.5, height: 9),
-        Paint()..color = const Color(0xFFFF5555),
+        Paint()..color = const Color(0xFF00C0D1),
       );
       canvas.drawRect(
         Rect.fromCenter(center: Offset(b.x, b.y), width: 5, height: 11),
         Paint()
-          ..color = const Color(0xFFFF4444).withValues(alpha: 0.25)
+          ..color = const Color(0xFF00C0D1).withValues(alpha: 0.25)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
       );
     }
@@ -1417,45 +1811,17 @@ class _DxBallPainter extends CustomPainter {
 
   void _drawFallingPowerUps(Canvas canvas) {
     for (final pu in fallingPUs) {
-      final Color color;
-      final String label;
-      switch (pu.type) {
-        case _PUType.expand:
-          color = const Color(0xFF44CC44);
-          label = 'EXPAND';
-        case _PUType.multiball:
-          color = const Color(0xFFAA44FF);
-          label = 'MULTI';
-        case _PUType.sticky:
-          color = const Color(0xFFFFCC00);
-          label = 'CATCH';
-        case _PUType.laser:
-          color = const Color(0xFFFF4444);
-          label = 'LASER';
-        case _PUType.thru:
-          color = const Color(0xFF00CCFF);
-          label = 'THRU';
-        case _PUType.life:
-          color = const Color(0xFFFF88AA);
-          label = '+LIFE';
-        case _PUType.slow:
-          color = const Color(0xFF4488FF);
-          label = 'SLOW';
-        case _PUType.blast:
-          color = const Color(0xFFFF8800);
-          label = 'BLAST';
-      }
+      final color = _puColor(pu.type);
 
-      // Pill / capsule shape
       final rect = Rect.fromCenter(
           center: Offset(pu.x, pu.y), width: _puW, height: _puH);
       final rrect =
           RRect.fromRectAndRadius(rect, Radius.circular(_puH / 2));
 
-      // Dark pill body
+      // Dark pill body — same `#0A0A1A` matches office canvas back panels.
       canvas.drawRRect(rrect, Paint()..color = const Color(0xFF0A0A1A));
 
-      // Coloured border
+      // Type-tinted border
       canvas.drawRRect(
         rrect,
         Paint()
@@ -1464,29 +1830,35 @@ class _DxBallPainter extends CustomPainter {
           ..strokeWidth = 1.5,
       );
 
-      // Inner glow fill
+      // Subtle inner glow tint — replaces the DX-Ball pulse-blur.
       canvas.drawRRect(
         rrect,
-        Paint()
-          ..color = color.withValues(alpha: 0.12)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+        Paint()..color = color.withValues(alpha: 0.10),
       );
 
-      // Label text
-      final tp = TextPainter(
-        text: TextSpan(
-          text: label,
-          style: TextStyle(
-            color: color,
-            fontSize: 7,
-            fontWeight: FontWeight.w800,
-            fontFamily: 'monospace',
-            letterSpacing: 0.5,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(pu.x - tp.width / 2, pu.y - tp.height / 2));
+      // Pixel-art glyph (replaces monospace text label).
+      _paintGlyph(canvas, _puGlyphs[pu.type]!, pu.x, pu.y, color);
+    }
+  }
+
+  void _paintGlyph(
+      Canvas canvas, List<String> glyph, double cx, double cy, Color color,
+      {double scale = 2.0}) {
+    final paint = Paint()..color = color;
+    final h = glyph.length;
+    final w = glyph[0].length;
+    final ox = cx - (w * scale) / 2;
+    final oy = cy - (h * scale) / 2;
+    for (var y = 0; y < h; y++) {
+      final row = glyph[y];
+      for (var x = 0; x < row.length; x++) {
+        if (row[x] == '#') {
+          canvas.drawRect(
+            Rect.fromLTWH(ox + x * scale, oy + y * scale, scale, scale),
+            paint,
+          );
+        }
+      }
     }
   }
 

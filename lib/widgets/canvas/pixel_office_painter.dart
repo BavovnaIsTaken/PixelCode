@@ -56,6 +56,42 @@ class PixelOfficePainter extends CustomPainter {
   final int ghostRoomRotation;
   final bool ghostIsValid;
 
+  /// True when the ghost is in the foundation-buffer outside the currently
+  /// owned grid but inside the tier's max expansion capacity — placement is
+  /// allowed but will purchase the needed expansion step(s).
+  final bool ghostPendingExpand;
+
+  /// Number of buffer tiles to render past each office edge in build mode.
+  /// Drawn as a "foundation grid" (subtle amber fill + L-corner lot markers)
+  /// so the player can preview attaching rooms outside the current owned area.
+  final int buildBufferCols;
+  final int buildBufferRows;
+
+  /// Cost of the next expansion step at the current tier — surfaced as a
+  /// single "₲N розширення" hint near the buffer boundary corner. Null when
+  /// the tier is fully expanded (no buffer drawn in that case anyway).
+  final int? nextExpansionCost;
+
+  /// Foundation-buffer tile the pointer is currently over (null when outside
+  /// the buffer). Painted with a per-tile green/red wash so the player gets
+  /// affordance feedback on "can I buy this?".
+  final int? hoveredBufferCol;
+  final int? hoveredBufferRow;
+
+  /// 0..1 fade alpha applied to the hover wash. Driven by a 150 ms
+  /// AnimationController on the canvas side so enter/exit feel smooth instead
+  /// of binary.
+  final double bufferHoverAlpha;
+
+  /// True when the player can currently afford the next expansion step. Drives
+  /// the hover wash colour (green = affordable, red = not).
+  final bool bufferHoverAffordable;
+
+  /// True while the pointer is pressed down on the hovered buffer tile. Adds
+  /// an extra inner stroke so the press reads as a deliberate click, not just
+  /// a hover.
+  final bool bufferHoverPressed;
+
   /// Adjacency bonus label rendered over the ghost (e.g. "+5%" or "−5%").
   /// Null when there is no adjacency effect for the current ghost position.
   final String? adjacencyLabel;
@@ -88,6 +124,15 @@ class PixelOfficePainter extends CustomPainter {
     this.ghostRoomRow,
     this.ghostRoomRotation = 0,
     this.ghostIsValid = true,
+    this.ghostPendingExpand = false,
+    this.buildBufferCols = 0,
+    this.buildBufferRows = 0,
+    this.nextExpansionCost,
+    this.hoveredBufferCol,
+    this.hoveredBufferRow,
+    this.bufferHoverAlpha = 0.0,
+    this.bufferHoverAffordable = true,
+    this.bufferHoverPressed = false,
     this.adjacencyLabel,
     this.placedCorridors = const [],
     this.corridorAnchorCol,
@@ -109,14 +154,24 @@ class PixelOfficePainter extends CustomPainter {
         row < gameState.gridRows - 1;
   }
 
+  /// Canvas width including any active build-mode buffer past the right wall.
+  /// When [buildBufferCols] > 0 the painter draws extra tiles past the owned
+  /// grid, so the on-screen area needs to grow accordingly — otherwise the
+  /// buffer renders past the clip region and is invisible.
+  double get effectiveCanvasWidth =>
+      gameState.canvasWidth + buildBufferCols * kTileSize;
+
+  double get effectiveCanvasHeight =>
+      gameState.canvasHeight + buildBufferRows * kTileSize;
+
   @override
   void paint(Canvas canvas, Size size) {
     final scale = math.min(
-      size.width / gameState.canvasWidth,
-      size.height / gameState.canvasHeight,
+      size.width / effectiveCanvasWidth,
+      size.height / effectiveCanvasHeight,
     );
-    final offsetX = (size.width - gameState.canvasWidth * scale) / 2;
-    final offsetY = (size.height - gameState.canvasHeight * scale) / 2;
+    final offsetX = (size.width - effectiveCanvasWidth * scale) / 2;
+    final offsetY = (size.height - effectiveCanvasHeight * scale) / 2;
 
     canvas.save();
     canvas.translate(offsetX, offsetY);
@@ -1008,8 +1063,15 @@ class PixelOfficePainter extends CustomPainter {
 
   void _drawPlacedRooms(Canvas canvas) {
     for (final room in placedRooms) {
-      drawRoom(canvas, room, _themeForRoom(room), tick,
-          showWorkstationFurniture: false);
+      drawRoom(
+        canvas,
+        room,
+        _themeForRoom(room),
+        tick,
+        showWorkstationFurniture: false,
+        neighborRooms: placedRooms,
+        neighborCorridors: placedCorridors,
+      );
     }
   }
 
@@ -1018,6 +1080,13 @@ class PixelOfficePainter extends CustomPainter {
     final gCols = gameState.gridCols;
     final gRows = gameState.gridRows;
     final p = Paint()..style = PaintingStyle.fill;
+
+    // Foundation buffer past the owned grid — tiles where placement triggers
+    // an expansion-step purchase. Painted FIRST so room overlays land on top.
+    if (buildBufferCols > 0 || buildBufferRows > 0) {
+      _drawFoundationBuffer(
+          canvas, gCols, gRows, buildBufferCols, buildBufferRows);
+    }
 
     // Tile highlights: green = free, red = blocked
     for (int r = 1; r < gRows - 1; r++) {
@@ -1050,8 +1119,11 @@ class PixelOfficePainter extends CustomPainter {
     final gc = ghostRoomCol;
     final gr = ghostRoomRow;
     if (gc != null && gr != null) {
-      final ghostColor =
-          ghostIsValid ? const Color(0xFF44FF88) : const Color(0xFFFF4444);
+      final ghostColor = ghostIsValid
+          ? (ghostPendingExpand
+              ? const Color(0xFFFFB020) // amber — fits, but needs expansion
+              : const Color(0xFF44FF88)) // green — fits in owned grid
+          : const Color(0xFFFF4444); // red — invalid
 
       // Overall ghost footprint (for corridor routing) — accounts for rotation.
       int footLeft = gc, footTop = gr, footRight = gc, footBottom = gr;
@@ -1161,18 +1233,39 @@ class PixelOfficePainter extends CustomPainter {
         }
       }
 
-      void drawGhostRect(double rx, double ry, double rw, double rh) {
+      void drawGhostRect(double rx, double ry, double rw, double rh,
+          {bool dashed = false}) {
         canvas.drawRect(
             Rect.fromLTWH(rx, ry, rw, rh),
             Paint()
               ..color = ghostColor.withValues(alpha: 0.25)
               ..style = PaintingStyle.fill);
-        canvas.drawRect(
-            Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1),
-            Paint()
-              ..color = ghostColor.withValues(alpha: 0.8)
-              ..style = PaintingStyle.stroke
-              ..strokeWidth = 1.5);
+        final strokePaint = Paint()
+          ..color = ghostColor.withValues(alpha: 0.8)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5;
+        if (!dashed) {
+          canvas.drawRect(
+              Rect.fromLTWH(rx + 0.5, ry + 0.5, rw - 1, rh - 1), strokePaint);
+        } else {
+          // Dashed border signals Zone (open feature area without walls).
+          const dash = 3.0;
+          const gap = 2.0;
+          final x1 = rx + 0.5;
+          final y1 = ry + 0.5;
+          final x2 = rx + rw - 0.5;
+          final y2 = ry + rh - 0.5;
+          for (double x = x1; x < x2; x += dash + gap) {
+            final end = math.min(x + dash, x2);
+            canvas.drawLine(Offset(x, y1), Offset(end, y1), strokePaint);
+            canvas.drawLine(Offset(x, y2), Offset(end, y2), strokePaint);
+          }
+          for (double y = y1; y < y2; y += dash + gap) {
+            final end = math.min(y + dash, y2);
+            canvas.drawLine(Offset(x1, y), Offset(x1, end), strokePaint);
+            canvas.drawLine(Offset(x2, y), Offset(x2, end), strokePaint);
+          }
+        }
       }
 
       final gt = ghostRoomType;
@@ -1180,7 +1273,8 @@ class PixelOfficePainter extends CustomPainter {
         final rotated = ghostRoomRotation == 90 || ghostRoomRotation == 270;
         final gw = (rotated ? gt.heightTiles : gt.widthTiles) * kTileSize;
         final gh = (rotated ? gt.widthTiles : gt.heightTiles) * kTileSize;
-        drawGhostRect(gc * kTileSize, gr * kTileSize, gw, gh);
+        drawGhostRect(gc * kTileSize, gr * kTileSize, gw, gh,
+            dashed: gt.category == RoomCategory.zone);
 
         // Adjacency bonus label centred over the ghost footprint.
         final label = adjacencyLabel;
@@ -1223,6 +1317,186 @@ class PixelOfficePainter extends CustomPainter {
             ..style = PaintingStyle.stroke
             ..strokeWidth = 1);
     }
+  }
+
+  /// Renders the foundation-grid buffer past the owned grid edges (right and
+  /// bottom). Tiles drawn here are "purchasable expansion" — the player can
+  /// place a room into this area and the place transaction will auto-buy the
+  /// required expansion step(s).
+  ///
+  /// Visual: subtle amber wash + 4 short L-shaped corner markers per tile
+  /// (SimCity / Frostpunk lot-marker idiom). Hairline amber boundary line +
+  /// compact per-tile "12К₲" cost stamp so the player can read both the
+  /// affordance and the price without 60 plus-signs spamming the screen.
+  void _drawFoundationBuffer(
+      Canvas canvas, int gCols, int gRows, int bufC, int bufR) {
+    // Soft amber wash — quiet enough that an 8×12 buffer doesn't dominate the
+    // canvas. Dark overlay removed (V3 dropped it: corners + fill carry the
+    // affordance on their own).
+    final fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFFB020).withValues(alpha: 0.14);
+    final corner = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFFD680).withValues(alpha: 0.70);
+
+    final startCol = gCols - 1;
+    final endCol = gCols - 1 + bufC;
+    final startRow = gRows - 1;
+    final endRow = gRows - 1 + bufR;
+
+    // L-corner geometry: short hairline arms so the buffer reads as a marked
+    // grid without competing with the boundary line for weight.
+    const armLen = 2.0;
+    const armThick = 0.5;
+    const inset = 2.5;
+
+    // Per-tile cost stamp ("12К₲"): laid out once, painted at every tile.
+    // Currency suffix matches `_formatNumber` in office_upgrade_dialog.
+    TextPainter? costTp;
+    final cost = nextExpansionCost;
+    if (cost != null) {
+      final costLabel = '${_formatCompact(cost)}₲';
+      costTp = TextPainter(
+        text: TextSpan(
+          text: costLabel,
+          style: const TextStyle(
+            color: Color(0xFFFFD680),
+            fontSize: 2.5,
+            fontWeight: FontWeight.w700,
+            height: 1.0,
+            letterSpacing: 0.1,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+    }
+
+    bool isHoverThisTile(int c, int r) =>
+        hoveredBufferCol == c &&
+        hoveredBufferRow == r &&
+        bufferHoverAlpha > 0.0;
+
+    // Affordance palette: green when the next expansion step is affordable,
+    // red otherwise. Press boosts saturation so the click reads as a positive
+    // commit, not just a brighter hover.
+    final hoverWashBase = bufferHoverAffordable
+        ? const Color(0xFF52E07A) // green-leaning amber
+        : const Color(0xFFE05252); // crimson
+    final hoverCornerBase = bufferHoverAffordable
+        ? const Color(0xFFB6FFC8)
+        : const Color(0xFFFFC9C9);
+
+    void paintTile(int c, int r) {
+      final x = c * kTileSize;
+      final y = r * kTileSize;
+      canvas.drawRect(Rect.fromLTWH(x, y, kTileSize, kTileSize), fill);
+
+      if (isHoverThisTile(c, r)) {
+        final t = bufferHoverAlpha.clamp(0.0, 1.0);
+        final washAlpha = (bufferHoverPressed ? 0.55 : 0.38) * t;
+        canvas.drawRect(
+          Rect.fromLTWH(x, y, kTileSize, kTileSize),
+          Paint()
+            ..style = PaintingStyle.fill
+            ..color = hoverWashBase.withValues(alpha: washAlpha),
+        );
+        if (bufferHoverPressed) {
+          // Inner 1-px stroke marking the click target — short-lived, only
+          // while the pointer is down.
+          canvas.drawRect(
+            Rect.fromLTWH(x + 0.5, y + 0.5, kTileSize - 1, kTileSize - 1),
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 0.5
+              ..color = hoverCornerBase.withValues(alpha: 0.9 * t),
+          );
+        }
+      }
+
+      // Top-left corner.
+      canvas.drawRect(
+          Rect.fromLTWH(x + inset, y + inset, armLen, armThick), corner);
+      canvas.drawRect(
+          Rect.fromLTWH(x + inset, y + inset, armThick, armLen), corner);
+      // Top-right corner.
+      canvas.drawRect(
+          Rect.fromLTWH(x + kTileSize - inset - armLen, y + inset, armLen,
+              armThick),
+          corner);
+      canvas.drawRect(
+          Rect.fromLTWH(x + kTileSize - inset - armThick, y + inset, armThick,
+              armLen),
+          corner);
+      // Bottom-left corner.
+      canvas.drawRect(
+          Rect.fromLTWH(x + inset, y + kTileSize - inset - armThick, armLen,
+              armThick),
+          corner);
+      canvas.drawRect(
+          Rect.fromLTWH(x + inset, y + kTileSize - inset - armLen, armThick,
+              armLen),
+          corner);
+      // Bottom-right corner.
+      canvas.drawRect(
+          Rect.fromLTWH(x + kTileSize - inset - armLen,
+              y + kTileSize - inset - armThick, armLen, armThick),
+          corner);
+      canvas.drawRect(
+          Rect.fromLTWH(x + kTileSize - inset - armThick,
+              y + kTileSize - inset - armLen, armThick, armLen),
+          corner);
+
+      if (costTp != null) {
+        final tx = x + (kTileSize - costTp.width) / 2;
+        final ty = y + (kTileSize - costTp.height) / 2;
+        costTp.paint(canvas, Offset(tx, ty));
+      }
+    }
+
+    // Right buffer: full vertical strip past current right wall.
+    for (int c = startCol; c <= endCol; c++) {
+      for (int r = 0; r <= endRow; r++) {
+        paintTile(c, r);
+      }
+    }
+    // Bottom buffer: horizontal strip past current bottom wall, skipping
+    // tiles already painted by the right buffer (corner overlap).
+    for (int r = startRow; r <= endRow; r++) {
+      for (int c = 0; c < startCol; c++) {
+        paintTile(c, r);
+      }
+    }
+
+    // Boundary line where owned grid ends — hairline amber so the buffer
+    // reads as a separate purchasable area without dominating the canvas.
+    final boundary = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.5
+      ..color = const Color(0xFFFFD680).withValues(alpha: 0.85);
+    final ownedRight = (gCols - 1) * kTileSize;
+    final ownedBottom = (gRows - 1) * kTileSize;
+    if (bufC > 0) {
+      canvas.drawLine(Offset(ownedRight, 0),
+          Offset(ownedRight, ownedBottom), boundary);
+    }
+    if (bufR > 0) {
+      canvas.drawLine(Offset(0, ownedBottom),
+          Offset(ownedRight, ownedBottom), boundary);
+    }
+  }
+
+  /// "12000" → "12К", "1250" → "1.3К", "140" → "140". Mirrors the upgrade
+  /// dialog's compact formatter so a single visual idiom carries across the
+  /// shop, the foundation buffer, and any future ₲ surface.
+  String _formatCompact(int n) {
+    if (n >= 1000) {
+      final k = n / 1000;
+      return k % 1 == 0
+          ? '${k.toStringAsFixed(0)}К'
+          : '${k.toStringAsFixed(1)}К';
+    }
+    return n.toString();
   }
 
   void _drawEditOverlay(Canvas canvas) {
