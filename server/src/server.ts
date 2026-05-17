@@ -65,6 +65,7 @@ import {
 import { generateTeamReactions } from "./facilitator/team_reactions.js";
 import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
 import { UsageLogger, usageLogFile, newRunId } from "./usage_log.js";
+import { AgentRunStore, agentRunsFile } from "./agent_run.js";
 import {
   applyReactionsToChat,
   deriveProjectMemoryFromBrief,
@@ -551,6 +552,23 @@ techLeadDigest.loadFromDisk();
 // analyzer reads the file to compute empirical baselines (median / p95
 // per `{role, taskType}`) for outlier detection in the facilitator UI.
 const usageLogger = new UsageLogger(usageLogFile(PROJECT_CWD));
+
+// C.2 — Persistent AgentRun entity. Records lifecycle of every SDK query
+// (status: running → completed / failed / interrupted / cancelled) so the
+// UI can answer "what happened while I was offline" and "did my task
+// actually run" after a server respawn. Replayed on boot; any leftover
+// `running` rows from a prior process are promoted to `interrupted` and
+// the affected agents are surfaced through the standard active-agents
+// broadcast (see boot sweep below).
+const agentRunStore = new AgentRunStore(agentRunsFile(PROJECT_CWD));
+agentRunStore.load();
+{
+  const orphaned = agentRunStore.markRunningAsInterrupted("server-respawn");
+  if (orphaned.length > 0) {
+    dbg("warn", "session",
+      `Boot sweep: ${orphaned.length} run(s) orphaned by previous process — marked interrupted`);
+  }
+}
 
 // Personalization layer (Phase 4.5.1) — extends each query's system prompt
 // with the agent's learned-context fragment. Kill-switch via env var.
@@ -1375,6 +1393,7 @@ function createDispatchServer(ws: WebSocket) {
         bypassPermissions,
         techLeadDigest: techLeadDigest.renderForPrompt(15),
         usageLogger,
+        agentRunStore,
         role: roleTypeOf(agentId, gameState),
         onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
         onComplete: (result) => handleSubAgentComplete(ws, result),
@@ -1922,6 +1941,16 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
   let _resultDurationMs = 0;
   let _resultCostUsd = 0;
   let _resultNumTurns = 0;
+  // C.2 — open a persistent run record. Status flips to terminal in the
+  // success / catch / cancel paths below.
+  agentRunStore.start({
+    runId: _runId,
+    agentId: targetAgentId,
+    taskType: "chat",
+    userMessageSnippet: userMessage.slice(0, 200),
+    startedAt: _startedAt,
+  });
+  let _runFinalText = "";
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -2208,6 +2237,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       // Track inter-agent communication from delegation
       if (message.type === "assistant") {
         const asst = message as SDKAssistantMessage;
+        let _runAssistantText = "";
         for (const block of asst.message.content) {
           if (block.type === "tool_use" && (block.name === "Agent" || block.name === "Task")) {
             const input = block.input as Record<string, unknown>;
@@ -2217,6 +2247,24 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
               : targetAgentId;
             trackComm(ws, delegateFrom, delegateTo);
           }
+          // C.2 persistent run record — capture tool_use + assistant text
+          // for crash-recovery and reconnect snapshot. Text is appended
+          // (concatenated across blocks within a single SDK message); the
+          // running buffer is flushed to disk via `partialOutput` below.
+          if (block.type === "tool_use") {
+            agentRunStore.appendToolCall(_runId, {
+              name: block.name,
+              id: block.id,
+              at: new Date().toISOString(),
+            });
+          }
+          if (block.type === "text") {
+            _runAssistantText += block.text;
+          }
+        }
+        if (_runAssistantText) {
+          _runFinalText += _runAssistantText;
+          agentRunStore.update(_runId, { partialOutput: _runFinalText });
         }
         // C.2.4 circuit breaker — observe usage + tool_use counts.
         const trip = _breaker.observeAssistantMessage(
@@ -2277,6 +2325,24 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
         startedAt: _startedAt,
         completedAt: new Date().toISOString(),
       });
+      agentRunStore.update(_runId, {
+        status: "completed",
+        finalOutput: _runFinalText,
+        usage: {
+          inputTokens: snap.inputTokens,
+          outputTokens: snap.outputTokens,
+          cacheCreationTokens: snap.cacheCreateTokens,
+          cacheReadTokens: snap.cacheReadTokens,
+          costUsd: _resultCostUsd || snap.costUsd,
+          numTurns: _resultNumTurns,
+          numToolCalls: snap.toolCalls,
+        },
+      });
+    } else {
+      agentRunStore.update(_runId, {
+        status: "completed",
+        finalOutput: _runFinalText,
+      });
     }
     } finally {
       clearTimeout(_queryTimeoutId);
@@ -2313,6 +2379,38 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
         numToolCalls: snap.toolCalls,
         startedAt: _startedAt,
         completedAt: new Date().toISOString(),
+      });
+    }
+    // C.2 — flip run status to its terminal form. Explicit user cancel
+    // (abort with neither breaker nor timeout) → cancelled; everything
+    // else interrupting the SDK loop → interrupted / failed.
+    {
+      const explicitCancel =
+        !_breakerTripped &&
+        !_queryTimedOut &&
+        err instanceof Error &&
+        (err.name === "AbortError" || /aborted/i.test(err.message));
+      const status = explicitCancel
+        ? "cancelled"
+        : _breakerTripped || _queryTimedOut
+          ? "interrupted"
+          : "failed";
+      const snap = _breaker?.snapshot();
+      agentRunStore.update(_runId, {
+        status,
+        reason: errMsg,
+        partialOutput: _runFinalText || undefined,
+        usage: snap
+          ? {
+              inputTokens: snap.inputTokens,
+              outputTokens: snap.outputTokens,
+              cacheCreationTokens: snap.cacheCreateTokens,
+              cacheReadTokens: snap.cacheReadTokens,
+              costUsd: snap.costUsd,
+              numTurns: _resultNumTurns,
+              numToolCalls: snap.toolCalls,
+            }
+          : undefined,
       });
     }
     // If the persisted session is unrecoverable (binary deleted the JSONL,
