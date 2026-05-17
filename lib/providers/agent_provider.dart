@@ -125,6 +125,13 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
   /// The agent whose responses are currently being streamed.
   String? _activeStreamAgent;
 
+  /// Push a chat-domain log to the in-app DebugConsole (visible under the
+  /// `CHAT` filter). Use sparingly — only events that meaningfully help
+  /// triage future bug reports (user action, server error, history anomaly).
+  void _log(String msg, {String level = 'info'}) {
+    ref.read(debugLogProvider.notifier).addLocal('chat', msg, level: level);
+  }
+
   @override
   List<ChatMessage> build() {
     final ws = ref.watch(wsServiceProvider);
@@ -163,7 +170,6 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void _setAgentMessages(String agentId, List<ChatMessage> messages) {
     _allMessages = {..._allMessages, agentId: messages};
-    // Only update state if this is the currently viewed agent
     if (agentId == _selectedAgent) {
       state = messages;
     }
@@ -186,8 +192,27 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
         }
 
       case ChatHistoryMessage(:final messages):
+        final sel = _selectedAgent;
+        // Pre-merge anomaly check: a server snapshot smaller than the local
+        // store for the same agent means server-side history was trimmed
+        // (e.g. process restart, in-memory cap). The merge keeps local
+        // orphans in a chronological tail — surfacing the count delta here
+        // helps triage "missing message" reports without re-instrumenting.
+        final localCount = (_allMessages[sel] ?? const <ChatMessage>[])
+            .where((m) => m.agentId == sel)
+            .length;
+        final serverCount =
+            messages.where((m) => m.agentId == sel).length;
+        if (localCount > 0 && serverCount < localCount) {
+          _log(
+            'chat_history snapshot smaller than local for $sel '
+            '(server=$serverCount, local=$localCount, '
+            'missing=${localCount - serverCount}) — orphan tail preserved',
+            level: 'warn',
+          );
+        }
         _allMessages = mergeChatHistory(_allMessages, messages);
-        state = _allMessages[_selectedAgent] ?? [];
+        state = _allMessages[sel] ?? [];
         _scheduleSave();
         ref.read(chatSyncStateProvider.notifier).state = ChatSyncState.ready;
 
@@ -287,6 +312,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
       case ErrorMessage(:final message):
         final agentId = _activeStreamAgent ?? _selectedAgent;
+        _log('server error on $agentId: $message', level: 'error');
         _setAgentMessages(agentId, [
           ..._agentMessages(agentId),
           ChatMessage(
@@ -319,6 +345,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
     _activeStreamAgent = agentId;
     final imageBase64s = images.map((b) => base64Encode(b)).toList();
     final localId = _generateId(); // client-generated id for deduplication
+    _log('send → $agentId localId=$localId chars=${text.length} images=${imageBase64s.length}');
     _setAgentMessages(agentId, [
       ..._agentMessages(agentId),
       ChatMessage(
@@ -340,6 +367,7 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
 
   void newChat() {
     final agentId = _selectedAgent;
+    _log('newChat: clearing $agentId locally and on server');
     _allMessages = {..._allMessages, agentId: []};
     state = [];
     final prefs = ref.read(sharedPrefsProvider);
@@ -782,6 +810,17 @@ class DebugLogNotifier extends Notifier<List<DebugLogMessage>> {
     state = updated.length > _maxEntries
         ? updated.sublist(updated.length - _maxEntries)
         : updated;
+  }
+
+  /// Push a client-side diagnostic into the in-app console so it shows up
+  /// alongside server logs (without needing to attach a terminal).
+  void addLocal(String category, String message, {String level = 'info'}) {
+    _add(DebugLogMessage(
+      timestamp: DateTime.now(),
+      level: level,
+      category: category,
+      message: message,
+    ));
   }
 
   void clear() => state = [];

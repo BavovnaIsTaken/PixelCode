@@ -84,7 +84,8 @@ class ChatPanel extends ConsumerStatefulWidget {
   ConsumerState<ChatPanel> createState() => _ChatPanelState();
 }
 
-class _ChatPanelState extends ConsumerState<ChatPanel> {
+class _ChatPanelState extends ConsumerState<ChatPanel>
+    with TickerProviderStateMixin {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   late final FocusNode _focusNode;
@@ -106,6 +107,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   String? _activeAgentFilter;
   double _pullOffset = 0;
 
+  // Pull-to-reveal timestamps (Instagram/iOS-style): drag the chat to the
+  // RIGHT, per-row timestamps slide in from the LEFT edge. Snap-back on
+  // release; not persistable. Max reveal width = 64dp.
+  static const double _kTimestampRevealWidth = 64;
+  double _tsRevealOffset = 0;
+  AnimationController? _tsAnim;
+  double _tsRevealAnimFrom = 0;
+
   @override
   void initState() {
     super.initState();
@@ -119,18 +128,20 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
         }
         // Intercept Cmd+V (macOS) or Ctrl+V (all platforms) to support image paste.
         // We take over the shortcut entirely and handle text paste manually so that
-        // clipboard images are never silently dropped.
+        // clipboard images are never silently dropped. Returning `handled` (rather
+        // than `skipRemainingHandlers`) stops propagation completely, including the
+        // platform-level Edit→Paste menu shortcut that would otherwise steal focus
+        // from the text field while the async clipboard read is in flight.
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.keyV &&
             (HardwareKeyboard.instance.isMetaPressed ||
                 HardwareKeyboard.instance.isControlPressed)) {
           _handlePasteShortcut();
-          return KeyEventResult.skipRemainingHandlers;
+          return KeyEventResult.handled;
         }
         return KeyEventResult.ignored;
       },
     );
-    _focusNode.addListener(_onFocusChange);
     _controller.addListener(_onInputChanged);
     _scrollController.addListener(_onScroll);
 
@@ -248,8 +259,6 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
     }
   }
 
-  void _onFocusChange() => setState(() {});
-
   bool _shouldShowDirectMsgHint() {
     if (_directMsgHintDismissed) return false;
     if (ref.watch(settingsProvider).hideDirectMessagingHint) return false;
@@ -266,13 +275,51 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
   void dispose() {
     _boardTaskSub?.cancel();
     _skeletonTimer?.cancel();
-    _focusNode.removeListener(_onFocusChange);
     _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
     _controller.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
+    _tsAnim?.dispose();
     super.dispose();
+  }
+
+  /// Lazy-init so widgets that never trigger the reveal don't allocate a
+  /// ticker controller (and tests that don't exercise the gesture stay
+  /// clean during teardown).
+  AnimationController _ensureTsAnim() {
+    final existing = _tsAnim;
+    if (existing != null) return existing;
+    final c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(() {
+        if (!mounted) return;
+        setState(() => _tsRevealOffset = (_tsAnim?.value ?? 0) * _tsRevealAnimFrom);
+      });
+    _tsAnim = c;
+    return c;
+  }
+
+  void _onTimestampDragUpdate(DragUpdateDetails d) {
+    // Rightward drag (dx > 0) reveals timestamps from the LEFT edge.
+    // Clamp to [0, _kTimestampRevealWidth]. Stop any spring-back animation.
+    final anim = _tsAnim;
+    if (anim != null && anim.isAnimating) anim.stop();
+    final next = (_tsRevealOffset + d.delta.dx)
+        .clamp(0.0, _kTimestampRevealWidth);
+    if (next != _tsRevealOffset) setState(() => _tsRevealOffset = next);
+  }
+
+  void _animateTimestampReveal(double from) {
+    _tsRevealAnimFrom = from;
+    final anim = _ensureTsAnim();
+    anim.value = 1.0;
+    anim.animateTo(0.0, curve: Curves.easeOut);
+  }
+
+  void _onTimestampDragEnd() {
+    if (_tsRevealOffset > 0) _animateTimestampReveal(_tsRevealOffset);
   }
 
   void _onScroll() {
@@ -1009,7 +1056,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                     : const SizedBox.shrink())
                 : (messages.isEmpty && !showThinking)
                     ? _buildEmptyState()
-                    : Stack(
+                    : GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onHorizontalDragUpdate: _onTimestampDragUpdate,
+                        onHorizontalDragEnd: (_) => _onTimestampDragEnd(),
+                        onHorizontalDragCancel: () => _onTimestampDragEnd(),
+                        child: Stack(
                         children: [
                           NotificationListener<ScrollNotification>(
                             onNotification: (n) {
@@ -1047,7 +1099,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                               final sender = itemSender(item);
                               final tightBottom = sender != null && belowItem != null && itemSender(belowItem) == sender;
 
-                              return switch (item) {
+                              final child = switch (item) {
                                 SingleMessage(:final message) =>
                                   _ChatBubble(message: message, tightBottom: tightBottom),
                                 StatusGroup(:final messages) =>
@@ -1081,6 +1133,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                                     ),
                                   ),
                               };
+                              return _TimestampRevealRow(
+                                offset: _tsRevealOffset,
+                                revealWidth: _kTimestampRevealWidth,
+                                timestamp: chatItemTimestamp(item),
+                                child: child,
+                              );
                             },
                           ),
                           ), // NotificationListener
@@ -1159,6 +1217,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                               ),
                             ),
                         ],
+                      ),
                       ),
           ),
           // Input
@@ -1330,19 +1389,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Unified input container: action buttons + text field share one frame
+                // Unified input container: action buttons + text field share one frame.
+                // The inner Row is passed as `child` to ListenableBuilder so that only
+                // the BoxDecoration rebuilds on focus changes — the TextField and its
+                // surrounding widgets are not reconstructed, which keeps tap-to-focus
+                // smooth even when the chat panel above is large.
                 Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: c.background,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: _focusNode.hasFocus
-                            ? c.accent
-                            : c.border,
-                        width: 1,
-                      ),
-                    ),
+                  child: ListenableBuilder(
+                    listenable: _focusNode,
                     child: IntrinsicHeight(
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
@@ -1361,29 +1415,42 @@ class _ChatPanelState extends ConsumerState<ChatPanel> {
                           ),
                           Expanded(
                             child: TextField(
-                            controller: _controller,
-                            focusNode: _focusNode,
-                            autofocus: MediaQuery.of(context).size.shortestSide >= 600,
-                            maxLines: 4,
-                            minLines: 1,
-                            style: const TextStyle(color: Colors.white, fontSize: 14),
-                            decoration: InputDecoration(
-                              hintText:
-                                  'Повідомлення ${_agentNickname(ref, ref.watch(selectedAgentProvider))}...',
-                              hintStyle: TextStyle(
-                                color: Colors.white.withValues(alpha: 0.25),
+                              controller: _controller,
+                              focusNode: _focusNode,
+                              autofocus:
+                                  MediaQuery.of(context).size.shortestSide >= 600,
+                              maxLines: 4,
+                              minLines: 1,
+                              style: const TextStyle(
+                                  color: Colors.white, fontSize: 14),
+                              decoration: InputDecoration(
+                                hintText:
+                                    'Повідомлення ${_agentNickname(ref, ref.watch(selectedAgentProvider))}...',
+                                hintStyle: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.25),
+                                ),
+                                filled: false,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 12),
                               ),
-                              filled: false,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 12),
                             ),
                           ),
-                        ),
                         ],
                       ),
+                    ),
+                    builder: (context, child) => Container(
+                      decoration: BoxDecoration(
+                        color: c.background,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: _focusNode.hasFocus ? c.accent : c.border,
+                          width: 1,
+                        ),
+                      ),
+                      child: child,
                     ),
                   ),
                 ),
@@ -2245,6 +2312,64 @@ class _AgentFilterChip extends StatelessWidget {
           fontSize: 11,
           fontWeight: active ? FontWeight.w600 : FontWeight.normal,
         ),
+      ),
+    );
+  }
+}
+
+// ─── Timestamp pull-to-reveal ─────────────────────────────────────────────
+
+/// Wraps a single chat row so the pull-to-reveal gesture slides the row
+/// right and exposes a timestamp column on the left. Snap-back is owned
+/// by the parent `_ChatPanelState`; this widget just renders.
+class _TimestampRevealRow extends StatelessWidget {
+  final double offset; // current reveal width in px, 0..revealWidth
+  final double revealWidth; // full reveal width target
+  final DateTime timestamp;
+  final Widget child;
+
+  const _TimestampRevealRow({
+    required this.offset,
+    required this.revealWidth,
+    required this.timestamp,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Fast path: nothing to draw beyond the bubble.
+    if (offset <= 0) return child;
+    final progress = (offset / revealWidth).clamp(0.0, 1.0);
+    return ClipRect(
+      child: Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          // Bubble row shifted right by `offset` — its right edge clipped.
+          Transform.translate(
+            offset: Offset(offset, 0),
+            child: child,
+          ),
+          // Timestamp column slides in from the left.
+          Positioned(
+            left: offset - revealWidth,
+            top: 0,
+            bottom: 0,
+            width: revealWidth,
+            child: Center(
+              child: Opacity(
+                opacity: progress,
+                child: Text(
+                  formatChatHm(timestamp),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.55),
+                    fontSize: 11,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

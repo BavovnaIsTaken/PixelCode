@@ -39,6 +39,26 @@ class MessagePack extends ChatItem {
   });
 }
 
+/// First-message timestamp for any chat item type — the anchor used by the
+/// pull-to-reveal timestamp column ([_TimestampRevealRow]). Groups (status /
+/// thread / pack) surface the oldest message's timestamp, matching what the
+/// user already sees on the bubble's footer date.
+DateTime chatItemTimestamp(ChatItem item) => switch (item) {
+      SingleMessage(:final message) => message.timestamp,
+      StatusGroup(:final messages) => messages.first.timestamp,
+      ThreadGroup(:final messages) => messages.first.timestamp,
+      MessagePack(:final messages) => messages.first.timestamp,
+    };
+
+/// `HH:MM` local-time formatter — kept here (not on DateTime extensions) so
+/// it stays trivially testable and locale-stable.
+String formatChatHm(DateTime ts) {
+  final local = ts.toLocal();
+  final h = local.hour.toString().padLeft(2, '0');
+  final m = local.minute.toString().padLeft(2, '0');
+  return '$h:$m';
+}
+
 // ─── Agent color / icon helpers ───────────────────────────────────────────────
 
 String _roleTypeOfId(String id) {
