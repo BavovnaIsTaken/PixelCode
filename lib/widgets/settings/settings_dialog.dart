@@ -27,6 +27,7 @@ import '../session/session_form_dialog.dart';
 import 'auth_providers_section.dart';
 import 'claude_avatar.dart';
 import 'diagnostics_section.dart';
+import 'usage_baselines_tab.dart';
 import 'logo_path_editor.dart';
 import 'send_button_section.dart';
 import 'theme_section.dart';
@@ -153,6 +154,7 @@ enum _SettingsCategory {
   sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
   network(Icons.hub_outlined, 'Мережа'),
   activeAgents(Icons.flash_on_outlined, 'Активні агенти'),
+  usageBaselines(Icons.query_stats_outlined, 'Використання'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
   logo(Icons.memory, 'Лого'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
@@ -207,6 +209,8 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return _buildNetwork();
       case _SettingsCategory.activeAgents:
         return _buildActiveAgents();
+      case _SettingsCategory.usageBaselines:
+        return const UsageBaselinesTab();
       case _SettingsCategory.ergonomics:
         return _buildErgonomics();
       case _SettingsCategory.logo:

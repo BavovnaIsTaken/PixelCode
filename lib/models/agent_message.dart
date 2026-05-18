@@ -154,6 +154,7 @@ sealed class ServerMessage {
       'session_status' => SessionStatusMessage.fromJson(json),
       'session_taken' => SessionTakenMessage.fromJson(json),
       'tech_lead_pulse' => TechLeadPulseMessage.fromJson(json),
+      'usage_baselines' => UsageBaselinesMessage.fromJson(json),
       _ => ErrorMessage(message: 'Unknown message type: ${json['type']}'),
     };
   }
@@ -398,6 +399,136 @@ class RunsSinceMessage implements ServerMessage {
       RunsSinceMessage(
         runs: ((json['runs'] as List?) ?? const [])
             .map((e) => AgentRunSnapshot.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
+      );
+}
+
+// ─── Usage baselines (C.2 daily control) ────────────────────────────────────
+
+/// Mirror of the server's `NumericStats` (see `server/src/usage_baseline.ts`).
+/// Re-declared on the client so the daily-control UI does not bind to a
+/// server-internal type. The protocol-parity test on the server side pins the
+/// two shapes together.
+class UsageBaselineNumericStats {
+  final double min;
+  final double max;
+  final double mean;
+  final double median;
+  final double p95;
+  final double p99;
+
+  const UsageBaselineNumericStats({
+    required this.min,
+    required this.max,
+    required this.mean,
+    required this.median,
+    required this.p95,
+    required this.p99,
+  });
+
+  factory UsageBaselineNumericStats.fromJson(Map<String, dynamic> json) =>
+      UsageBaselineNumericStats(
+        min: (json['min'] as num?)?.toDouble() ?? 0,
+        max: (json['max'] as num?)?.toDouble() ?? 0,
+        mean: (json['mean'] as num?)?.toDouble() ?? 0,
+        median: (json['median'] as num?)?.toDouble() ?? 0,
+        p95: (json['p95'] as num?)?.toDouble() ?? 0,
+        p99: (json['p99'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class UsageBaselineBucket {
+  final String role;
+  final String taskType;
+  final int count;
+  final bool confident;
+  final UsageBaselineNumericStats costUsd;
+  final UsageBaselineNumericStats durationMs;
+  final UsageBaselineNumericStats numToolCalls;
+  final UsageBaselineNumericStats numTurns;
+  final UsageBaselineNumericStats inputTokens;
+  final UsageBaselineNumericStats outputTokens;
+
+  const UsageBaselineBucket({
+    required this.role,
+    required this.taskType,
+    required this.count,
+    required this.confident,
+    required this.costUsd,
+    required this.durationMs,
+    required this.numToolCalls,
+    required this.numTurns,
+    required this.inputTokens,
+    required this.outputTokens,
+  });
+
+  factory UsageBaselineBucket.fromJson(Map<String, dynamic> json) {
+    final stats = (json['stats'] as Map<String, dynamic>?) ?? const {};
+    return UsageBaselineBucket(
+      role: json['role'] as String? ?? '',
+      taskType: json['taskType'] as String? ?? '',
+      count: (stats['count'] as num?)?.toInt() ?? 0,
+      confident: stats['confident'] as bool? ?? false,
+      costUsd: UsageBaselineNumericStats.fromJson(
+          (stats['costUsd'] as Map<String, dynamic>?) ?? const {}),
+      durationMs: UsageBaselineNumericStats.fromJson(
+          (stats['durationMs'] as Map<String, dynamic>?) ?? const {}),
+      numToolCalls: UsageBaselineNumericStats.fromJson(
+          (stats['numToolCalls'] as Map<String, dynamic>?) ?? const {}),
+      numTurns: UsageBaselineNumericStats.fromJson(
+          (stats['numTurns'] as Map<String, dynamic>?) ?? const {}),
+      inputTokens: UsageBaselineNumericStats.fromJson(
+          (stats['inputTokens'] as Map<String, dynamic>?) ?? const {}),
+      outputTokens: UsageBaselineNumericStats.fromJson(
+          (stats['outputTokens'] as Map<String, dynamic>?) ?? const {}),
+    );
+  }
+}
+
+class UsageBaselineHealthSignal {
+  final String code;
+  final String severity; // "info" | "warn"
+  final String message;
+
+  const UsageBaselineHealthSignal({
+    required this.code,
+    required this.severity,
+    required this.message,
+  });
+
+  factory UsageBaselineHealthSignal.fromJson(Map<String, dynamic> json) =>
+      UsageBaselineHealthSignal(
+        code: json['code'] as String? ?? '',
+        severity: json['severity'] as String? ?? 'info',
+        message: json['message'] as String? ?? '',
+      );
+}
+
+class UsageBaselinesMessage implements ServerMessage {
+  final DateTime generatedAt;
+  final int totalEntries;
+  final List<UsageBaselineBucket> buckets;
+  final List<UsageBaselineHealthSignal> health;
+
+  const UsageBaselinesMessage({
+    required this.generatedAt,
+    required this.totalEntries,
+    required this.buckets,
+    required this.health,
+  });
+
+  factory UsageBaselinesMessage.fromJson(Map<String, dynamic> json) =>
+      UsageBaselinesMessage(
+        generatedAt: DateTime.tryParse(json['generatedAt'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        totalEntries: (json['totalEntries'] as num?)?.toInt() ?? 0,
+        buckets: ((json['buckets'] as List?) ?? const [])
+            .map((e) =>
+                UsageBaselineBucket.fromJson(e as Map<String, dynamic>))
+            .toList(growable: false),
+        health: ((json['health'] as List?) ?? const [])
+            .map((e) =>
+                UsageBaselineHealthSignal.fromJson(e as Map<String, dynamic>))
             .toList(growable: false),
       );
 }

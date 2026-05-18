@@ -473,6 +473,13 @@ class AgentWsService {
     });
   }
 
+  /// Request a freshly-computed empirical baselines snapshot. Reply lands as
+  /// a `usage_baselines` ServerMessage. Pull-based on purpose — daily-control
+  /// surface fetches on-open; outlier warning consumer (future) can repoll.
+  void getUsageBaselines() {
+    _send({'type': 'get_usage_baselines'});
+  }
+
   // ─── Agent traits ────────────────────────────────────────────────────────
 
   void getTraits() {

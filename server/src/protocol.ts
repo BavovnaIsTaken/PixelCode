@@ -207,7 +207,12 @@ export type ClientMessage =
   // `null` cursor returns every run the server knows about. Used on
   // reconnect / boot so the UI can surface runs that finished offline
   // (especially status=interrupted from a server respawn).
-  | { type: "list_runs_since"; sinceRunId?: string | null };
+  | { type: "list_runs_since"; sinceRunId?: string | null }
+  // C.2 empirical baselines — on-demand snapshot of `{role, taskType}`
+  // distribution computed from usage_log.jsonl. Powers the daily-control
+  // Settings tab; outlier-warning consumer comes later when buckets reach
+  // confidence (see ROADMAP "Outlier warning у facilitator UI").
+  | { type: "get_usage_baselines" };
 
 // ─── Server → Client ────────────────────────────────────────────────────────
 
@@ -310,6 +315,20 @@ export interface TaskAttachmentData {
  */
 export type TaskOutcomeKey = "clean" | "crit" | "bug" | "incomplete";
 
+/**
+ * Wire shape for the descriptive-stats block carried by `usage_baselines`.
+ * Mirror of `NumericStats` from `server/src/usage_baseline.ts` — re-declared
+ * here so the protocol file holds every over-the-wire type.
+ */
+export interface UsageBaselineNumericStats {
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  p95: number;
+  p99: number;
+}
+
 export interface TaskCardData {
   id: string;
   title: string;
@@ -392,6 +411,37 @@ export type ServerMessage =
       type: "runs_since";
       /** Snapshots of every run that started after the cursor. Chronological. */
       runs: AgentRunSnapshot[];
+    }
+  | {
+      type: "usage_baselines";
+      /**
+       * Wire-shape mirrors `BaselineReport` from `server/src/usage_baseline.ts`.
+       * Re-declared here (rather than imported) so the protocol file stays
+       * the single source of truth for over-the-wire shapes and the analyzer
+       * module stays free of cross-imports. Test
+       * `usage_baselines_protocol.test.ts` pins these in sync.
+       */
+      generatedAt: string;
+      totalEntries: number;
+      buckets: Array<{
+        role: string;
+        taskType: string;
+        stats: {
+          count: number;
+          confident: boolean;
+          costUsd: UsageBaselineNumericStats;
+          durationMs: UsageBaselineNumericStats;
+          numToolCalls: UsageBaselineNumericStats;
+          numTurns: UsageBaselineNumericStats;
+          inputTokens: UsageBaselineNumericStats;
+          outputTokens: UsageBaselineNumericStats;
+        };
+      }>;
+      health: Array<{
+        code: string;
+        severity: "info" | "warn";
+        message: string;
+      }>;
     }
   | {
       type: "subagent_start";

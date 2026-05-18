@@ -66,6 +66,7 @@ import {
 import { generateTeamReactions } from "./facilitator/team_reactions.js";
 import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
 import { UsageLogger, usageLogFile, newRunId } from "./usage_log.js";
+import { analyze as analyzeUsageBaselines } from "./usage_baseline.js";
 import { AgentRunStore, agentRunsFile } from "./agent_run.js";
 import {
   applyReactionsToChat,
@@ -5181,6 +5182,23 @@ wss.on("connection", (ws, request) => {
         case "list_runs_since": {
           const runs = agentRunStore.since(msg.sinceRunId ?? null);
           send(ws, { type: "runs_since", runs } as ServerMessage);
+          break;
+        }
+
+        case "get_usage_baselines": {
+          // Pure analyzer — fed by the already-on-disk JSONL log. The read +
+          // aggregate cost is bounded by `usage_log.jsonl` size (currently
+          // unbounded — empirical baselines row in ROADMAP tracks adding a
+          // rolling window if the file grows past a few MB).
+          const entries = usageLogger.readAllEntries();
+          const report = analyzeUsageBaselines(entries);
+          send(ws, {
+            type: "usage_baselines",
+            generatedAt: report.generatedAt,
+            totalEntries: report.totalEntries,
+            buckets: report.buckets,
+            health: report.health,
+          } as ServerMessage);
           break;
         }
 
