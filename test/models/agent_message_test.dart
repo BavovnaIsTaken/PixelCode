@@ -775,6 +775,266 @@ void main() {
       expect((msg as InputTextMessage).text, 'Hello from remote');
     });
 
+    group('reflection_kpi', () {
+      test('routes to ReflectionKpiMessage', () {
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30,
+          'hasData': true,
+          'submitted': 12,
+          'promotedViaThreshold': 4,
+          'promotedViaBypass': 2,
+          'pending': 3,
+          'duplicate': 1,
+          'tooSoon': 2,
+          'prunedStale': 0,
+          'decayedPruned': 0,
+          'constraintViolations': 1,
+          'promotionRate': 0.5,
+          'bypassRate': 0.33,
+          'violationRate': 0.083,
+          'recentViolations': [
+            {
+              'agentId': 'manager#1',
+              'tag': 'agent-dispatch-unavailable',
+              'phrases': ['was not available', 'fell back to task'],
+              'lesson': 'Attempted dispatch but...',
+              'ts': '2026-05-18T10:00:00.000Z',
+            },
+          ],
+        });
+        expect(msg, isA<ReflectionKpiMessage>());
+        final cast = msg as ReflectionKpiMessage;
+        expect(cast.windowDays, 30);
+        expect(cast.submitted, 12);
+        expect(cast.promotionRate, closeTo(0.5, 1e-9));
+        expect(cast.recentViolations.length, 1);
+        expect(cast.recentViolations.first.tag, 'agent-dispatch-unavailable');
+        expect(cast.recentViolations.first.phrases, hasLength(2));
+      });
+
+      test('hasData=false snapshot is parseable + overallHealthy is null', () {
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': null,
+          'hasData': false,
+          'submitted': 0,
+          'promotedViaThreshold': 0,
+          'promotedViaBypass': 0,
+          'pending': 0,
+          'duplicate': 0,
+          'tooSoon': 0,
+          'prunedStale': 0,
+          'decayedPruned': 0,
+          'constraintViolations': 0,
+          'promotionRate': 0,
+          'bypassRate': 0,
+          'violationRate': 0,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.hasData, false);
+        expect(msg.overallHealthy, isNull,
+            reason: 'cold-project state must be reported as unknown, not green');
+      });
+
+      test('overallHealthy: true when all signals within thresholds', () {
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30, 'hasData': true,
+          'submitted': 10, 'promotedViaThreshold': 4, 'promotedViaBypass': 0,
+          'pending': 4, 'duplicate': 1, 'tooSoon': 1,
+          'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+          'invalidTagCount': 0,
+          'promotionRate': 0.4, 'bypassRate': 0.0, 'violationRate': 0.0,
+          'invalidTagRate': 0.0, 'tagEntropy': 2.5, 'topTagShare': 0.3,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.overallHealthy, isTrue);
+        expect(msg.promotionRateOk, isTrue);
+        expect(msg.bypassRateOk, isTrue);
+        expect(msg.violationRateOk, isTrue);
+        expect(msg.invalidTagRateOk, isTrue);
+        expect(msg.tagEntropyOk, isTrue);
+        expect(msg.topTagShareOk, isTrue);
+      });
+
+      test('overallHealthy: false when any signal red', () {
+        // violationRate above 5% — the most critical signal.
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30, 'hasData': true,
+          'submitted': 10, 'promotedViaThreshold': 4, 'promotedViaBypass': 0,
+          'pending': 4, 'duplicate': 1, 'tooSoon': 1,
+          'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 2,
+          'promotionRate': 0.4, 'bypassRate': 0.0, 'violationRate': 0.2,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.overallHealthy, isFalse);
+        expect(msg.violationRateOk, isFalse);
+        // The other two are still ok — make sure verdict is the AND of all.
+        expect(msg.promotionRateOk, isTrue);
+        expect(msg.bypassRateOk, isTrue);
+      });
+
+      test('promotionRate boundaries: 0.1 ok, 0.099 not ok, 0.7 ok, 0.71 not ok', () {
+        ReflectionKpiMessage build(double rate) => parse({
+              'type': 'reflection_kpi',
+              'windowDays': null, 'hasData': true,
+              'submitted': 100, 'promotedViaThreshold': 0, 'promotedViaBypass': 0,
+              'pending': 0, 'duplicate': 0, 'tooSoon': 0,
+              'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+              'promotionRate': rate, 'bypassRate': 0, 'violationRate': 0,
+              'recentViolations': [],
+            }) as ReflectionKpiMessage;
+        expect(build(0.1).promotionRateOk, isTrue,
+            reason: 'lower boundary 10% must be considered ok');
+        expect(build(0.099).promotionRateOk, isFalse,
+            reason: 'just below 10% must be flagged');
+        expect(build(0.7).promotionRateOk, isTrue,
+            reason: 'upper boundary 70% must be considered ok');
+        expect(build(0.71).promotionRateOk, isFalse,
+            reason: 'just above 70% must be flagged');
+      });
+
+      test('handles missing optional fields gracefully', () {
+        // Worst-case: schema drift means some fields go missing. We must
+        // never crash on a partial payload — fall back to zero.
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'hasData': true,
+          // intentionally missing all numeric counters
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.submitted, 0);
+        expect(msg.promotionRate, 0);
+        expect(msg.windowDays, isNull);
+        // C.2.6 fields also default to 0 when missing.
+        expect(msg.invalidTagCount, 0);
+        expect(msg.invalidTagRate, 0);
+        expect(msg.tagEntropy, 0);
+        expect(msg.topTagShare, 0);
+      });
+
+      // ─── C.2.6 — taxonomy drift signals ──────────────────────────────────
+
+      test('parses C.2.6 fields from server payload', () {
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30, 'hasData': true,
+          'submitted': 20, 'promotedViaThreshold': 5, 'promotedViaBypass': 0,
+          'pending': 10, 'duplicate': 4, 'tooSoon': 1,
+          'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+          'invalidTagCount': 3,
+          'promotionRate': 0.25, 'bypassRate': 0.0, 'violationRate': 0.0,
+          'invalidTagRate': 0.13,
+          'tagEntropy': 2.4,
+          'topTagShare': 0.35,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.invalidTagCount, 3);
+        expect(msg.invalidTagRate, closeTo(0.13, 1e-9));
+        expect(msg.tagEntropy, closeTo(2.4, 1e-9));
+        expect(msg.topTagShare, closeTo(0.35, 1e-9));
+      });
+
+      test('invalidTagRateOk: ≤ 8% green, > 8% red', () {
+        ReflectionKpiMessage build(double rate) => parse({
+              'type': 'reflection_kpi',
+              'windowDays': null, 'hasData': true,
+              'submitted': 100, 'promotedViaThreshold': 0, 'promotedViaBypass': 0,
+              'pending': 0, 'duplicate': 0, 'tooSoon': 0,
+              'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+              'invalidTagCount': 10,
+              'promotionRate': 0.5, 'bypassRate': 0, 'violationRate': 0,
+              'invalidTagRate': rate, 'tagEntropy': 3.0, 'topTagShare': 0.2,
+              'recentViolations': [],
+            }) as ReflectionKpiMessage;
+        expect(build(0.08).invalidTagRateOk, isTrue);
+        expect(build(0.081).invalidTagRateOk, isFalse);
+        expect(build(0.0).invalidTagRateOk, isTrue);
+      });
+
+      test('tagEntropyOk: small samples (< 5) tolerated as ok', () {
+        // Cold-start protection: a 2-candidate stream trivially has low
+        // entropy. We must not flag it as drift before we have enough data.
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30, 'hasData': true,
+          'submitted': 3, 'promotedViaThreshold': 1, 'promotedViaBypass': 0,
+          'pending': 2, 'duplicate': 0, 'tooSoon': 0,
+          'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+          'invalidTagCount': 0,
+          'promotionRate': 0.33, 'bypassRate': 0, 'violationRate': 0,
+          'invalidTagRate': 0, 'tagEntropy': 0.0, 'topTagShare': 1.0,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.tagEntropyOk, isTrue,
+            reason: 'must not flag drift before 5-sample minimum');
+        expect(msg.topTagShareOk, isTrue,
+            reason: 'cold-start top-share is meaningless until min sample reached');
+      });
+
+      test('tagEntropyOk: ≥ 1.5 bits green at threshold, < 1.5 red', () {
+        ReflectionKpiMessage build(double h) => parse({
+              'type': 'reflection_kpi',
+              'windowDays': null, 'hasData': true,
+              'submitted': 100, 'promotedViaThreshold': 30, 'promotedViaBypass': 0,
+              'pending': 70, 'duplicate': 0, 'tooSoon': 0,
+              'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+              'invalidTagCount': 0,
+              'promotionRate': 0.3, 'bypassRate': 0, 'violationRate': 0,
+              'invalidTagRate': 0, 'tagEntropy': h, 'topTagShare': 0.4,
+              'recentViolations': [],
+            }) as ReflectionKpiMessage;
+        expect(build(1.5).tagEntropyOk, isTrue,
+            reason: 'lower boundary 1.5 bits is the cutoff; ≥ is ok');
+        expect(build(1.499).tagEntropyOk, isFalse,
+            reason: 'just below cutoff must flag binning drift');
+        expect(build(3.5).tagEntropyOk, isTrue);
+      });
+
+      test('topTagShareOk: ≤ 50% green, > 50% red', () {
+        ReflectionKpiMessage build(double share) => parse({
+              'type': 'reflection_kpi',
+              'windowDays': null, 'hasData': true,
+              'submitted': 100, 'promotedViaThreshold': 30, 'promotedViaBypass': 0,
+              'pending': 70, 'duplicate': 0, 'tooSoon': 0,
+              'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+              'invalidTagCount': 0,
+              'promotionRate': 0.3, 'bypassRate': 0, 'violationRate': 0,
+              'invalidTagRate': 0, 'tagEntropy': 2.0, 'topTagShare': share,
+              'recentViolations': [],
+            }) as ReflectionKpiMessage;
+        expect(build(0.5).topTagShareOk, isTrue);
+        expect(build(0.501).topTagShareOk, isFalse);
+      });
+
+      test('overallHealthy: AND of all 6 signals — entropy red flips overall', () {
+        // The pre-C.2.6 overallHealthy was AND of 3 signals. Post-C.2.6
+        // adds three more (invalidTagRate, tagEntropy, topTagShare).
+        // Ensure entropy drift alone flips the verdict.
+        final msg = parse({
+          'type': 'reflection_kpi',
+          'windowDays': 30, 'hasData': true,
+          'submitted': 100, 'promotedViaThreshold': 30, 'promotedViaBypass': 0,
+          'pending': 70, 'duplicate': 0, 'tooSoon': 0,
+          'prunedStale': 0, 'decayedPruned': 0, 'constraintViolations': 0,
+          'invalidTagCount': 0,
+          'promotionRate': 0.3, 'bypassRate': 0, 'violationRate': 0,
+          'invalidTagRate': 0, 'tagEntropy': 0.8, 'topTagShare': 0.4,
+          'recentViolations': [],
+        }) as ReflectionKpiMessage;
+        expect(msg.promotionRateOk, isTrue);
+        expect(msg.bypassRateOk, isTrue);
+        expect(msg.violationRateOk, isTrue);
+        expect(msg.invalidTagRateOk, isTrue);
+        expect(msg.tagEntropyOk, isFalse);
+        expect(msg.topTagShareOk, isTrue);
+        expect(msg.overallHealthy, isFalse,
+            reason: 'entropy drift alone must flip overall health');
+      });
+    });
+
     test('input_images routes to InputImagesMessage', () {
       final msg = parse({
         'type': 'input_images',
@@ -1144,6 +1404,69 @@ void main() {
       var item = HealthItem(id: HealthItemId.mdnsActive, status: HealthStatus.checking);
       item = item.copyWith(status: HealthStatus.ok, detail: 'ok', fixable: false);
       expect(item.id, HealthItemId.mdnsActive);
+    });
+  });
+
+  // ─── C.2.5 — SubagentFailedMessage ────────────────────────────────────────
+  //
+  // The server emits this discriminated event alongside the generic `error`
+  // toast so the client can clear stale tool-progress state and choose UX
+  // per failure reason (timeout → retry-friendly, breaker → cost-budget
+  // warning, error → generic). Drift in reason parsing would silently
+  // collapse the discriminator back to generic `error`.
+
+  group('SubagentFailedMessage', () {
+    test('parses timeout reason', () {
+      final raw = {
+        'type': 'subagent_failed',
+        'dispatchId': 'dispatch_42_1700000000',
+        'agentId': 'character-artist#1',
+        'reason': 'timeout',
+        'message': 'Sub-agent character-artist#1 hard timeout (180s)',
+      };
+      final msg = ServerMessage.fromJson(jsonEncode(raw)) as SubagentFailedMessage;
+      expect(msg.reason, SubagentFailureReason.timeout);
+      expect(msg.dispatchId, 'dispatch_42_1700000000');
+      expect(msg.agentId, 'character-artist#1');
+      expect(msg.message, contains('hard timeout'));
+    });
+
+    test('parses breaker reason', () {
+      final raw = {
+        'type': 'subagent_failed',
+        'dispatchId': 'd1',
+        'agentId': 'coder#1',
+        'reason': 'breaker',
+        'message': 'circuit breaker tripped: \$5 cap',
+      };
+      final msg = ServerMessage.fromJson(jsonEncode(raw)) as SubagentFailedMessage;
+      expect(msg.reason, SubagentFailureReason.breaker);
+    });
+
+    test('parses generic error reason', () {
+      final raw = {
+        'type': 'subagent_failed',
+        'dispatchId': 'd1',
+        'agentId': 'coder#1',
+        'reason': 'error',
+        'message': 'ECONNRESET',
+      };
+      final msg = ServerMessage.fromJson(jsonEncode(raw)) as SubagentFailedMessage;
+      expect(msg.reason, SubagentFailureReason.error);
+    });
+
+    test('unknown reason string falls back to error (safe default)', () {
+      // If server adds a new reason variant before the client knows about
+      // it, the client must NOT crash — it should degrade to generic.
+      final raw = {
+        'type': 'subagent_failed',
+        'dispatchId': 'd1',
+        'agentId': 'coder#1',
+        'reason': 'wat',
+        'message': '',
+      };
+      final msg = ServerMessage.fromJson(jsonEncode(raw)) as SubagentFailedMessage;
+      expect(msg.reason, SubagentFailureReason.error);
     });
   });
 }

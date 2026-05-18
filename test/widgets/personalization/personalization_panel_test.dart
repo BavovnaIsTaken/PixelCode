@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pixelcode/models/agent_message.dart';
 import 'package:pixelcode/models/agent_trait.dart';
 import 'package:pixelcode/providers/agent_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
@@ -21,10 +22,14 @@ void main() {
       prefs = await SharedPreferences.getInstance();
     });
 
-    Widget buildTestApp(List<AgentTrait> traits) {
+    Widget buildTestApp(
+      List<AgentTrait> traits, {
+      ReflectionKpiMessage? kpi,
+    }) {
       return ProviderScope(
         overrides: [
           traitsProvider.overrideWith(() => _FakeTraitsNotifier(traits)),
+          reflectionKpiProvider.overrideWith(() => _FakeKpiNotifier(kpi)),
           sharedPrefsProvider.overrideWithValue(prefs),
         ],
         child: MaterialApp(
@@ -290,6 +295,96 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     });
+
+    // ─── System health banner ───────────────────────────────────────────────
+
+    testWidgets('health banner: loading placeholder when kpi is null', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: null));
+      await tester.pump(); // single pump; banner is on first frame
+      expect(find.textContaining('Перевіряю'), findsOneWidget);
+    });
+
+    testWidgets('health banner: cold-project notice when hasData=false', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(hasData: false)));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('"холодна"'), findsOneWidget);
+      expect(find.byIcon(Icons.cloud_off_outlined), findsOneWidget);
+    });
+
+    testWidgets('health banner: green verdict when all signals healthy', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(
+        promotionRate: 0.4,
+        bypassRate: 0.1,
+        violationRate: 0.0,
+      )));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('здорова'), findsOneWidget);
+      expect(find.textContaining('Усе ок'), findsOneWidget);
+    });
+
+    testWidgets('health banner: red verdict when violation rate too high', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(
+        promotionRate: 0.4,
+        bypassRate: 0.1,
+        violationRate: 0.2, // > 5% threshold
+      )));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('потребує уваги'), findsOneWidget);
+      expect(find.textContaining('тривоги'), findsOneWidget);
+    });
+
+    testWidgets('health banner: tap expands to show per-signal KPIs', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(
+        promotionRate: 0.4,
+      )));
+      await tester.pumpAndSettle();
+      // Pre-expand: KPI rows must not be visible.
+      expect(find.text('Promotion rate'), findsNothing);
+
+      // Tap the chevron to expand.
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Promotion rate'), findsOneWidget);
+      expect(find.text('Bypass rate'), findsOneWidget);
+      expect(find.text('Violation rate'), findsOneWidget);
+      expect(find.byIcon(Icons.expand_less), findsOneWidget);
+    });
+
+    testWidgets('health banner: expanded view lists recent violations', (tester) async {
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(
+        violationRate: 0.3, // red — to ensure banner is interactive
+        recentViolations: const [
+          ReflectionViolation(
+            agentId: 'manager#1',
+            tag: 'agent-dispatch-unavailable',
+            phrases: ['was not available'],
+            lesson: 'Attempted dispatch but it was not available',
+            ts: '2026-05-18T10:00:00Z',
+          ),
+        ],
+      )));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.expand_more));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Останні порушення'), findsOneWidget);
+      expect(
+        find.textContaining('agent-dispatch-unavailable'),
+        findsOneWidget,
+        reason: 'recent violation tag must surface for manual inspection',
+      );
+    });
+
+    testWidgets('health banner: does not crash when kpi has zero submitted', (tester) async {
+      // Cold edge: hasData=true but no events yet. Must not divide-by-zero.
+      await tester.pumpWidget(buildTestApp([], kpi: _kpi(
+        submitted: 0,
+        tooSoon: 0,
+      )));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 }
 
@@ -304,4 +399,56 @@ class _FakeTraitsNotifier extends TraitsNotifier {
   void removeLesson(String lessonId) {
     state = state.where((t) => t.id != lessonId).toList();
   }
+}
+
+/// Test override for [reflectionKpiProvider]. Bypasses WS round-trip and
+/// returns the seeded snapshot synchronously — `refresh()` is a no-op so
+/// the widget never blocks pumpAndSettle waiting for a real server.
+class _FakeKpiNotifier extends ReflectionKpiNotifier {
+  final ReflectionKpiMessage? _initial;
+  _FakeKpiNotifier(this._initial);
+
+  @override
+  ReflectionKpiMessage? build() => _initial;
+
+  @override
+  void refresh({int? sinceDays}) {
+    // no-op — fixture-only
+  }
+}
+
+ReflectionKpiMessage _kpi({
+  bool hasData = true,
+  double promotionRate = 0.4,
+  double bypassRate = 0.0,
+  double violationRate = 0.0,
+  int submitted = 10,
+  int tooSoon = 1,
+  int invalidTagCount = 0,
+  double invalidTagRate = 0.0,
+  double tagEntropy = 3.0,
+  double topTagShare = 0.2,
+  List<ReflectionViolation> recentViolations = const [],
+}) {
+  return ReflectionKpiMessage(
+    windowDays: 30,
+    hasData: hasData,
+    submitted: submitted,
+    promotedViaThreshold: 4,
+    promotedViaBypass: 0,
+    pending: 4,
+    duplicate: 1,
+    tooSoon: tooSoon,
+    prunedStale: 0,
+    decayedPruned: 0,
+    constraintViolations: recentViolations.length,
+    invalidTagCount: invalidTagCount,
+    promotionRate: promotionRate,
+    bypassRate: bypassRate,
+    violationRate: violationRate,
+    invalidTagRate: invalidTagRate,
+    tagEntropy: tagEntropy,
+    topTagShare: topTagShare,
+    recentViolations: recentViolations,
+  );
 }

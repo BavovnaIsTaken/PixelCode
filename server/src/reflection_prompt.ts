@@ -20,6 +20,11 @@
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import {
+  formatTaxonomyForPrompt,
+  tagEntropyBits,
+  topTagShare,
+} from "./reflection_taxonomy.js";
 
 // ─── Input types ───────────────────────────────────────────────────────────
 
@@ -166,7 +171,11 @@ Extract 0-3 notable lessons from this session. Each lesson is a pattern that sho
 - A "strength" is something an agent did notably well (thorough analysis, clean code, good delegation, etc.)
 - A "weakness" is something an agent struggled with or made a mistake on (missed edge cases, wrong approach, needed rework, etc.)
 - Only include genuinely insightful observations, NOT generic platitudes.
-- The "tag" must be specific and kebab-case (e.g., "missing-null-checks", "thorough-code-review", "poor-delegation-clarity").
+- The "tag" MUST be chosen from the canonical list in <canonical_tags>. Do not invent new tags — server-side validation rejects unknown tags. If none of the listed tags fits closely, prefer omitting the lesson over inventing a tag.
+
+<canonical_tags>
+${formatTaxonomyForPrompt()}
+</canonical_tags>
 
 Hard constraints — do NOT violate:
 - NEVER claim a tool was "unavailable" or "missing" if it appears in <allowed_tools> for that agent. <allowed_tools> is authoritative.
@@ -222,6 +231,7 @@ export type ReflectionEvent =
   | { kind: "candidate_pruned_stale"; count: number }
   | { kind: "traits_decayed_pruned"; count: number }
   | { kind: "constraint_violation"; agentId: string; tag: string; phrases: string[]; lesson: string }
+  | { kind: "invalid_tag"; agentId: string; tag: string; type: string; category: string; lesson: string }
   | { kind: "reflection_skipped"; reason: "no_activity" | "no_consent" | "no_lessons" };
 
 function telemetryDir(projectPath: string): string {
@@ -274,9 +284,17 @@ export interface ReflectionKpiSnapshot {
   prunedStale: number;
   decayedPruned: number;
   constraintViolations: number;
+  /** Candidates rejected at submission because the tag fell outside the canonical taxonomy (C.2.6). */
+  invalidTagCount: number;
   promotionRate: number;
   bypassRate: number;
   violationRate: number;
+  /** Rejected-tag share of all submission attempts: invalidTagCount / (submitted + invalidTagCount). */
+  invalidTagRate: number;
+  /** Shannon entropy (bits) over the tag distribution of submitted candidates. */
+  tagEntropy: number;
+  /** Largest single-tag share of submitted candidates (0..1). */
+  topTagShare: number;
 }
 
 /**
@@ -348,9 +366,13 @@ export function buildReflectionKpiMessage(
   prunedStale: number;
   decayedPruned: number;
   constraintViolations: number;
+  invalidTagCount: number;
   promotionRate: number;
   bypassRate: number;
   violationRate: number;
+  invalidTagRate: number;
+  tagEntropy: number;
+  topTagShare: number;
   recentViolations: RecentViolation[];
 } {
   const { events, fileExists } = readReflectionEvents(projectPath, sinceDays);
@@ -391,10 +413,13 @@ export function summarizeReflectionTelemetry(
   let prunedStale = 0;
   let decayedPruned = 0;
   let violations = 0;
+  let invalidTags = 0;
+  const submittedTags: string[] = [];
   for (const e of events) {
     switch (e.kind) {
       case "candidate_submitted":
         submitted++;
+        submittedTags.push(e.tag);
         if (e.status === "promoted") {
           if (e.via === "real-trait-bypass") promotedBypass++;
           else promotedThreshold++;
@@ -411,9 +436,13 @@ export function summarizeReflectionTelemetry(
       case "constraint_violation":
         violations++;
         break;
+      case "invalid_tag":
+        invalidTags++;
+        break;
     }
   }
   const totalPromoted = promotedThreshold + promotedBypass;
+  const totalSubmissionAttempts = submitted + invalidTags;
   const safe = (n: number, d: number) => (d > 0 ? n / d : 0);
   return {
     submitted,
@@ -425,8 +454,12 @@ export function summarizeReflectionTelemetry(
     prunedStale,
     decayedPruned,
     constraintViolations: violations,
+    invalidTagCount: invalidTags,
     promotionRate: safe(totalPromoted, submitted),
     bypassRate: safe(promotedBypass, totalPromoted),
     violationRate: safe(violations, submitted),
+    invalidTagRate: safe(invalidTags, totalSubmissionAttempts),
+    tagEntropy: tagEntropyBits(submittedTags),
+    topTagShare: topTagShare(submittedTags),
   };
 }

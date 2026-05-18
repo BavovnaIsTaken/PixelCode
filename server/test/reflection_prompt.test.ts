@@ -200,6 +200,45 @@ test("buildReflectionPrompt: team_roster override appears in prompt", () => {
   assert.match(out, /Team agents: coder, reviewer\n/);
 });
 
+// ─── C.2.6 — Canonical taxonomy injection ──────────────────────────────────
+
+test("buildReflectionPrompt: emits <canonical_tags> section with both weakness and strength buckets", () => {
+  const out = buildReflectionPrompt(FX_HAPPY);
+  assert.match(out, /<canonical_tags>/);
+  assert.match(out, /<\/canonical_tags>/);
+  assert.match(out, /Weakness tags/);
+  assert.match(out, /Strength tags/);
+});
+
+test("buildReflectionPrompt: <canonical_tags> lists each canonical tag (regression — taxonomy must reach Haiku)", () => {
+  const out = buildReflectionPrompt(FX_HAPPY);
+  // Spot-check a few canonical tags to confirm they made it into the prompt.
+  // If the taxonomy module changes, this test surfaces the wiring break
+  // before users notice via 100% invalid_tag rejections.
+  assert.ok(out.includes("insufficient-context-gathering"),
+    "weakness tag must appear in <canonical_tags>");
+  assert.ok(out.includes("unclear-dispatch-specification"),
+    "weakness tag must appear in <canonical_tags>");
+  assert.ok(out.includes("proactive-investigation"),
+    "strength tag must appear in <canonical_tags>");
+  assert.ok(out.includes("context-rich-delegation"),
+    "strength tag must appear in <canonical_tags>");
+});
+
+test("buildReflectionPrompt: instructs Haiku that tags MUST come from canonical list", () => {
+  const out = buildReflectionPrompt(FX_HAPPY);
+  // Load-bearing wording — paired with the server-side isValidTag check.
+  // If this phrasing drifts, server rejects 100% of submissions silently.
+  assert.ok(
+    out.includes("canonical list") || out.includes("<canonical_tags>"),
+    "prompt must reference the canonical list",
+  );
+  assert.ok(
+    /Do not invent new tags/i.test(out),
+    "prompt must explicitly forbid invented tags",
+  );
+});
+
 // ─── detectForbiddenAvailabilityClaims ──────────────────────────────────────
 
 test("detectForbiddenAvailabilityClaims: catches the original incident phrasing", () => {
@@ -318,9 +357,13 @@ test("summarizeReflectionTelemetry: empty stream → all zero KPIs", () => {
     prunedStale: 0,
     decayedPruned: 0,
     constraintViolations: 0,
+    invalidTagCount: 0,
     promotionRate: 0,
     bypassRate: 0,
     violationRate: 0,
+    invalidTagRate: 0,
+    tagEntropy: 0,
+    topTagShare: 0,
   });
 });
 
@@ -344,6 +387,55 @@ test("summarizeReflectionTelemetry: computes promotion + bypass + violation rate
   assert.equal(k.promotionRate, 2 / 5);
   assert.equal(k.bypassRate, 1 / 2);
   assert.equal(k.violationRate, 1 / 5);
+});
+
+test("summarizeReflectionTelemetry: invalid_tag events count separately + drive invalidTagRate", () => {
+  // C.2.6 — Haiku occasionally invents off-taxonomy tags despite the closed
+  // list. Those are rejected at the gate and emit `invalid_tag` telemetry.
+  // The rate is computed against ALL submission attempts (submitted + invalid).
+  const events: ReflectionEvent[] = [
+    { kind: "candidate_submitted", agentId: "a", tag: "tool-misuse", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 },
+    { kind: "candidate_submitted", agentId: "a", tag: "tool-misuse", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 },
+    { kind: "candidate_submitted", agentId: "a", tag: "scope-creep", type: "weakness", category: "code_quality", status: "pending", sessionCount: 1 },
+    { kind: "invalid_tag", agentId: "a", tag: "fancy-invented-tag", type: "weakness", category: "communication", lesson: "x" },
+    { kind: "invalid_tag", agentId: "b", tag: "another-invented", type: "strength", category: "delegation", lesson: "y" },
+  ];
+  const k = summarizeReflectionTelemetry(events);
+  assert.equal(k.submitted, 3);
+  assert.equal(k.invalidTagCount, 2);
+  // 2 invalid / (3 submitted + 2 invalid) = 0.4
+  assert.equal(k.invalidTagRate, 2 / 5);
+});
+
+test("summarizeReflectionTelemetry: tagEntropy reflects diversity of submitted tags", () => {
+  // Three distinct tags, evenly distributed → maximum entropy for 3 bins
+  // = log2(3) ≈ 1.585. Submitted tags drive the metric; invalid_tag events
+  // are excluded (they never reached the candidate pool).
+  const events: ReflectionEvent[] = [
+    { kind: "candidate_submitted", agentId: "a", tag: "x", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 },
+    { kind: "candidate_submitted", agentId: "a", tag: "y", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 },
+    { kind: "candidate_submitted", agentId: "a", tag: "z", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 },
+  ];
+  const k = summarizeReflectionTelemetry(events);
+  assert.ok(Math.abs(k.tagEntropy - Math.log2(3)) < 1e-9,
+    `expected log2(3) ≈ 1.585 bits, got ${k.tagEntropy}`);
+  // Three distinct tags out of three → top share = 1/3.
+  assert.ok(Math.abs(k.topTagShare - 1 / 3) < 1e-9);
+});
+
+test("summarizeReflectionTelemetry: tagEntropy collapses below 1.5 bits under catastrophic binning", () => {
+  // 90/10 split — the exact pattern the entropy threshold (CLAUDE.md §5)
+  // is meant to flag. If Haiku is binning, this is what telemetry sees.
+  const events: ReflectionEvent[] = [];
+  for (let i = 0; i < 9; i++) {
+    events.push({ kind: "candidate_submitted", agentId: "a", tag: "tool-misuse", type: "weakness", category: "tools_usage", status: "pending", sessionCount: 1 });
+  }
+  events.push({ kind: "candidate_submitted", agentId: "a", tag: "scope-creep", type: "weakness", category: "code_quality", status: "pending", sessionCount: 1 });
+  const k = summarizeReflectionTelemetry(events);
+  assert.ok(k.tagEntropy < 1.5,
+    `9/1 split should fall below 1.5-bit drift floor; got ${k.tagEntropy}`);
+  assert.ok(k.topTagShare > 0.8,
+    `top-tag share should clearly clear 50% threshold; got ${k.topTagShare}`);
 });
 
 test("summarizeReflectionTelemetry: prune/decay counts sum across events", () => {

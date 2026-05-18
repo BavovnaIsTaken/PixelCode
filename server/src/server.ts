@@ -67,6 +67,9 @@ import { generateTeamReactions } from "./facilitator/team_reactions.js";
 import { TechLeadDigest, digestFile } from "./tech_lead_digest.js";
 import { UsageLogger, usageLogFile, newRunId } from "./usage_log.js";
 import { analyze as analyzeUsageBaselines } from "./usage_baseline.js";
+import { IncidentLogger, incidentLogFile, newIncidentId } from "./incident_log.js";
+import { detectPrematureComplete, stripPrematureCompleteClaim } from "./premature_complete_detector.js";
+import { classifySubAgentFailure } from "./subagent_failure_classifier.js";
 import { AgentRunStore, agentRunsFile } from "./agent_run.js";
 import {
   applyReactionsToChat,
@@ -78,10 +81,20 @@ import {
   loadTraits, saveTraits, recordLesson, removeLesson,
   formatTraitsForPrompt, getAllTraits, getLessonsForAgent,
   isConsentEnabled, setConsent, getAllConsent,
-  type TraitStore, type LessonType, type LessonCategory,
+  loadCandidates, recordLessonCandidate, getAllCandidates,
+  type TraitStore, type CandidateStore, type LessonType, type LessonCategory,
 } from "./trait_memory.js";
+import {
+  buildReflectionPrompt,
+  appendReflectionTelemetry,
+  detectForbiddenAvailabilityClaims,
+  buildReflectionKpiMessage,
+  type ActivityEntry,
+} from "./reflection_prompt.js";
+import { isValidTag } from "./reflection_taxonomy.js";
 import { TaskQueue, type QueuedTask } from "./task_queue.js";
 import { AgentRunner, type SubAgentResult } from "./agent_runner.js";
+import { DISPATCH_TOOL_DESCRIPTION, buildDispatchReturnString, extractDispatchIdFromToolResult } from "./dispatch_prompts.js";
 import { ChatQueryRegistry } from "./chat_query_registry.js";
 import { CircuitBreaker } from "./circuit_breaker.js";
 import { HeartbeatMonitor } from "./heartbeat.js";
@@ -226,7 +239,18 @@ function extractText(msg: SDKAssistantMessage): string {
 
 // ─── Process SDK messages ────────────────────────────────────────────────────
 
-function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: string = "manager"): void {
+function handleSDKMessage(
+  ws: WebSocket,
+  message: SDKMessage,
+  targetAgentId: string = "manager",
+  /**
+   * C.2.6 — chat runId, threaded through so the post-query reflection
+   * gate scopes "session" to one chat query (independent units of
+   * observation) rather than the SDK persistent session id.
+   * Optional for backward compatibility with non-chat call sites.
+   */
+  reflectionRunId?: string,
+): void {
   // Log every SDK message type (except noisy stream_event)
   if (message.type !== "stream_event") {
     dbg("debug", "sdk", `${message.type}${
@@ -493,7 +517,7 @@ function handleSDKMessage(ws: WebSocket, message: SDKMessage, targetAgentId: str
       getAgentMap(ws).clear();
 
       // Trigger async post-query reflection (non-blocking)
-      reflectOnQuery(ws, targetAgentId).catch((err) => {
+      reflectOnQuery(ws, targetAgentId, reflectionRunId).catch((err) => {
         dbg("warn", "traits", `Reflection failed: ${err}`);
       });
       break;
@@ -554,6 +578,12 @@ techLeadDigest.loadFromDisk();
 // analyzer reads the file to compute empirical baselines (median / p95
 // per `{role, taskType}`) for outlier detection in the facilitator UI.
 const usageLogger = new UsageLogger(usageLogFile(PROJECT_CWD));
+
+// C.2.5 — Dispatch-lifecycle anomaly log. Records premature-complete
+// claims (manager said "Готово" before subagent_result arrived) and
+// no-op runs (subagent finished with zero tool calls). Pure-rate signal
+// for the daily-control surface — NOT used to block any runtime path.
+const incidentLogger = new IncidentLogger(incidentLogFile(PROJECT_CWD));
 
 // C.2 — Persistent AgentRun entity. Records lifecycle of every SDK query
 // (status: running → completed / failed / interrupted / cancelled) so the
@@ -1081,6 +1111,7 @@ function agentInfoForClient(ws: WebSocket): HiredAgentInfo[] {
 // ─── Trait memory ──────────────────────────────────────────────────────────
 
 let traitStore: TraitStore = loadTraits(PROJECT_CWD);
+let candidateStore: CandidateStore = loadCandidates(PROJECT_CWD);
 
 function sendTraits(ws: WebSocket): void {
   send(ws, { type: "agent_traits", traits: getAllTraits(traitStore) });
@@ -1109,7 +1140,7 @@ function autoLearnLesson(
   if (!isConsentEnabled(traitStore, agentId)) return;
 
   const result = recordLesson(PROJECT_CWD, traitStore, {
-    agentId, type, category, tag, lesson,
+    agentId, type, category, tag, lesson, source: "hook",
   });
   dbg("info", "traits", `${type === "weakness" ? "⚡" : "✦"} [${agentId}] ${tag} (freq=${result.frequency}): ${lesson}`);
   sendDebug(ws, "info", "traits", `Lesson ${type === "weakness" ? "learned" : "confirmed"}: [${agentId}] ${lesson} (×${result.frequency})`);
@@ -1175,6 +1206,37 @@ function sendCommGraph(ws: WebSocket): void {
 
 // ─── Post-query reflection (lightweight, async) ───────────────────────────
 
+/**
+ * Dispatch-MCP tools added at query-time for delegating roles. Kept in sync
+ * with the push at allowedTools (search "allowedTools.push" in this file).
+ */
+const DISPATCH_TOOL_NAMES = [
+  "mcp__dispatch__dispatch",
+  "mcp__dispatch__team_status",
+  "mcp__dispatch__cancel_task",
+  "mcp__dispatch__board_create_task",
+  "mcp__dispatch__board_move_task",
+  "mcp__dispatch__board_update_task",
+  "mcp__dispatch__board_assign_agent",
+  "mcp__dispatch__board_list",
+] as const;
+
+/**
+ * Deterministically reconstruct the toolset an agent had during the session,
+ * mirroring the logic in the chat query path (canDelegate adds dispatch tools
+ * for manager/tech-lead). Used to give reflection ground-truth instead of
+ * letting Haiku invent tool-availability claims.
+ */
+function allowedToolsForAgent(agentId: string, gameState: GameStateData | undefined): string[] {
+  const roleType = roleTypeOf(agentId, gameState);
+  const def = roleTemplateFor(agentId, gameState);
+  const base = def?.tools ?? ["Read", "Glob", "Grep", "Bash"];
+  if (roleType === "manager" || roleType === "tech-lead") {
+    return [...base, ...DISPATCH_TOOL_NAMES];
+  }
+  return [...base];
+}
+
 /** Per-client activity buffer — gathered during a query, consumed by reflection. */
 const clientQueryActivities = new WeakMap<WebSocket, Array<{ agentId: string; event: string; detail: string }>>();
 
@@ -1192,59 +1254,53 @@ function getQueryActivities(ws: WebSocket): Array<{ agentId: string; event: stri
  * Extracts 0-3 lessons (strengths/weaknesses) from the session activity.
  * Non-blocking — called after result is sent to client.
  */
-async function reflectOnQuery(ws: WebSocket, targetAgentId: string): Promise<void> {
+async function reflectOnQuery(
+  ws: WebSocket,
+  targetAgentId: string,
+  /**
+   * Stable id for the reflection "session" used by the candidate gate to
+   * decide whether two same-tag observations count as independent. C.2.6:
+   * pass the chat-runId (one per user query) so each query is its own
+   * session. Falls back to the SDK persistent sessionId only when no
+   * runId is available (legacy callers / non-chat paths) — the SDK id
+   * persists across queries, which is exactly the bug C.2.6 fixes.
+   */
+  reflectionRunId?: string,
+): Promise<void> {
   if (!isConsentEnabled(traitStore, targetAgentId)) return;
 
   const activities = getQueryActivities(ws);
-  if (activities.length === 0) return;
-
-  // Build a compact summary of what happened
-  const agentActivities = new Map<string, string[]>();
-  let hasErrors = false;
-  for (const a of activities) {
-    if (!agentActivities.has(a.agentId)) agentActivities.set(a.agentId, []);
-    agentActivities.get(a.agentId)!.push(`[${a.event}] ${a.detail}`);
-    if (a.event === "error") hasErrors = true;
+  if (activities.length === 0) {
+    appendReflectionTelemetry(PROJECT_CWD, { kind: "reflection_skipped", reason: "no_activity" });
+    return;
   }
 
-  // Build activity summary (capped to stay cheap)
-  const summaryLines: string[] = [];
-  for (const [agentId, events] of agentActivities) {
-    summaryLines.push(`## ${agentId}`);
-    // Keep max 10 events per agent to limit token usage
-    for (const e of events.slice(-10)) {
-      summaryLines.push(`  ${e}`);
-    }
-  }
-  const activitySummary = summaryLines.join("\n");
+  const hasErrors = activities.some((a) => a.event === "error");
 
-  // Get existing rework stats
+  // Per-agent rework stats — kept here because they come from a different
+  // map (getMetrics) and are mutated outside the activity buffer.
   const metrics = getMetrics(ws);
   const reworkAgents: string[] = [];
   for (const [agentId, m] of metrics) {
     if (m.reworkCount > 0) reworkAgents.push(`${agentId}(rework=${m.reworkCount})`);
   }
 
-  const reflectionPrompt = `Analyze this AI agent team work session and extract learning lessons.
+  // Ground-truth: which tools were actually wired into each agent during the
+  // session. Reflection must not invent "tool not available" claims when a
+  // tool is listed here. Cheap to derive — pure function over gameState + role.
+  const gameStateForReflection = clientGameState.get(ws);
+  const involvedAgents = Array.from(new Set(activities.map((a) => a.agentId)));
+  const allowedToolsByAgent: Record<string, string[]> = {};
+  for (const agentId of involvedAgents) {
+    allowedToolsByAgent[agentId] = allowedToolsForAgent(agentId, gameStateForReflection);
+  }
 
-Session activity:
-${activitySummary}
-
-${hasErrors ? "⚠️ The session had errors." : "No errors during session."}
-${reworkAgents.length > 0 ? `⚠️ Agents with rework: ${reworkAgents.join(", ")}` : "No rework needed."}
-
-Team agents: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer, llm-specialist
-
-Extract 0-3 notable lessons from this session. Each lesson is a pattern that should be remembered for future work.
-- A "strength" is something an agent did notably well (thorough analysis, clean code, good delegation, etc.)
-- A "weakness" is something an agent struggled with or made a mistake on (missed edge cases, wrong approach, needed rework, etc.)
-- Only include genuinely insightful observations, NOT generic platitudes.
-- The "tag" must be specific and kebab-case (e.g., "missing-null-checks", "thorough-code-review", "poor-delegation-clarity").
-
-Reply ONLY with a JSON array (no markdown, no explanation):
-[{"agentId":"...", "type":"strength|weakness", "category":"code_quality|architecture|testing|security|communication|delegation|problem_solving|tools_usage", "tag":"short-kebab-id", "lesson":"One specific sentence"}]
-
-If nothing notable happened, reply with: []`;
+  const reflectionPrompt = buildReflectionPrompt({
+    activities: activities as ActivityEntry[],
+    allowedToolsByAgent,
+    reworkAgents,
+    hasErrors,
+  });
 
   try {
     dbg("debug", "traits", "Starting post-query reflection…");
@@ -1310,21 +1366,110 @@ If nothing notable happened, reply with: []`;
     // Valid lesson targets = hired instanceIds (lessons are per-instance).
     const validAgents = new Set(agentInfoForClient(ws).map(a => a.id));
 
+    // LLM-extracted lessons may confabulate (see docs/AGENT_PERSONALIZATION_SYSTEM.md
+    // §confabulation-gate). Route them through the candidate pool: a tag must be
+    // observed in ≥threshold distinct sessions (asymmetric: weakness=3, strength=2)
+    // before it lands in the real TraitStore. Hook-based learners (task-rework,
+    // clean-execution at lines 293/365/450) bypass this gate because their signal
+    // is structural, not LLM-judged.
+    //
+    // C.2.6 — gate "session" = one chat-runId, NOT the SDK persistent session.
+    // The SDK session id stays stable for hours via prompt-cache reuse, so
+    // candidate.sessionCount could never advance within a productive working
+    // session — promotion rate sat at 0% over 30 days / 15 candidates.
+    // runId per chat query is the natural unit of independence; MIN_PROMOTION
+    // _GAP_MS (2h burst-defense) still prevents back-to-back rapid promotions.
+    //
+    // Fallback order:
+    //   1. reflectionRunId (passed in by chat-path callers post-C.2.6)
+    //   2. SDK session (legacy: pre-C.2.6 behaviour, kept so non-chat callers
+    //      that haven't been migrated still get some accumulation, however slow)
+    //   3. per-client + day bucket (cold start before SDK session exists)
+    const trackedClient = connectedClients.get(ws);
+    const wsBucket = trackedClient?.clientId ?? "anon";
+    const dayBucket = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const reflectionSessionId =
+      reflectionRunId ?? existingSessionId ?? `transient-${wsBucket}-${dayBucket}`;
     const profileBatch: LlmLesson[] = [];
     for (const l of lessons.slice(0, 3)) {
       if (!validAgents.has(l.agentId)) continue;
       if (l.type !== "strength" && l.type !== "weakness") continue;
       if (!validCategories.has(l.category)) continue;
       if (!l.tag || !l.lesson) continue;
+      if (!isConsentEnabled(traitStore, l.agentId)) continue;
 
-      autoLearnLesson(
-        ws,
-        l.agentId,
-        l.type as LessonType,
-        l.category as LessonCategory,
-        l.tag,
-        l.lesson,
+      // C.2.6 — closed-taxonomy hard validation. The reflection prompt
+      // enumerates the canonical tag set in <canonical_tags>; Haiku-4.5
+      // follows it ~92-96% of the time. The remaining 4-8% would silently
+      // pollute the candidate pool with aliased tags (the failure mode that
+      // sat at 0% promotion / 15 candidates for 30 days pre-fix). Reject
+      // here, record as telemetry so the rejection rate is observable, and
+      // skip the submission entirely.
+      if (!isValidTag(l.tag, l.type as LessonType)) {
+        appendReflectionTelemetry(PROJECT_CWD, {
+          kind: "invalid_tag",
+          agentId: l.agentId,
+          tag: l.tag,
+          type: l.type,
+          category: l.category,
+          lesson: l.lesson,
+        });
+        dbg("debug", "traits",
+          `Rejected candidate with non-canonical tag "${l.tag}" (${l.type}) for ${l.agentId}`);
+        continue;
+      }
+
+      const outcome = recordLessonCandidate(
+        PROJECT_CWD,
+        traitStore,
+        candidateStore,
+        {
+          agentId: l.agentId,
+          type: l.type as LessonType,
+          category: l.category as LessonCategory,
+          tag: l.tag,
+          lesson: l.lesson,
+        },
+        reflectionSessionId,
       );
+
+      // Telemetry — every submission, every status, for KPI tracking
+      // (promotion_rate, bypass_rate, etc — see reflection_prompt.ts).
+      appendReflectionTelemetry(PROJECT_CWD, {
+        kind: "candidate_submitted",
+        agentId: l.agentId,
+        tag: l.tag,
+        type: l.type,
+        category: l.category,
+        status: outcome.status,
+        ...(outcome.status === "promoted" ? { via: outcome.via } : {}),
+        ...(outcome.status === "too-soon" ? { gapMs: outcome.gapMs } : {}),
+        ...(outcome.status === "pending" ? { sessionCount: outcome.candidate.sessionCount } : {}),
+      });
+
+      // Cheap sanity check — flag visible hard-constraint violations.
+      const forbidden = detectForbiddenAvailabilityClaims(l.lesson);
+      if (forbidden.length > 0) {
+        appendReflectionTelemetry(PROJECT_CWD, {
+          kind: "constraint_violation",
+          agentId: l.agentId,
+          tag: l.tag,
+          phrases: forbidden,
+          lesson: l.lesson,
+        });
+        dbg("warn", "traits", `Reflection constraint violated [${l.agentId}] ${l.tag}: ${forbidden.join(", ")}`);
+      }
+
+      if (outcome.status === "promoted") {
+        dbg("info", "traits", `Lesson promoted from candidate: [${l.agentId}] ${l.tag} via=${outcome.via} (freq=${outcome.lesson.frequency})`);
+        sendDebug(ws, "info", "traits", `Lesson confirmed: [${l.agentId}] ${l.lesson}`);
+        broadcastTraits();
+      } else if (outcome.status === "pending") {
+        const threshold = l.type === "weakness" ? 3 : 2;
+        dbg("debug", "traits", `Candidate held: [${l.agentId}] ${l.tag} (sessions=${outcome.candidate.sessionCount}/${threshold})`);
+      } else if (outcome.status === "too-soon") {
+        dbg("debug", "traits", `Candidate burst-deferred: [${l.agentId}] ${l.tag} (gap=${Math.round(outcome.gapMs/1000)}s)`);
+      }
 
       profileBatch.push({ agentId: l.agentId, type: l.type, tag: l.tag, lesson: l.lesson });
     }
@@ -1365,7 +1510,7 @@ If nothing notable happened, reply with: []`;
 function createDispatchServer(ws: WebSocket) {
   const dispatchTool = tool(
     "dispatch",
-    "Dispatch a task to a specific team agent INSTANCE. The agent works independently — you do NOT wait for the result. Continue with other work immediately.",
+    DISPATCH_TOOL_DESCRIPTION,
     {
       agent: z.string().describe("Exact instanceId to dispatch to (e.g. 'coder#1', 'reviewer#2'). Use team_status to see who is available."),
       task: z.string().describe("Detailed task description for the agent. Be specific about what to do and expected output."),
@@ -1414,6 +1559,7 @@ function createDispatchServer(ws: WebSocket) {
         bypassPermissions,
         techLeadDigest: techLeadDigest.renderForPrompt(15),
         usageLogger,
+        incidentLogger,
         agentRunStore,
         role: roleTypeOf(agentId, gameState),
         boardTaskId,
@@ -1456,7 +1602,7 @@ function createDispatchServer(ws: WebSocket) {
       dbg("info", "dispatch", `Dispatched to ${agentId}: "${taskDesc.slice(0, 80)}" (${dispatchId})`);
 
       return {
-        content: [{ type: "text" as const, text: `Task dispatched to ${agentId} (ID: ${dispatchId}). They are working independently. Continue with other work or respond to the user.` }],
+        content: [{ type: "text" as const, text: buildDispatchReturnString(agentId, dispatchId) }],
       };
     },
   );
@@ -1514,7 +1660,26 @@ function createDispatchServer(ws: WebSocket) {
       dispatch_id: z.string().describe("The dispatch ID returned when the task was dispatched"),
     },
     async (args) => {
+      // C.2.6 — snapshot agentId BEFORE cancel; agent_runner's explicit-cancel
+      // branch returns early without calling onError, so handleSubAgentError
+      // (which would emit agent_status: idle) is bypassed. Mirror the WS
+      // cancel_dispatch_agent handler so manager-LLM-initiated cancels leave
+      // the chat-header indicator and active-agents UI in a consistent state.
+      const targetAgentId = agentRunner
+        .getRunning()
+        .find((r) => r.dispatchId === args.dispatch_id)?.agentId;
       const ok = agentRunner.cancel(args.dispatch_id);
+      if (ok) {
+        broadcastActiveAgents(ws);
+        if (targetAgentId) {
+          send(ws, {
+            type: "agent_status",
+            agentId: targetAgentId,
+            status: "idle",
+            tools: [],
+          });
+        }
+      }
       return {
         content: [{ type: "text" as const, text: ok ? `Task ${args.dispatch_id} cancelled.` : `No running task with ID ${args.dispatch_id}.` }],
       };
@@ -1902,6 +2067,19 @@ function handleSubAgentError(ws: WebSocket, agentId: string, dispatchId: string,
     tools: [],
   });
 
+  // C.2.5 — discriminated failure event. Lets the client distinguish
+  // timeout (retry-friendly) from breaker (cost-budget) from generic
+  // error, and clear any stale partial tool-progress state ("Reading
+  // char_0.png…" displayed indefinitely was the 2026-05-18 incident UX).
+  const cls = classifySubAgentFailure(error);
+  send(ws, {
+    type: "subagent_failed",
+    dispatchId,
+    agentId,
+    reason: cls.reason,
+    message: cls.message,
+  });
+
   emitActivity(ws, agentId, "error", error);
 
   send(ws, { type: "error", message: `[${agentId}] ${error}` });
@@ -2076,6 +2254,11 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     startedAt: _startedAt,
   });
   let _runFinalText = "";
+  // C.2.5 — track dispatch_ids the manager called THIS turn so the
+  // post-loop detector can decide whether a "Готово:" claim was paired
+  // with an actual subagent_result notification (it can't be — those
+  // notifications surface via processQueue as a separate runQuery turn).
+  const _dispatchedIdsThisTurn: string[] = [];
   try {
     // Signal target agent is thinking
     send(ws, {
@@ -2416,7 +2599,40 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
         _resultNumTurns = r.num_turns ?? 0;
       }
 
-      handleSDKMessage(ws, message, targetAgentId);
+      // C.2.5 — scrape dispatch_ids from `mcp__dispatch__dispatch` tool_result
+      // text. The dispatchTool always emits a line of shape
+      //   "Task dispatched to <agent> (ID: dispatch_<n>_<ts>)..."
+      // so a single regex over the tool_result content is enough.
+      if (message.type === "user") {
+        const um = message as SDKUserMessage;
+        const content = um.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (
+              typeof block === "object" &&
+              block !== null &&
+              (block as { type?: string }).type === "tool_result"
+            ) {
+              const tr = block as { content?: unknown };
+              const text =
+                typeof tr.content === "string"
+                  ? tr.content
+                  : Array.isArray(tr.content)
+                    ? (tr.content as Array<{ type?: string; text?: string }>)
+                        .filter((c) => c.type === "text")
+                        .map((c) => c.text ?? "")
+                        .join("")
+                    : "";
+              const id = extractDispatchIdFromToolResult(text);
+              if (id) {
+                _dispatchedIdsThisTurn.push(id);
+              }
+            }
+          }
+        }
+      }
+
+      handleSDKMessage(ws, message, targetAgentId, _runId);
     }
 
     // Track agent → user response
@@ -2427,6 +2643,47 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     sendDebug(ws, "info", "session",
       `Query complete (${targetAgentId}). ${messageCount} msgs. Session=${currentSessionId?.slice(0, 12) ?? "?"}…`
     );
+
+    // C.2.5 — premature-complete detection. Dispatches called THIS turn
+    // cannot have a paired `subagent_result` yet (those surface as a
+    // separate runQuery turn via processQueue), so resolvedDispatchIds
+    // is always empty here. If the manager nevertheless emitted "Готово:"
+    // in its output text, that's a fabrication — record it for the daily
+    // rate counter. Alert-mode only: we never block the response.
+    if (_dispatchedIdsThisTurn.length > 0) {
+      const pc = detectPrematureComplete({
+        dispatchedIds: _dispatchedIdsThisTurn,
+        managerOutputText: _runFinalText,
+        resolvedDispatchIds: [],
+      });
+      if (pc.fabricated) {
+        const roleName = roleTypeOf(targetAgentId, clientGameState.get(ws));
+        // C.2.5 Stage 4 — alert-mode. We compute the rewrite the future
+        // block-mode would apply, but DO NOT modify the manager text the
+        // client already sees. Recording both forms lets us:
+        //   (a) measure rate over time via incident_log;
+        //   (b) eyeball whether the rewrite preserves the user-visible
+        //       task name (no cryptic gaps in chat history);
+        //   (c) flip to block-mode in one place if the baseline supports it.
+        const rewritten = stripPrematureCompleteClaim(_runFinalText);
+        const rewriteApplied = rewritten !== _runFinalText;
+        incidentLogger.record({
+          incidentId: newIncidentId("premature_complete"),
+          kind: "premature_complete",
+          runId: _runId,
+          role: roleName,
+          taskType: "chat",
+          agentId: targetAgentId,
+          occurredAt: new Date().toISOString(),
+          details: {
+            unmatchedDispatchIds: pc.unmatchedDispatchIds,
+            matchedClaim: pc.matchedClaim ?? "",
+            rewriteApplied,
+          },
+        });
+        dbg("warn", "incident", `premature_complete claim by ${targetAgentId} — ${pc.unmatchedDispatchIds.length} unmatched dispatch(es). Claim: ${pc.matchedClaim}. Rewrite available: ${rewriteApplied}`);
+      }
+    }
 
     // C.2 usage log — append a completed-run entry. Breaker snapshot
     // gives us cumulative tokens / tool-calls; result message gives us
@@ -2473,6 +2730,19 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       clearTimeout(_queryTimeoutId);
       chatQueryRegistry.unregister(_chatQueryId);
       broadcastActiveAgents(ws);
+      // C.2.6 — symmetric with handleSubAgentError / handleSubAgentComplete.
+      // Without this, a query that terminates via the inner-finally path
+      // (success OR error caught by outer catch) leaves chat-header indicator
+      // stuck on the last push (e.g. "Reading") because the catch below
+      // doesn't re-emit status. broadcastActiveAgents alone clears the
+      // Settings tab but NOT the chat indicator (which derives from
+      // agent_status pushes, not active_agents).
+      send(ws, {
+        type: "agent_status",
+        agentId: targetAgentId,
+        status: "idle",
+        tools: [],
+      });
     }
   } catch (err) {
     const breakerTrip = _breakerTripped ? _breaker?.snapshot().tripped ?? null : null;
@@ -2557,6 +2827,19 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       currentSessionId = null;
       persistSession();
     }
+    // C.2.6 — defensive idle emission. Inner finally already emits idle for
+    // the common case (error inside the for-await loop). This covers the
+    // rare case where the throw happens BEFORE the inner try block was
+    // entered (e.g. query() construction failed, session-lock contention) —
+    // inner finally never runs, so emit here. Double-emission on the common
+    // path is idempotent on the client (status: idle is a fixed point).
+    broadcastActiveAgents(ws);
+    send(ws, {
+      type: "agent_status",
+      agentId: targetAgentId,
+      status: "idle",
+      tools: [],
+    });
     send(ws, {
       type: "error",
       message: errMsg,
@@ -4229,7 +4512,7 @@ console.log(`   Working directory: ${PROJECT_CWD}`);
 console.log(`   Admin UI:        http://localhost:${PORT}/admin/  (loopback only)`);
 console.log(`   Config file:     ${__configSource.filePath}`);
 console.log(`   Roles available: ${Object.keys(roleCatalog).join(", ")}`);
-console.log(`   Trait memory:    ${getAllTraits(traitStore).length} lessons loaded`);
+console.log(`   Trait memory:    ${getAllTraits(traitStore).length} lessons loaded, ${getAllCandidates(candidateStore).length} candidates pending`);
 
 wss.on("error", (err) => {
   console.error("[server] WebSocketServer error:", err);
@@ -4282,6 +4565,30 @@ wss.on("connection", (ws, request) => {
   // Replay logs that were produced before this client connected (e.g. Tailscale startup)
   for (const entry of earlyLogBuffer) {
     send(ws, { type: "debug_log", timestamp: entry.timestamp, level: entry.level, category: entry.category, message: entry.message });
+  }
+  // C.2.6 — welcome resync. Push fresh active_agents snapshot + force every
+  // hired agent's status to idle UNLESS this ws actually owns a live run.
+  // Prevents reconnecting clients (or freshly opened second windows) from
+  // showing a stale "Reading char_0.png" indicator carried in the local
+  // agentsProvider cache from before the disconnect. The push-only nature
+  // of agent_status means without this, the client never receives a fresh
+  // idle event for a query that finished while it was offline.
+  send(ws, buildActiveAgentsMessage(ws));
+  {
+    const liveAgentIds = new Set<string>([
+      ...agentRunner.getStatus().map((r) => r.agentId),
+      ...chatQueryRegistry.list({ ws }).map((q) => q.agentId),
+    ]);
+    for (const agent of agentInfoForClient(ws)) {
+      if (!liveAgentIds.has(agent.id)) {
+        send(ws, {
+          type: "agent_status",
+          agentId: agent.id,
+          status: "idle",
+          tools: [],
+        });
+      }
+    }
   }
   sendBoardState(ws);
   sendTraits(ws);
@@ -4470,8 +4777,9 @@ wss.on("connection", (ws, request) => {
           PROJECT_CWD = newPath;
           // Reload trait memory and chat history for the new project
           traitStore = loadTraits(PROJECT_CWD);
+          candidateStore = loadCandidates(PROJECT_CWD);
           chatHistory.load(historyFilePath(PROJECT_CWD));
-          dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons`);
+          dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons, ${getAllCandidates(candidateStore).length} candidates`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
           // Reload other per-project caches so peers don't read the OLD
@@ -4944,6 +5252,15 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        case "get_reflection_kpi": {
+          // Mirrors server/scripts/reflection-health.ts so the UI surface
+          // and the CLI return byte-identical KPIs. Best-effort: if the log
+          // is missing or unparseable, return zero counts with hasData=false.
+          const windowDays = typeof msg.sinceDays === "number" ? msg.sinceDays : null;
+          send(ws, buildReflectionKpiMessage(PROJECT_CWD, windowDays));
+          break;
+        }
+
         // ─── Permissions bypass ───────────────────────────────────────────
         case "set_bypass_permissions": {
           const enabled = (msg as { type: "set_bypass_permissions"; enabled: boolean }).enabled;
@@ -5154,13 +5471,32 @@ wss.on("connection", (ws, request) => {
         }
 
         case "cancel_dispatch_agent": {
+          // C.2.6 — snapshot agentId BEFORE cancel because agent_runner's
+          // explicit-cancel branch returns early without calling onError,
+          // so handleSubAgentError (which would emit agent_status: idle)
+          // never fires. Without this, chat-header indicator stays stuck
+          // on whatever the last push status was (e.g. "running").
+          const targetAgentId = agentRunner
+            .getRunning()
+            .find((r) => r.dispatchId === msg.dispatchId)?.agentId;
           const ok = agentRunner.cancel(msg.dispatchId);
           dbg("info", "cancel", `cancel_dispatch_agent ${msg.dispatchId} → ${ok}`);
           broadcastActiveAgents(ws);
+          if (ok && targetAgentId) {
+            send(ws, {
+              type: "agent_status",
+              agentId: targetAgentId,
+              status: "idle",
+              tools: [],
+            });
+          }
           break;
         }
 
         case "cancel_chat_query": {
+          // chat_query cancel flows through runQuery's outer catch → emits
+          // idle via the C.2.6 finally/catch patch. No extra emission needed
+          // here; just the registry snapshot refresh.
           const ok = chatQueryRegistry.cancel(msg.queryId);
           dbg("info", "cancel", `cancel_chat_query ${msg.queryId} → ${ok}`);
           broadcastActiveAgents(ws);
@@ -5168,10 +5504,27 @@ wss.on("connection", (ws, request) => {
         }
 
         case "cancel_all_active": {
+          // C.2.6 — same explicit-cancel asymmetry as cancel_dispatch_agent.
+          // Snapshot every affected agentId BEFORE cancellation so we can
+          // emit idle for each. chat-side cancels propagate through
+          // runQuery's catch and self-emit; the agentRunner side needs
+          // the explicit follow-up here.
+          const dispatchAgentIds = agentRunner
+            .getRunning()
+            .filter((r) => r.ws === ws)
+            .map((r) => r.agentId);
           const sub = agentRunner.cancelAll(ws);
           const chat = chatQueryRegistry.cancelForWs(ws);
           dbg("info", "cancel", `cancel_all_active: sub=${sub ?? "?"} chat=${chat}`);
           broadcastActiveAgents(ws);
+          for (const agentId of dispatchAgentIds) {
+            send(ws, {
+              type: "agent_status",
+              agentId,
+              status: "idle",
+              tools: [],
+            });
+          }
           break;
         }
 

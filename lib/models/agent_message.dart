@@ -129,6 +129,7 @@ sealed class ServerMessage {
       'agent_fired' => AgentFiredMessage.fromJson(json),
       'summary_result' => SummaryResultMessage.fromJson(json),
       'agent_traits' => AgentTraitsMessage.fromJson(json),
+      'reflection_kpi' => ReflectionKpiMessage.fromJson(json),
       'input_text' => InputTextMessage.fromJson(json),
       'input_images' => InputImagesMessage.fromJson(json),
       'ios_deploy_status' => IOSDeployStatusMessage.fromJson(json),
@@ -143,6 +144,7 @@ sealed class ServerMessage {
       'server_info' => ServerInfoMessage.fromJson(json),
       'task_dispatched' => TaskDispatchedMessage.fromJson(json),
       'subagent_result' => SubagentResultMessage.fromJson(json),
+      'subagent_failed' => SubagentFailedMessage.fromJson(json),
       'queue_status' => QueueStatusMessage.fromJson(json),
       'task_too_hard' => TaskTooHardMessage.fromJson(json),
       'dungeon_started' => DungeonStartedMessage.fromJson(json),
@@ -877,6 +879,176 @@ class AgentTraitsMessage implements ServerMessage {
       );
 }
 
+/// Recent reflection-prompt constraint violation surfaced in the
+/// Personalization UI as evidence when violation rate spikes.
+class ReflectionViolation {
+  final String agentId;
+  final String tag;
+  final List<String> phrases;
+  final String lesson;
+  final String ts;
+
+  const ReflectionViolation({
+    required this.agentId,
+    required this.tag,
+    required this.phrases,
+    required this.lesson,
+    required this.ts,
+  });
+
+  factory ReflectionViolation.fromJson(Map<String, dynamic> json) =>
+      ReflectionViolation(
+        agentId: json['agentId'] as String? ?? '',
+        tag: json['tag'] as String? ?? '',
+        phrases:
+            (json['phrases'] as List?)?.map((p) => p as String).toList() ?? [],
+        lesson: json['lesson'] as String? ?? '',
+        ts: json['ts'] as String? ?? '',
+      );
+}
+
+/// KPI snapshot for the LLM-reflection confabulation gate. Surfaced into
+/// PersonalizationPanel so users do not need a CLI to know whether the
+/// personalization system is healthy. Mirrors `ReflectionKpiSnapshot`
+/// in server/src/reflection_prompt.ts.
+class ReflectionKpiMessage implements ServerMessage {
+  /// Window narrow (in days) used when computing this snapshot. `null` →
+  /// entire log.
+  final int? windowDays;
+
+  /// `false` if the project has not yet produced any reflection telemetry.
+  final bool hasData;
+
+  final int submitted;
+  final int promotedViaThreshold;
+  final int promotedViaBypass;
+  final int pending;
+  final int duplicate;
+  final int tooSoon;
+  final int prunedStale;
+  final int decayedPruned;
+  final int constraintViolations;
+
+  /// C.2.6 — count of submission attempts where Haiku emitted a tag outside
+  /// the canonical taxonomy. Rejected at the server gate; never reaches
+  /// candidates.json.
+  final int invalidTagCount;
+
+  final double promotionRate;
+  final double bypassRate;
+  final double violationRate;
+
+  /// invalidTagCount / (submitted + invalidTagCount). Tracks how often
+  /// Haiku invents tags off-taxonomy — action signal for expanding the list.
+  final double invalidTagRate;
+
+  /// Shannon entropy (bits) over the tag distribution of submitted candidates.
+  /// Catastrophic-binning detector: H < 1.5 bits over a 30-day window means
+  /// one or two tags swallowed the entire stream and Haiku stopped
+  /// discriminating.
+  final double tagEntropy;
+
+  /// Largest single-tag share of submitted candidates (0..1). Companion to
+  /// entropy that is easier to surface in a banner ("75% tagged X").
+  final double topTagShare;
+
+  final List<ReflectionViolation> recentViolations;
+
+  const ReflectionKpiMessage({
+    required this.windowDays,
+    required this.hasData,
+    required this.submitted,
+    required this.promotedViaThreshold,
+    required this.promotedViaBypass,
+    required this.pending,
+    required this.duplicate,
+    required this.tooSoon,
+    required this.prunedStale,
+    required this.decayedPruned,
+    required this.constraintViolations,
+    required this.invalidTagCount,
+    required this.promotionRate,
+    required this.bypassRate,
+    required this.violationRate,
+    required this.invalidTagRate,
+    required this.tagEntropy,
+    required this.topTagShare,
+    required this.recentViolations,
+  });
+
+  factory ReflectionKpiMessage.fromJson(Map<String, dynamic> json) =>
+      ReflectionKpiMessage(
+        windowDays: (json['windowDays'] as num?)?.toInt(),
+        hasData: json['hasData'] as bool? ?? false,
+        submitted: (json['submitted'] as num?)?.toInt() ?? 0,
+        promotedViaThreshold:
+            (json['promotedViaThreshold'] as num?)?.toInt() ?? 0,
+        promotedViaBypass: (json['promotedViaBypass'] as num?)?.toInt() ?? 0,
+        pending: (json['pending'] as num?)?.toInt() ?? 0,
+        duplicate: (json['duplicate'] as num?)?.toInt() ?? 0,
+        tooSoon: (json['tooSoon'] as num?)?.toInt() ?? 0,
+        prunedStale: (json['prunedStale'] as num?)?.toInt() ?? 0,
+        decayedPruned: (json['decayedPruned'] as num?)?.toInt() ?? 0,
+        constraintViolations:
+            (json['constraintViolations'] as num?)?.toInt() ?? 0,
+        invalidTagCount: (json['invalidTagCount'] as num?)?.toInt() ?? 0,
+        promotionRate: (json['promotionRate'] as num?)?.toDouble() ?? 0,
+        bypassRate: (json['bypassRate'] as num?)?.toDouble() ?? 0,
+        violationRate: (json['violationRate'] as num?)?.toDouble() ?? 0,
+        invalidTagRate: (json['invalidTagRate'] as num?)?.toDouble() ?? 0,
+        tagEntropy: (json['tagEntropy'] as num?)?.toDouble() ?? 0,
+        topTagShare: (json['topTagShare'] as num?)?.toDouble() ?? 0,
+        recentViolations: (json['recentViolations'] as List?)
+                ?.map(
+                  (v) => ReflectionViolation.fromJson(v as Map<String, dynamic>),
+                )
+                .toList() ??
+            [],
+      );
+
+  /// Minimum submitted-candidate count for entropy/top-tag signals to be
+  /// statistically meaningful. Below this, a single submission gives
+  /// `tagEntropy=0` and `topTagShare=1` — both would trip thresholds
+  /// trivially and flag a cold project as "drifting".
+  static const int _entropyMinSample = 5;
+
+  /// Health verdict surfaces for UI traffic-light rendering. Single source of
+  /// truth for the thresholds documented in CLAUDE.md §5.
+  bool get promotionRateOk => promotionRate >= 0.1 && promotionRate <= 0.7;
+  bool get bypassRateOk => bypassRate <= 0.7;
+  bool get violationRateOk => violationRate < 0.05;
+
+  /// C.2.6 — Haiku reliably picks from the canonical list ~92-96% of the
+  /// time per llm-specialist review. >8% rejection over the window means
+  /// the taxonomy is missing real patterns; treat as action signal.
+  bool get invalidTagRateOk => invalidTagRate <= 0.08;
+
+  /// C.2.6 — catastrophic-binning floor. With the 14-tag taxonomy and an
+  /// even spread, H ≈ 3.0-3.5 bits. < 1.5 bits means one or two tags
+  /// swallowed the stream (Haiku stopped discriminating).
+  bool get tagEntropyOk =>
+      submitted < _entropyMinSample || tagEntropy >= 1.5;
+
+  /// C.2.6 — top-tag drift. > 50% share of one tag over the window
+  /// signals the same binning failure mode entropy catches, but is
+  /// easier to surface as evidence ("75% tagged 'tool-misuse'").
+  bool get topTagShareOk =>
+      submitted < _entropyMinSample || topTagShare <= 0.5;
+
+  /// Aggregate health: ok only when every individual signal is ok.
+  /// Cold-start (`!hasData`) reports `null` rather than green/red — we don't
+  /// know yet.
+  bool? get overallHealthy {
+    if (!hasData) return null;
+    return promotionRateOk &&
+        bypassRateOk &&
+        violationRateOk &&
+        invalidTagRateOk &&
+        tagEntropyOk &&
+        topTagShareOk;
+  }
+}
+
 class GameStateSyncMessage implements ServerMessage {
   final String fullState;
   final int stateUpdatedAt;
@@ -1228,6 +1400,36 @@ class SubagentResultMessage implements ServerMessage {
         costUsd: (json['costUsd'] as num?)?.toDouble() ?? 0,
         durationMs: json['durationMs'] as int? ?? 0,
       );
+}
+
+enum SubagentFailureReason { timeout, breaker, error }
+
+class SubagentFailedMessage implements ServerMessage {
+  final String dispatchId;
+  final String agentId;
+  final SubagentFailureReason reason;
+  final String message;
+
+  const SubagentFailedMessage({
+    required this.dispatchId,
+    required this.agentId,
+    required this.reason,
+    required this.message,
+  });
+
+  factory SubagentFailedMessage.fromJson(Map<String, dynamic> json) =>
+      SubagentFailedMessage(
+        dispatchId: json['dispatchId'] as String? ?? '',
+        agentId: json['agentId'] as String? ?? '',
+        reason: _parseReason(json['reason'] as String?),
+        message: json['message'] as String? ?? '',
+      );
+
+  static SubagentFailureReason _parseReason(String? raw) => switch (raw) {
+        'timeout' => SubagentFailureReason.timeout,
+        'breaker' => SubagentFailureReason.breaker,
+        _ => SubagentFailureReason.error,
+      };
 }
 
 class RunningAgentInfo {
