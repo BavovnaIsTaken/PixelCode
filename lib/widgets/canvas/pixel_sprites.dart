@@ -488,100 +488,103 @@ class CatPalette {
       };
 }
 
-// Down walk
+// Down walk (rear view, tail visible, hind legs visible)
 const _catDownWalk0 = [
-  '..f..f..',
-  '.ffffff.',
+  '.fF..Ff.',
+  'ffffff..',
   '.fe..ef.',
   '..fnnf..',
   '..ffff..',
   '.ffffff.',
-  '.f...f..',
+  '.pFfFp..',
   '.p...p..',
 ];
 const _catDownWalk1 = [
-  '..f..f..',
-  '.ffffff.',
+  '.fF..Ff.',
+  'ffffff..',
   '.fe..ef.',
   '..fnnf..',
   '..ffff..',
   '.ffffff.',
-  '..f..f..',
-  '..p..p..',
+  '..pfFp..',
+  '..p.p...',
 ];
 const _catDownWalk2 = [
-  '..f..f..',
+  '.fF..Ff.',
+  'ffffff..',
+  '.fe..ef.',
+  '..fnnf..',
+  '..ffff..',
+  '.ffffff.',
+  '.p...p..',
+  '.pFfFp..',
+];
+
+// Up walk (front view, head facing camera, tail extended back)
+const _catUpWalk0 = [
+  '.fF..Ff.',
   '.ffffff.',
   '.fe..ef.',
   '..fnnf..',
   '..ffff..',
   '.ffffff.',
-  '..f...f.',
-  '..p...p.',
-];
-
-// Up walk
-const _catUpWalk0 = [
-  '..f..f..',
-  '.ffffff.',
-  '.ffffff.',
-  '..ffff..',
-  '..ffff..',
-  '.ffffff.',
-  '.f...f..',
+  '.pFfFp..',
   '.p...p..',
 ];
 const _catUpWalk1 = [
-  '..f..f..',
+  '.fF..Ff.',
   '.ffffff.',
-  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
   '..ffff..',
-  '..ffff..',
   '.ffffff.',
-  '..f..f..',
-  '..p..p..',
+  '..pfFp..',
+  '..p.p...',
 ];
 const _catUpWalk2 = [
-  '..f..f..',
+  '.fF..Ff.',
   '.ffffff.',
-  '.ffffff.',
+  '.fe..ef.',
+  '..fnnf..',
   '..ffff..',
-  '..ffff..',
   '.ffffff.',
-  '..f...f.',
-  '..p...p.',
+  '.p...p..',
+  '.pFfFp..',
 ];
 
-// Right walk
+// Right walk (side view with distinct ears, tail swinging)
+// Frame 0: rear leg pushing, front leg striding, tail up
 const _catRightWalk0 = [
-  '...ff...',
-  '..ffff..',
-  '..fef...',
-  '..fnf...',
-  '..ffff..',
-  '..ffff..',
-  '.f...f..',
-  '.p...p..',
+  'Ff......',
+  'fff.....',
+  '.fe.F...',
+  '.fn.....',
+  '.fff....',
+  '..ffFf..',
+  '..p..Ff.',
+  '...p.ffF',
 ];
+// Frame 1: mid-stride, balanced, tail level
 const _catRightWalk1 = [
-  '...ff...',
-  '..ffff..',
-  '..fef...',
-  '..fnf...',
-  '..ffff..',
-  '..ffff..',
-  '..f..f..',
-  '..p..p..',
+  'Ff......',
+  'fff.....',
+  '.fe.F...',
+  '.fn.....',
+  '.fff....',
+  '..ffFf..',
+  '.ppfFf..',
+  '..ppf...',
 ];
+// Frame 2: front leg pushing, rear leg striding, tail up
 const _catRightWalk2 = [
-  '...ff...',
-  '..ffff..',
-  '..fef...',
-  '..fnf...',
-  '..ffff..',
-  '..ffff..',
-  '..f...f.',
-  '..p...p.',
+  'Ff......',
+  'fff.....',
+  '.fe.F...',
+  '.fn.....',
+  '.fff....',
+  '..ffFf..',
+  '.Ff.p...',
+  'ffF.p...',
 ];
 
 // Sleep (curled up loaf)
