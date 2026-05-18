@@ -2341,6 +2341,14 @@ class GameState {
   /// IDs of purchased floor skin packs (Build System v2). v6+.
   final Set<String> ownedFloorSkinPacks;
 
+  /// Board task IDs whose server-rolled outcome has already been folded into
+  /// this client's economy (XP / specialization counter / crit gold). Used by
+  /// [TaskOutcomeReflectorNotifier] for idempotency across reconnects and
+  /// app restarts — without this set, every board_state snapshot would
+  /// re-award all historical outcomes. Migrates away when economy moves
+  /// server-side (B-full Roadmap entry).
+  final Set<String> rewardedTaskIds;
+
   /// Epoch millis of the last local mutation. Drives last-write-wins sync
   /// between devices — the server only accepts state with a newer timestamp
   /// than what it already holds.
@@ -2365,6 +2373,7 @@ class GameState {
     this.placedCorridors = const [],
     this.ownedWallSkinPacks = const {},
     this.ownedFloorSkinPacks = const {},
+    this.rewardedTaskIds = const {},
     this.updatedAt = 0,
   });
 
@@ -2442,6 +2451,7 @@ class GameState {
     List<PlacedCorridor>? placedCorridors,
     Set<String>? ownedWallSkinPacks,
     Set<String>? ownedFloorSkinPacks,
+    Set<String>? rewardedTaskIds,
     int? updatedAt,
   }) =>
       GameState(
@@ -2463,6 +2473,7 @@ class GameState {
         placedCorridors: placedCorridors ?? this.placedCorridors,
         ownedWallSkinPacks: ownedWallSkinPacks ?? this.ownedWallSkinPacks,
         ownedFloorSkinPacks: ownedFloorSkinPacks ?? this.ownedFloorSkinPacks,
+        rewardedTaskIds: rewardedTaskIds ?? this.rewardedTaskIds,
         updatedAt: updatedAt ?? this.updatedAt,
       );
 
@@ -2500,6 +2511,8 @@ class GameState {
         ],
         'ownedWallSkinPacks': ownedWallSkinPacks.toList(),
         'ownedFloorSkinPacks': ownedFloorSkinPacks.toList(),
+        if (rewardedTaskIds.isNotEmpty)
+          'rewardedTaskIds': rewardedTaskIds.toList(),
         'updatedAt': updatedAt,
       };
 
@@ -2596,6 +2609,11 @@ class GameState {
         ownedFloorSkinPacks: {
           for (final id
               in (json['ownedFloorSkinPacks'] as List<dynamic>?) ?? [])
+            id as String,
+        },
+        rewardedTaskIds: {
+          for (final id
+              in (json['rewardedTaskIds'] as List<dynamic>?) ?? [])
             id as String,
         },
         updatedAt: json['updatedAt'] as int? ?? 0,

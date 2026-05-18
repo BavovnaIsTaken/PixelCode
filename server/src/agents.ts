@@ -534,6 +534,19 @@ export interface AgentInstanceData {
   customSystemPrompt?: string;
   /** Personality preset key used at spawn (informational, effect encoded in skills). */
   personalityPreset?: string;
+  /**
+   * Unlocked specializations (`taskType` keys). Used by server-side
+   * `rollOutcome` for the crit bonus on matching tasks. Mirrors
+   * `AgentGameData.specializations` (lib/models/game_economy.dart). Optional
+   * for backwards compatibility with pre-C.2 set_game_state payloads.
+   */
+  specializations?: string[];
+  /**
+   * Per-`taskType` successful-completion counters. Server-side `rollOutcome`
+   * sums these for `projectMemoryDepthBonus` on architecture tasks. Mirrors
+   * `AgentGameData.taskCompletionsByType`. Optional for backwards compatibility.
+   */
+  taskCompletionsByType?: Record<string, number>;
 }
 
 /** Game state data the server needs to shape agents, prompts, and dispatch. */

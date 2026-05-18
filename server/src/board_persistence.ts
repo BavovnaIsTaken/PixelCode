@@ -226,6 +226,7 @@ function extractTaskCounter(id: string): number {
 }
 
 const VALID_COLUMNS = new Set(["backlog", "in_progress", "testing", "done"]);
+const VALID_OUTCOMES = new Set(["clean", "crit", "bug", "incomplete"]);
 
 /**
  * Sanity-check a single task entry. Returns the task untouched if the shape
@@ -259,6 +260,10 @@ function validateTask(raw: unknown): TaskCardData | null {
     attachments: Array.isArray(t.attachments)
       ? (t.attachments as TaskCardData["attachments"])
       : undefined,
+    outcome:
+      typeof t.outcome === "string" && VALID_OUTCOMES.has(t.outcome)
+        ? (t.outcome as TaskCardData["outcome"])
+        : undefined,
   };
 }
 

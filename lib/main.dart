@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/agent_provider.dart';
 import 'providers/session_provider.dart';
 import 'providers/settings_provider.dart';
+import 'providers/task_outcome_reflector.dart';
 import 'providers/theme_provider.dart';
 import 'screens/hub/hub_screen.dart';
 import 'services/agent_ws_service.dart';
@@ -71,6 +72,10 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     // Eagerly subscribe before connect() so broadcast stream logs aren't lost
     // when the console panel is closed (provider would otherwise be lazy-init'd).
     ref.read(debugLogProvider);
+    // C.2 — keep the reflector mounted globally so server-rolled outcomes
+    // are folded into the local economy even when the user is not looking
+    // at the board panel.
+    ref.read(taskOutcomeReflectorProvider);
     _lifecycleListener = AppLifecycleListener(
       onHide: _onAppBackground,
       onResume: _onAppForeground,

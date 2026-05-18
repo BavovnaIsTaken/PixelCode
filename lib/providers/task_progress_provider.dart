@@ -1,19 +1,15 @@
-/// Simulates agent work on tasks: auto-advances columns on a countdown timer
-/// and accumulates a per-task work log so users can see who worked how long.
+/// Passive observer that records per-agent work-log entries when a task
+/// transitions out of an active column. C.2 (server as single writer for
+/// board transitions) demoted the original simulator: this provider no
+/// longer drives column moves on a timer, rolls outcomes, or resets orphans
+/// — those responsibilities all live server-side now. The kept piece is the
+/// work-log capture, used by the board UI to show "who worked how long".
 library;
-
-import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/agent_level.dart';
-import '../models/game_economy.dart';
 import '../models/task_board.dart';
 import '../models/work_log_entry.dart';
-import '../services/task_outcome.dart';
-import 'agent_traits_provider.dart';
-import 'game_economy_provider.dart';
 import 'task_board_provider.dart';
 
 // ─── Work-log provider ────────────────────────────────────────────────────────
@@ -42,245 +38,84 @@ final workLogProvider =
   WorkLogNotifier.new,
 );
 
-// ─── Per-task progress ────────────────────────────────────────────────────────
+// ─── Column-stay tracker (reflector) ──────────────────────────────────────────
 
-class _TaskProgress {
-  double secondsRemaining;
-  final double totalSeconds;
-  final DateTime columnEnteredAt;
-
-  _TaskProgress({
-    required this.secondsRemaining,
-    required this.totalSeconds,
-    required this.columnEnteredAt,
-  });
+/// Lives only inside [TaskProgressNotifier] — tracks when a task entered its
+/// current active column (in_progress / testing) on this client. Used to
+/// derive `durationSeconds` for the work-log row when the server pushes the
+/// column transition. Not exposed publicly; UI does not consume it.
+class _ColumnEntry {
+  final TaskColumn column;
+  final DateTime enteredAt;
+  const _ColumnEntry({required this.column, required this.enteredAt});
 }
 
 // ─── Task progress notifier ───────────────────────────────────────────────────
 
 class TaskProgressNotifier extends Notifier<void> {
-  final Map<String, _TaskProgress> _progress = {};
-  Timer? _timer;
+  final Map<String, _ColumnEntry> _activeAt = {};
 
   @override
   void build() {
     ref.listen<BoardState>(taskBoardProvider, (prev, next) {
-      _syncTasks(prev?.tasks ?? [], next.tasks);
+      _reflect(prev?.tasks ?? const [], next.tasks);
     });
-    // Also seed from current state immediately.
-    _syncTasks([], ref.read(taskBoardProvider).tasks);
-
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-    ref.onDispose(() {
-      _timer?.cancel();
-      _progress.clear();
-    });
+    // Seed from current state so a late-mounted listener still tracks
+    // anything that's already active.
+    _reflect(const [], ref.read(taskBoardProvider).tasks);
+    ref.onDispose(_activeAt.clear);
   }
 
-  void _syncTasks(List<TaskCard> prev, List<TaskCard> next) {
+  /// Compares the previous board snapshot with the next one and, for each
+  /// task whose column changed *out of* an active column, emits a work-log
+  /// entry for every assignee covering the time spent in that column.
+  void _reflect(List<TaskCard> prev, List<TaskCard> next) {
+    final now = DateTime.now();
     final prevMap = {for (final t in prev) t.id: t};
     final nextIds = {for (final t in next) t.id};
 
-    // Remove stale entries.
-    _progress.removeWhere((id, _) => !nextIds.contains(id));
+    _activeAt.removeWhere((id, _) => !nextIds.contains(id));
 
     for (final task in next) {
-      // Skip tasks with no assigned agents — nothing to simulate.
-      if (task.assignedAgents.isEmpty) {
-        _progress.remove(task.id);
-        // Active columns without an agent are an invalid state: the timer
-        // never fires so the card is permanently stuck. Reset to backlog so
-        // the user (or manager) can re-assign and restart work.
-        if (task.column == TaskColumn.inProgress ||
-            task.column == TaskColumn.testing) {
-          ref.read(taskBoardProvider.notifier).moveTask(
-                taskId: task.id,
-                column: TaskColumn.backlog,
-              );
-        }
-        continue;
-      }
-      // Skip completed tasks.
-      if (task.column == TaskColumn.done) {
-        _progress.remove(task.id);
-        continue;
-      }
-
       final prevTask = prevMap[task.id];
-      final columnChanged = prevTask != null && prevTask.column != task.column;
-      final agentsChanged = prevTask != null &&
-          prevTask.assignedAgents.toString() != task.assignedAgents.toString();
-      final isNew = prevTask == null;
+      final isActive = task.column == TaskColumn.inProgress ||
+          task.column == TaskColumn.testing;
+      final wasActive = prevTask?.column == TaskColumn.inProgress ||
+          prevTask?.column == TaskColumn.testing;
 
-      if (isNew || columnChanged || agentsChanged || !_progress.containsKey(task.id)) {
-        final seconds = _workSeconds(task);
-        _progress[task.id] = _TaskProgress(
-          secondsRemaining: seconds,
-          totalSeconds: seconds,
-          columnEnteredAt: DateTime.now(),
+      // 1. Task left an active column (anything → not the same active column):
+      //    flush a work-log row per assignee using the prev snapshot's
+      //    `assignedAgents`. Must run BEFORE the re-stamp below — otherwise
+      //    a same-tick re-entry (inProgress → testing) overwrites the entry
+      //    stamp and durations collapse to zero.
+      if (wasActive && (!isActive || prevTask!.column != task.column)) {
+        final entry = _activeAt.remove(task.id);
+        if (entry != null) {
+          final elapsed = now.difference(entry.enteredAt);
+          final assignees = prevTask?.assignedAgents ?? const <String>[];
+          if (assignees.isNotEmpty && elapsed.inSeconds > 0) {
+            final logs = assignees
+                .map((agentId) => WorkLogEntry(
+                      agentId: agentId,
+                      startedAt: entry.enteredAt,
+                      durationSeconds: elapsed.inSeconds,
+                    ))
+                .toList();
+            ref.read(workLogProvider.notifier).record(task.id, logs);
+          }
+        }
+      }
+
+      // 2. Task entered an active column: stamp the entry timestamp so the
+      //    next leave can compute duration.
+      if (isActive && (prevTask == null || prevTask.column != task.column)) {
+        _activeAt[task.id] = _ColumnEntry(
+          column: task.column,
+          enteredAt: now,
         );
       }
     }
   }
-
-  double _workSeconds(TaskCard task) {
-    final d = task.difficulty.clamp(1, 5);
-    return switch (task.column) {
-      TaskColumn.backlog => 10.0 + (d - 1) * 2, // 10–18 s to pick up
-      TaskColumn.inProgress => d * 12.0,          // 12–60 s to implement
-      TaskColumn.testing => d * 6.0,              // 6–30 s to test
-      TaskColumn.done => 0,
-    };
-  }
-
-  void _tick() {
-    final board = ref.read(taskBoardProvider);
-    final toAdvance = <String>[];
-
-    for (final entry in _progress.entries) {
-      final task = board.tasks.firstWhere(
-        (t) => t.id == entry.key,
-        orElse: () => TaskCard(
-          id: entry.key,
-          title: '',
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-      if (task.title.isEmpty) continue; // task was deleted
-      if (task.assignedAgents.isEmpty) continue;
-
-      entry.value.secondsRemaining -= 1;
-      if (entry.value.secondsRemaining <= 0) {
-        toAdvance.add(entry.key);
-      }
-    }
-
-    for (final taskId in toAdvance) {
-      _advance(taskId, board);
-    }
-  }
-
-  void _advance(String taskId, BoardState board) {
-    final task = board.tasks.firstWhere(
-      (t) => t.id == taskId,
-      orElse: () => TaskCard(
-        id: taskId,
-        title: '',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      ),
-    );
-    if (task.title.isEmpty) return;
-
-    // Work-log is recorded regardless of outcome.
-    final progress = _progress[taskId];
-    if (progress != null) {
-      final elapsed = DateTime.now().difference(progress.columnEnteredAt);
-      final entries = task.assignedAgents
-          .map((agentId) => WorkLogEntry(
-                agentId: agentId,
-                startedAt: progress.columnEnteredAt,
-                durationSeconds: elapsed.inSeconds,
-              ))
-          .toList();
-      ref.read(workLogProvider.notifier).record(taskId, entries);
-    }
-    _progress.remove(taskId);
-
-    // For the final testing → done transition, roll for outcome.
-    // Other transitions (backlog → inProgress → testing) always succeed.
-    if (task.column == TaskColumn.testing) {
-      _advanceFromTesting(task);
-      return;
-    }
-
-    final nextColumn = switch (task.column) {
-      TaskColumn.backlog => TaskColumn.inProgress,
-      TaskColumn.inProgress => TaskColumn.testing,
-      TaskColumn.testing => TaskColumn.done,
-      TaskColumn.done => null,
-    };
-    if (nextColumn == null) return;
-    ref.read(taskBoardProvider.notifier).moveTask(
-          taskId: taskId,
-          column: nextColumn,
-        );
-  }
-
-  /// Handle `testing → ?` transition: roll outcome, route column, award XP.
-  void _advanceFromTesting(TaskCard task) {
-    final agents = ref.read(gameEconomyProvider).agents;
-    final primaryId = task.assignedAgents.isNotEmpty ? task.assignedAgents.first : null;
-    final agent = primaryId != null ? agents[primaryId] : null;
-
-    // No assigned agent → just complete the task (fallback path; shouldn't normally happen).
-    if (agent == null) {
-      ref.read(taskBoardProvider.notifier).moveTask(
-            taskId: task.id,
-            column: TaskColumn.done,
-          );
-      return;
-    }
-
-    final specBonus = agent.specializations.contains(task.taskType)
-        ? kSpecializationCritBonus
-        : 0.0;
-
-    final lessonCount =
-        ref.read(agentTraitsProvider(agent.instanceId)).length;
-
-    final totalTasksCompleted =
-        agent.taskCompletionsByType.values.fold(0, (sum, count) => sum + count);
-
-
-    final outcome = rollOutcome(
-      rng: _rng,
-      precisionSkill: agent.skills[SkillType.precision] ?? 1,
-      creativitySkill: agent.skills[SkillType.creativity] ?? 1,
-      reliabilitySkill: agent.skills[SkillType.reliability] ?? 1,
-      isDivergentTask: divergentTaskTypes.contains(task.taskType),
-      taskType: task.taskType,
-      specializationCritBonus: specBonus,
-      lessonBonus: lessonSuccessBonus(lessonCount: lessonCount),
-      projectMemoryBonus: projectMemoryDepthBonus(totalTasksCompleted: totalTasksCompleted),
-    );
-
-    final (TaskColumn next, double quality) = switch (outcome) {
-      TaskOutcome.clean => (TaskColumn.done, 1.5),
-      TaskOutcome.crit => (TaskColumn.done, 1.5),
-      TaskOutcome.bug => (TaskColumn.inProgress, 0.5),
-      TaskOutcome.incomplete => (TaskColumn.backlog, 0.5),
-    };
-
-    // Award XP to the agent.
-    final xp = xpForTask(
-      difficulty: task.difficulty,
-      quality: quality,
-      agentLevel: agent.level,
-    );
-    if (xp > 0) {
-      ref.read(gameEconomyProvider.notifier).addXpToAgent(agent.instanceId, xp);
-    }
-
-    // Crit = 100% bonus gold.
-    if (outcome == TaskOutcome.crit) {
-      ref.read(gameEconomyProvider.notifier).awardCritBonus();
-    }
-
-    // Successful outcomes (clean / crit) feed the specialization counter;
-    // bug / incomplete don't count.
-    if (outcome == TaskOutcome.clean || outcome == TaskOutcome.crit) {
-      ref
-          .read(gameEconomyProvider.notifier)
-          .recordTaskCompletion(agent.instanceId, task.taskType);
-    }
-
-    ref.read(taskBoardProvider.notifier).moveTask(taskId: task.id, column: next);
-  }
-
-  final Random _rng = Random();
 }
 
 final taskProgressProvider =

@@ -1,6 +1,8 @@
-/// Unit tests for TaskProgressNotifier — focusing on the orphan-recovery
-/// invariant: a task in inProgress or testing with no assigned agents must
-/// be reset to backlog so it never gets permanently stuck.
+/// Unit tests for TaskProgressNotifier — pins the C.2 reflector contract:
+/// the provider observes server-pushed column changes and records per-agent
+/// work-log entries, but never drives column moves itself. Previously this
+/// provider was the client-side simulator; the simulator and its orphan
+/// reset moved to the server in "Board transitions — server as single writer".
 library;
 
 import 'dart:async';
@@ -81,11 +83,14 @@ TaskCard _card(
       updatedAt: _t,
     );
 
+Iterable<Map<String, Object?>> _moveCalls(_FakeWsService fake) =>
+    fake.calls.where((e) => e['op'] == 'boardMoveTask');
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 void main() {
-  group('TaskProgressNotifier — orphan recovery', () {
-    test('inProgress task with no agents is moved to backlog', () async {
+  group('TaskProgressNotifier — server as single writer (C.2)', () {
+    test('orphan in_progress card is NOT reset by the client', () async {
       final fake = _FakeWsService();
       _makeContainer(fake);
 
@@ -95,17 +100,11 @@ void main() {
       ));
       await Future.microtask(() {});
 
-      expect(
-        fake.calls,
-        contains(allOf(
-          containsPair('op', 'boardMoveTask'),
-          containsPair('taskId', 't1'),
-          containsPair('column', 'backlog'),
-        )),
-      );
+      expect(_moveCalls(fake), isEmpty,
+          reason: 'orphan reset now lives on the server (Q1 variant A)');
     });
 
-    test('testing task with no agents is moved to backlog', () async {
+    test('orphan testing card is NOT reset by the client', () async {
       final fake = _FakeWsService();
       _makeContainer(fake);
 
@@ -115,17 +114,10 @@ void main() {
       ));
       await Future.microtask(() {});
 
-      expect(
-        fake.calls,
-        contains(allOf(
-          containsPair('op', 'boardMoveTask'),
-          containsPair('taskId', 't2'),
-          containsPair('column', 'backlog'),
-        )),
-      );
+      expect(_moveCalls(fake), isEmpty);
     });
 
-    test('inProgress task WITH assigned agent is NOT reset', () async {
+    test('active card with agent triggers NO moveTask either', () async {
       final fake = _FakeWsService();
       _makeContainer(fake);
 
@@ -137,75 +129,145 @@ void main() {
       ));
       await Future.microtask(() {});
 
-      expect(
-        fake.calls.where((e) =>
-            e['op'] == 'boardMoveTask' && e['taskId'] == 't3'),
-        isEmpty,
-      );
+      expect(_moveCalls(fake), isEmpty,
+          reason: 'simulator no longer auto-advances columns');
     });
 
-    test('backlog task with no agents stays in backlog — no move sent', () async {
+    test('testing card with agent finishing locally is NOT advanced', () async {
+      // The old simulator would have rolled outcome and pushed a moveTask
+      // when the testing timer expired. Reflector simply waits for the
+      // server to push the new column.
       final fake = _FakeWsService();
       _makeContainer(fake);
 
       fake.inject(BoardStateMessage(
-        boardState: BoardState(tasks: [_card('t4', TaskColumn.backlog)]),
+        boardState: BoardState(
+          tasks: [_card('t4', TaskColumn.testing, agents: ['coder#1'])],
+        ),
         revision: 1,
       ));
-      await Future.microtask(() {});
+      // Let several seconds pass; nothing should fire.
+      await Future.delayed(const Duration(milliseconds: 50));
 
-      expect(
-        fake.calls.where((e) =>
-            e['op'] == 'boardMoveTask' && e['taskId'] == 't4'),
-        isEmpty,
-      );
+      expect(_moveCalls(fake), isEmpty);
     });
 
-    test('done task with no agents is NOT moved', () async {
-      final fake = _FakeWsService();
-      _makeContainer(fake);
-
-      fake.inject(BoardStateMessage(
-        boardState: BoardState(tasks: [_card('t5', TaskColumn.done)]),
-        revision: 1,
-      ));
-      await Future.microtask(() {});
-
-      expect(
-        fake.calls.where((e) =>
-            e['op'] == 'boardMoveTask' && e['taskId'] == 't5'),
-        isEmpty,
-      );
-    });
-
-    test('multiple orphaned tasks are all reset; assigned tasks untouched',
+    test('mixed board with orphans + assigned cards produces zero moves',
         () async {
       final fake = _FakeWsService();
       _makeContainer(fake);
 
       fake.inject(BoardStateMessage(
         boardState: BoardState(tasks: [
-          _card('a', TaskColumn.inProgress),               // orphan
-          _card('b', TaskColumn.testing),                  // orphan
-          _card('c', TaskColumn.inProgress, agents: ['coder#1']), // has agent
-          _card('d', TaskColumn.backlog),                  // fine
+          _card('a', TaskColumn.inProgress),
+          _card('b', TaskColumn.testing),
+          _card('c', TaskColumn.inProgress, agents: ['coder#1']),
+          _card('d', TaskColumn.backlog),
         ]),
         revision: 1,
       ));
       await Future.microtask(() {});
 
-      final moveCalls = fake.calls
-          .where((e) => e['op'] == 'boardMoveTask')
-          .toList();
+      expect(_moveCalls(fake), isEmpty);
+    });
+  });
 
-      // Only 'a' and 'b' should be reset.
-      expect(
-        moveCalls.map((e) => e['taskId']).toSet(),
-        equals({'a', 'b'}),
-      );
-      for (final call in moveCalls) {
-        expect(call['column'], 'backlog');
+  group('TaskProgressNotifier — work-log capture', () {
+    test('records duration when card leaves an active column', () async {
+      final fake = _FakeWsService();
+      final c = _makeContainer(fake);
+
+      // First snapshot — card enters in_progress with two agents.
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t1', TaskColumn.inProgress, agents: ['coder#1', 'coder#2']),
+        ]),
+        revision: 1,
+      ));
+      await Future.microtask(() {});
+
+      // Let some wall-clock time elapse so durationSeconds > 0.
+      await Future.delayed(const Duration(seconds: 1));
+
+      // Server pushes the same card now in testing (transition out of
+      // in_progress). Reflector should fire a log row per agent.
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t1', TaskColumn.testing, agents: ['coder#1', 'coder#2']),
+        ]),
+        revision: 2,
+      ));
+      await Future.microtask(() {});
+
+      final log = c.read(workLogProvider)['t1'] ?? const [];
+      expect(log, hasLength(2));
+      expect(log.map((e) => e.agentId).toSet(), {'coder#1', 'coder#2'});
+      for (final entry in log) {
+        expect(entry.durationSeconds, greaterThan(0));
       }
+    });
+
+    test('emits one row per active-column stay (in_progress AND testing)',
+        () async {
+      final fake = _FakeWsService();
+      final c = _makeContainer(fake);
+
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t2', TaskColumn.inProgress, agents: ['coder#1']),
+        ]),
+        revision: 1,
+      ));
+      await Future.microtask(() {});
+      await Future.delayed(const Duration(seconds: 1));
+
+      // inProgress → testing — first row recorded.
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t2', TaskColumn.testing, agents: ['coder#1']),
+        ]),
+        revision: 2,
+      ));
+      await Future.microtask(() {});
+      await Future.delayed(const Duration(seconds: 1));
+
+      // testing → done — second row recorded.
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t2', TaskColumn.done, agents: ['coder#1']),
+        ]),
+        revision: 3,
+      ));
+      await Future.microtask(() {});
+
+      final log = c.read(workLogProvider)['t2'] ?? const [];
+      expect(log, hasLength(2));
+      expect(log.every((e) => e.agentId == 'coder#1'), isTrue);
+    });
+
+    test('no work-log entry when card never leaves an active column',
+        () async {
+      final fake = _FakeWsService();
+      final c = _makeContainer(fake);
+
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t3', TaskColumn.inProgress, agents: ['coder#1']),
+        ]),
+        revision: 1,
+      ));
+      await Future.microtask(() {});
+
+      // Snapshot updates with the SAME column — should not flush.
+      fake.inject(BoardStateMessage(
+        boardState: BoardState(tasks: [
+          _card('t3', TaskColumn.inProgress, agents: ['coder#1']),
+        ]),
+        revision: 2,
+      ));
+      await Future.microtask(() {});
+
+      expect(c.read(workLogProvider)['t3'] ?? const [], isEmpty);
     });
   });
 }

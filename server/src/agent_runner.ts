@@ -34,6 +34,13 @@ export interface SubAgentResult {
   text: string;
   costUsd: number;
   durationMs: number;
+  /**
+   * Identifier of the board card this dispatch served, when manager-LLM
+   * supplied one via the `dispatch` MCP tool. Server uses this to advance
+   * the card on terminal-success (C.2 — server as single writer for board
+   * transitions). Absent for ad-hoc / non-board dispatches.
+   */
+  boardTaskId?: string;
 }
 
 export interface RunningAgent {
@@ -85,6 +92,13 @@ export interface DispatchParams {
    * call site so this module stays decoupled from agents.ts.
    */
   role?: string;
+  /**
+   * Identifier of the board card this dispatch is serving. Threaded through
+   * `SubAgentResult.boardTaskId` so the server-side board-transition hook
+   * (C.2) can advance the right card on dispatch finish. Absent for ad-hoc
+   * dispatches.
+   */
+  boardTaskId?: string;
   /** Called for every SDK message from the sub-agent (for real-time UI). */
   onMessage: (msg: SDKMessage, agentId: string, dispatchId: string) => void;
   /** Called when the sub-agent completes (success or error). */
@@ -368,6 +382,7 @@ export class AgentRunner {
         text: resultText,
         costUsd,
         durationMs,
+        boardTaskId: params.boardTaskId,
       });
       } finally {
         clearTimeout(_timeoutId);

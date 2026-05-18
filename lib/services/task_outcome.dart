@@ -20,7 +20,21 @@ enum TaskOutcome {
   bug,
 
   /// Task is reset back to `backlog`. Half XP; agent may pick it up again.
-  incomplete,
+  incomplete;
+
+  /// Wire-key sent over the network and persisted on the board JSON.
+  /// MUST stay 1-to-1 with `TaskOutcomeKey` in `server/src/protocol.ts`.
+  String get key => name;
+
+  /// Reverse of [key]. Returns null for unknown strings so old saves with
+  /// no outcome field stay loadable.
+  static TaskOutcome? fromKey(String? raw) {
+    if (raw == null) return null;
+    for (final v in values) {
+      if (v.name == raw) return v;
+    }
+    return null;
+  }
 }
 
 /// `0.4 - 0.03 * precisionSkill`, clamped to `[0, 0.4]`.

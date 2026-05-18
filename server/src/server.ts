@@ -39,6 +39,7 @@ import {
 } from "./agents.js";
 import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./board_persistence.js";
 import { MAX_AGENT_LOAD, pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
+import { advanceOnDispatchSuccess, findOrphanActiveCards } from "./board_transitions.js";
 import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
@@ -1368,11 +1369,13 @@ function createDispatchServer(ws: WebSocket) {
       agent: z.string().describe("Exact instanceId to dispatch to (e.g. 'coder#1', 'reviewer#2'). Use team_status to see who is available."),
       task: z.string().describe("Detailed task description for the agent. Be specific about what to do and expected output."),
       priority: z.enum(["high", "normal", "low"]).optional().describe("Task priority. Default: normal"),
+      boardTaskId: z.string().optional().describe("If this dispatch fulfills a board card (taskType !== 'facilitator' or you got the task via a [Board task] queue item), pass that card's id (e.g. 'task_42_1700000000') so the server can advance the column on finish. Omit for ad-hoc dispatches."),
     },
     async (args) => {
       const agentId = args.agent;
       const taskDesc = args.task;
       const priority = (args.priority ?? "normal") as "high" | "normal" | "low";
+      const boardTaskId = args.boardTaskId;
 
       // Validate instanceId against the hired team (excluding the manager role).
       const gsForValidation = clientGameState.get(ws);
@@ -1412,6 +1415,7 @@ function createDispatchServer(ws: WebSocket) {
         usageLogger,
         agentRunStore,
         role: roleTypeOf(agentId, gameState),
+        boardTaskId,
         onMessage: (msg, agId, dId) => handleSubAgentMessage(ws, msg, agId, dId),
         onComplete: (result) => handleSubAgentComplete(ws, result),
         onError: (agId, dId, error) => handleSubAgentError(ws, agId, dId, error),
@@ -1790,6 +1794,17 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
   trackComm(ws, result.agentId, "user");
   sendCommGraph(ws);
 
+  // C.2 — server as single writer for board transitions. If this dispatch
+  // served a specific board card, advance its column / roll outcome here so
+  // the source of truth lives on the server, not on a client-side timer.
+  // Idempotent: the helper no-ops on `backlog` / `done`, so a manager-LLM
+  // that already moved the card via its `board_move_task` MCP tool won't
+  // double-advance. Breaker / timeout / cancel paths reach handleSubAgentError
+  // instead and intentionally do NOT trigger a transition.
+  if (result.boardTaskId) {
+    advanceBoardTaskAfterDispatch(ws, result.boardTaskId, result.agentId);
+  }
+
   // Send the sub-agent result directly to the client
   send(ws, {
     type: "subagent_result",
@@ -1818,6 +1833,58 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
 
   // Kick the queue — manager may be idle and can process the result
   processQueue(ws);
+}
+
+/**
+ * Server-as-single-writer board transition triggered when a sub-agent
+ * dispatch finishes successfully (C.2). Mutates the in-memory board map
+ * directly, persists, broadcasts, and runs the `recordTaskCompletionToDigest`
+ * side-effect on `→ done` transitions just like the manager-driven path.
+ *
+ * Pure decision logic lives in `board_transitions.ts`; this function is
+ * the integration glue (snapshot lookups, mutation, broadcast). Kept here
+ * — not in board_transitions — to keep that module free of WS/server deps.
+ */
+function advanceBoardTaskAfterDispatch(
+  ws: WebSocket,
+  boardTaskId: string,
+  agentId: string,
+): void {
+  const task = boardTasks.get(boardTaskId);
+  if (!task) {
+    dbg("warn", "board", `advanceBoardTaskAfterDispatch: unknown boardTaskId=${boardTaskId}`);
+    return;
+  }
+
+  const gameState = clientGameState.get(ws);
+  const agent = gameState?.instances[agentId];
+  const lessonCount = getLessonsForAgent(traitStore, agentId).length;
+
+  const decision = advanceOnDispatchSuccess({
+    task,
+    agent,
+    lessonCount,
+    rng: Math.random,
+  });
+  if (!decision.changed) return;
+
+  const oldColumn = task.column;
+  task.column = decision.nextColumn;
+  if (decision.outcome) task.outcome = decision.outcome;
+  task.updatedAt = new Date().toISOString();
+  dbg(
+    "info",
+    "board",
+    `C.2 advance ${boardTaskId}: ${oldColumn} → ${task.column}${
+      decision.outcome ? ` (outcome=${decision.outcome})` : ""
+    }`,
+  );
+  commitBoardChange();
+  if (task.column === "done") {
+    boardWriter.flush(); // same archive-safety as manual board_move_task
+    if (oldColumn !== "done") recordTaskCompletionToDigest(task);
+  }
+  broadcastBoardState();
 }
 
 /** Handle sub-agent error. */
@@ -1880,7 +1947,7 @@ async function processQueue(ws: WebSocket): Promise<void> {
         case "board":
           await runQuery(
             ws,
-            `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work, then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
+            `[Board task id=${task.boardTaskId ?? "unknown"}] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work — when you call \`dispatch\`, pass boardTaskId="${task.boardTaskId ?? ""}" so the server can advance the column on finish. Then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
             resolveRoleInstance(ws, "manager"),
           );
           break;
@@ -2524,10 +2591,38 @@ let boardRevision = 0;
   } else if (r.source === "quarantined") {
     dbg("warn", "board", `Persisted board was unreadable; quarantined to ${r.quarantinedAs ?? "?"}`);
   }
+  // Sweep any orphan-active cards that survived a crash/respawn (e.g. dispatch
+  // was killed mid-run and lost the assignee). C.2 Q1 variant A — under the
+  // "server as single writer" rule, cards stuck in in_progress/testing with no
+  // assigned agents would never advance, so we bounce them back to backlog
+  // for re-pickup. Pre-commit reset is silent (no broadcast yet — broadcast
+  // happens on the next mutation).
+  sweepOrphanActiveCards();
 })();
+
+/**
+ * Pre-commit sweep: orphan-active cards (in_progress / testing with no
+ * `assignedAgents`) are reset to backlog. Idempotent — running it on a
+ * clean board mutates nothing and returns 0. Called from `commitBoardChange`
+ * so every mutation cycle ships a consistent snapshot.
+ */
+function sweepOrphanActiveCards(): number {
+  const orphans = findOrphanActiveCards(boardTasks.values());
+  if (orphans.length === 0) return 0;
+  const nowIso = new Date().toISOString();
+  for (const id of orphans) {
+    const t = boardTasks.get(id);
+    if (!t) continue;
+    t.column = "backlog";
+    t.updatedAt = nowIso;
+  }
+  dbg("info", "board", `C.2 orphan-reset: ${orphans.join(", ")} → backlog`);
+  return orphans.length;
+}
 
 /** Bump revision and persist. Call exactly once per applied mutation. */
 function commitBoardChange(): void {
+  sweepOrphanActiveCards();
   boardRevision++;
   boardWriter.schedule(Array.from(boardTasks.values()));
 }

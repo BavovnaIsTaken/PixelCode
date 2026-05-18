@@ -16,6 +16,7 @@ import '../models/game_economy.dart';
 import '../models/roster_catalog.dart';
 import '../widgets/personalization/custom_agent_spawn_form.dart';
 import '../services/game_persistence_service.dart';
+import '../services/task_outcome.dart';
 import 'ws_provider.dart';
 import 'deepseek_auth_provider.dart';
 import 'kimi_auth_provider.dart';
@@ -117,6 +118,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
           'skills': {
             for (final s in a.skills.entries) s.key.index.toString(): s.value,
           },
+          // C.2 — server-side rollOutcome reads these for the crit/memory
+          // bonuses. Omitted from server payload pre-C.2; existing roll path
+          // defaults to empty so it stays backwards-compatible.
+          if (a.specializations.isNotEmpty)
+            'specializations': a.specializations.toList(),
+          if (a.taskCompletionsByType.isNotEmpty)
+            'taskCompletionsByType': a.taskCompletionsByType,
         };
       }
       final deepseekKey = ref.read(deepseekAuthProvider).valueOrNull?.apiKey;
@@ -557,6 +565,103 @@ class GameEconomyNotifier extends Notifier<GameState> {
       grymni: state.grymni + bonus,
       totalEarned: state.totalEarned + bonus,
     ));
+  }
+
+  /// Apply a server-rolled task outcome to the local economy in a single
+  /// transaction: marks the card as rewarded (idempotency guard), adds XP,
+  /// bumps the specialization counter on successful outcomes, and pays out
+  /// the crit gold bonus. Returns the unlocked specialization tag (if any).
+  ///
+  /// Idempotent by [taskId] — repeat calls with the same id are no-ops, so
+  /// reconnects and app restarts that replay the same board snapshot will
+  /// not double-award. The mark is committed BEFORE the rewards so a crash
+  /// mid-method costs the player at most one XP/gold payout, never the
+  /// reverse (double rewards on retry).
+  ///
+  /// Called by [TaskOutcomeReflectorNotifier]; the reflector is the only
+  /// caller and the contract assumes a server-pushed [TaskCard.outcome].
+  String? applyServerRolledOutcome({
+    required String taskId,
+    required String agentId,
+    required TaskOutcome outcome,
+    required int difficulty,
+    required String taskType,
+  }) {
+    if (state.rewardedTaskIds.contains(taskId)) return null;
+    final agent = state.agents[agentId];
+    if (agent == null) {
+      // Mark as processed even if the agent disappeared — better to lose a
+      // reward than re-fire if they come back later under the same id.
+      _updateStateAndSync(state.copyWith(
+        rewardedTaskIds: {...state.rewardedTaskIds, taskId},
+      ));
+      return null;
+    }
+
+    final quality = switch (outcome) {
+      TaskOutcome.clean => 1.5,
+      TaskOutcome.crit => 1.5,
+      TaskOutcome.bug => 0.5,
+      TaskOutcome.incomplete => 0.5,
+    };
+
+    final xpGained = xpForTask(
+      difficulty: difficulty,
+      quality: quality,
+      agentLevel: agent.level,
+    );
+
+    var nextLevel = agent.level;
+    var nextXp = agent.xp + xpGained;
+    while (nextLevel < maxAgentLevel && nextXp >= xpToNextLevel(nextLevel)) {
+      nextXp -= xpToNextLevel(nextLevel);
+      nextLevel += 1;
+    }
+
+    final isSuccess =
+        outcome == TaskOutcome.clean || outcome == TaskOutcome.crit;
+
+    final prevCount = agent.taskCompletionsByType[taskType] ?? 0;
+    final nextCount = isSuccess && taskType.isNotEmpty ? prevCount + 1 : prevCount;
+
+    final updatedCounters = isSuccess && taskType.isNotEmpty
+        ? (Map<String, int>.from(agent.taskCompletionsByType)
+          ..[taskType] = nextCount)
+        : agent.taskCompletionsByType;
+
+    String? unlocked;
+    Set<String> updatedSpecs = agent.specializations;
+    if (isSuccess &&
+        taskType.isNotEmpty &&
+        nextCount >= kSpecializationThreshold &&
+        !agent.specializations.contains(taskType)) {
+      updatedSpecs = {...agent.specializations, taskType};
+      unlocked = taskType;
+      // ignore: avoid_print
+      print(
+        '[telemetry] specialization_unlocked '
+        'agent=$agentId topic=$taskType count=$nextCount',
+      );
+    }
+
+    final critBonus = outcome == TaskOutcome.crit ? 150 : 0;
+
+    final updatedAgents = Map<String, AgentGameData>.from(state.agents)
+      ..[agentId] = agent.copyWith(
+        level: nextLevel,
+        xp: nextXp,
+        taskCompletionsByType: updatedCounters,
+        specializations: updatedSpecs,
+      );
+
+    _updateStateAndSync(state.copyWith(
+      agents: updatedAgents,
+      grymni: state.grymni + critBonus,
+      totalEarned: state.totalEarned + critBonus,
+      rewardedTaskIds: {...state.rewardedTaskIds, taskId},
+    ));
+
+    return unlocked;
   }
 
   /// Dungeon completion now awards agent-level XP (not per-skill XP).

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/task_board.dart';
+import 'package:pixelcode/services/task_outcome.dart';
 
 void main() {
   // ─── TaskColumn ────────────────────────────────────────────────────────
@@ -441,6 +442,70 @@ void main() {
       final board = BoardState(tasks: [card('t1', TaskColumn.backlog)]);
       final json = board.toJson();
       expect((json['tasks'] as List).length, 1);
+    });
+  });
+
+  // ─── TaskCard.outcome (C.2) ─────────────────────────────────────────────────
+
+  group('TaskCard.outcome', () {
+    TaskCard make({TaskOutcome? outcome}) => TaskCard(
+          id: 't1',
+          title: 'pin',
+          column: TaskColumn.done,
+          createdAt: DateTime.utc(2026, 1, 1),
+          updatedAt: DateTime.utc(2026, 1, 1),
+          outcome: outcome,
+        );
+
+    test('defaults to null when omitted', () {
+      expect(make().outcome, isNull);
+    });
+
+    test('toJson omits the field when outcome is null', () {
+      final json = make().toJson();
+      expect(json.containsKey('outcome'), isFalse);
+    });
+
+    test('toJson emits the wire-key when set', () {
+      for (final o in TaskOutcome.values) {
+        final json = make(outcome: o).toJson();
+        expect(json['outcome'], o.name);
+      }
+    });
+
+    test('fromJson parses each known outcome key', () {
+      for (final o in TaskOutcome.values) {
+        final json = make(outcome: o).toJson();
+        expect(TaskCard.fromJson(json).outcome, o);
+      }
+    });
+
+    test('fromJson tolerates unknown outcome key (drops to null)', () {
+      final json = make().toJson();
+      json['outcome'] = 'magic-new-value';
+      expect(TaskCard.fromJson(json).outcome, isNull);
+    });
+
+    test('round-trip through encode/decode preserves outcome', () {
+      final restored = BoardState.decode(
+        BoardState(tasks: [make(outcome: TaskOutcome.crit)]).encode(),
+      );
+      expect(restored.tasks.single.outcome, TaskOutcome.crit);
+    });
+
+    test('copyWith default leaves outcome unchanged', () {
+      final orig = make(outcome: TaskOutcome.clean);
+      expect(orig.copyWith(title: 'renamed').outcome, TaskOutcome.clean);
+    });
+
+    test('copyWith(outcome: null) explicitly clears outcome', () {
+      final orig = make(outcome: TaskOutcome.bug);
+      expect(orig.copyWith(outcome: null).outcome, isNull);
+    });
+
+    test('copyWith(outcome: value) sets a new outcome', () {
+      final orig = make(outcome: TaskOutcome.bug);
+      expect(orig.copyWith(outcome: TaskOutcome.crit).outcome, TaskOutcome.crit);
     });
   });
 }

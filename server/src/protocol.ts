@@ -113,6 +113,19 @@ export type ClientMessage =
           hardware: number; // HardwareTier enum index (0..5)
           provider?: number; // AgentProviderType enum index (0=cloud, 1=local, 3=deepseek, 4=kimi)
           skills: Record<string, number>; // skillType index → level (1-10)
+          /**
+           * Unlocked specializations (taskType keys, e.g. "architecture",
+           * "coding"). Server-side rollOutcome uses these for the crit bonus
+           * on matching tasks (C.2 — board transitions as server-single-writer).
+           * Optional for backwards compatibility with payloads predating C.2.
+           */
+          specializations?: string[];
+          /**
+           * Per-`taskType` successful-completion counters. Server-side
+           * rollOutcome feeds the total into `projectMemoryDepthBonus`
+           * (architecture crit boost). Optional for backwards compatibility.
+           */
+          taskCompletionsByType?: Record<string, number>;
         }
       >;
       fullState?: string; // JSON-encoded full GameState for cross-device sync
@@ -285,6 +298,18 @@ export interface TaskAttachmentData {
   uploadedAt: string;
 }
 
+/**
+ * Server-rolled final outcome of a task. Persisted on the card after the
+ * `testing → ?` decision is made server-side (C.2 — Board transitions as
+ * server-single-writer). Mirrors `TaskOutcome` in
+ * `lib/services/task_outcome.dart` and `server/src/task_outcome.ts`.
+ *
+ * Set once on terminal transition; never mutated afterwards (a fresh `bug`
+ * bounce that lands back in `testing` and re-rolls produces a NEW outcome
+ * value on the next finish).
+ */
+export type TaskOutcomeKey = "clean" | "crit" | "bug" | "incomplete";
+
 export interface TaskCardData {
   id: string;
   title: string;
@@ -302,6 +327,13 @@ export interface TaskCardData {
   taskType?: string;
   /** Inline file attachments. Server keeps base64 in memory; clients enforce size cap. */
   attachments?: TaskAttachmentData[];
+  /**
+   * Server-rolled outcome of the most recent `testing → ?` transition.
+   * Null/undefined until the card finishes testing at least once. Prerequisite
+   * for Done UX v2 schema v6 (clients render the badge from this field
+   * instead of re-rolling locally). C.2.
+   */
+  outcome?: TaskOutcomeKey;
 }
 
 // ─── Server → Client ────────────────────────────────────────────────────────

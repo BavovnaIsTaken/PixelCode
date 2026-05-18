@@ -3,6 +3,8 @@ library;
 
 import 'dart:convert';
 
+import '../services/task_outcome.dart';
+
 // ─── Task Column ────────────────────────────────────────────────────────────
 
 enum TaskColumn {
@@ -188,6 +190,12 @@ class TaskCard {
 
   final List<TaskAttachment> attachments;
 
+  /// Server-rolled outcome of the most recent `testing → ?` transition.
+  /// Null until the card finishes testing at least once. Reflects the
+  /// authoritative server roll (C.2 — server as single writer); the client
+  /// never assigns this value locally.
+  final TaskOutcome? outcome;
+
   const TaskCard({
     required this.id,
     required this.title,
@@ -202,6 +210,7 @@ class TaskCard {
     this.allowedRoles = const ['coder'],
     this.taskType = 'coding',
     this.attachments = const [],
+    this.outcome,
   });
 
   /// Derived: minimum agent level required to take this task.
@@ -219,6 +228,7 @@ class TaskCard {
     List<String>? allowedRoles,
     String? taskType,
     List<TaskAttachment>? attachments,
+    Object? outcome = _kUnset,
   }) =>
       TaskCard(
         id: id,
@@ -234,6 +244,9 @@ class TaskCard {
         allowedRoles: allowedRoles ?? this.allowedRoles,
         taskType: taskType ?? this.taskType,
         attachments: attachments ?? this.attachments,
+        outcome: identical(outcome, _kUnset)
+            ? this.outcome
+            : outcome as TaskOutcome?,
       );
 
   factory TaskCard.fromJson(Map<String, dynamic> json) => TaskCard(
@@ -260,6 +273,7 @@ class TaskCard {
                 ?.map((a) => TaskAttachment.fromJson(a as Map<String, dynamic>))
                 .toList() ??
             const [],
+        outcome: TaskOutcome.fromKey(json['outcome'] as String?),
       );
 
   Map<String, dynamic> toJson() => {
@@ -276,8 +290,14 @@ class TaskCard {
         'allowedRoles': allowedRoles,
         'taskType': taskType,
         'attachments': attachments.map((a) => a.toJson()).toList(),
+        if (outcome != null) 'outcome': outcome!.key,
       };
 }
+
+/// Sentinel that lets [TaskCard.copyWith] distinguish "leave outcome alone"
+/// from "explicitly clear outcome to null" (e.g. when a bug bounce re-enters
+/// the testing column and we want to drop the previous roll).
+const Object _kUnset = Object();
 
 // ─── Board State ────────────────────────────────────────────────────────────
 
