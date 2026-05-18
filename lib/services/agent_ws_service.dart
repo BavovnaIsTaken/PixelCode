@@ -4,13 +4,13 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/agent_message.dart';
 import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
+import 'agent_ws_helpers.dart' as helpers;
 import 'agent_ws_messages.dart' as msg;
 
 class AgentWsService {
@@ -34,7 +34,7 @@ class AgentWsService {
   }
 
   /// Stable client ID (generated once per app instance).
-  late final String clientId = _generateClientId();
+  late final String clientId = helpers.generateClientId();
 
   /// Device label sent in the `client_info` handshake — auto-derived from the
   /// OS hostname. Re-sent on every (re)connect. Surfaced to the host via the
@@ -43,12 +43,6 @@ class AgentWsService {
     Platform.localHostname,
     currentPlatformName(),
   );
-
-  static String _generateClientId() {
-    final rng = Random.secure();
-    final bytes = List.generate(16, (_) => rng.nextInt(256));
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
 
   /// Last received server_info (buffered so late subscribers can read it).
   ServerInfoMessage? lastServerInfo;
@@ -73,8 +67,7 @@ class AgentWsService {
   /// Public log sink — other services (e.g. mDNS discovery) can write here
   /// so their output appears in the in-app connection console.
   void log(String msg) {
-    final ts = DateTime.now().toIso8601String().substring(11, 19);
-    final line = '[$ts] $msg';
+    final line = helpers.formatConnectionLogLine(DateTime.now(), msg);
     debugPrint('[WS] $msg');
     if (!_connLogController.isClosed) _connLogController.add(line);
   }
@@ -108,7 +101,7 @@ class AgentWsService {
       // client only if system DNS can't resolve the hostname.
       HttpClient? customClient;
       final uri = Uri.parse(url);
-      if (uri.host.endsWith('.ts.net')) {
+      if (helpers.needsDohRoute(uri.host)) {
         _emitPhase('DNS');
         final dohIp = await _resolveViaDoHIfNeeded(uri.host);
         if (dohIp != null) {
@@ -213,10 +206,8 @@ class AgentWsService {
             .timeout(const Duration(seconds: 5));
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
-        final json = jsonDecode(body) as Map<String, dynamic>;
-        final answers = json['Answer'] as List?;
-        if (answers != null && answers.isNotEmpty) {
-          final ip = answers.first['data'] as String;
+        final ip = helpers.parseDohAnswer(body);
+        if (ip != null) {
           _log('DoH resolved: $hostname → $ip');
           return ip;
         }
