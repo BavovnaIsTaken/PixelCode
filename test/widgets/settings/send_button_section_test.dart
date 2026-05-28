@@ -109,12 +109,14 @@ void main() {
 
     testWidgets('locked items show price + lock icon', (tester) async {
       await _pump(tester, gameState: const GameState(grymni: 0));
-      // Three premium variants are locked → three lock icons.
-      expect(find.byIcon(Icons.lock_outline), findsNWidgets(3));
-      // Prices from the cosmeticCatalog.
+      // Five premium variants are locked → five lock icons.
+      expect(find.byIcon(Icons.lock_outline), findsNWidgets(5));
+      // Prices from the cosmeticCatalog (all five premium items).
       expect(find.text('6000 ₲'), findsOneWidget);
       expect(find.text('12000 ₲'), findsOneWidget);
+      expect(find.text('18000 ₲'), findsOneWidget);
       expect(find.text('20000 ₲'), findsOneWidget);
+      expect(find.text('25000 ₲'), findsOneWidget);
     });
 
     testWidgets('owned but not active item prompts "Клікни, щоб увімкнути"',
@@ -187,8 +189,8 @@ void main() {
       final notifier =
           await _pump(tester, gameState: const GameState(grymni: 6000));
 
-      // There should be 3 "Купити" buttons (one per premium item).
-      expect(find.text('Купити'), findsNWidgets(3));
+      // There should be 5 "Купити" buttons (one per premium item).
+      expect(find.text('Купити'), findsNWidgets(5));
 
       await tester.tap(find.text('Купити').first);
       await tester.pump(const Duration(milliseconds: 50));

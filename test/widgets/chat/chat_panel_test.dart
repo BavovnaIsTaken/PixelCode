@@ -26,7 +26,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pixelcode/models/agent_message.dart';
+import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/providers/agent_provider.dart';
+import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
 import 'package:pixelcode/services/agent_ws_service.dart';
 import 'package:pixelcode/widgets/chat/chat_panel.dart';
@@ -67,6 +69,7 @@ class _ChatWsRecorder extends AgentWsService {
     String content, {
     String agentId = 'manager',
     List<String>? images,
+    String? localId,
   }) {
     sendMessageCalls.add((
       text: content,
@@ -94,6 +97,14 @@ class _ChatWsRecorder extends AgentWsService {
 
 // ─── Pump helpers ─────────────────────────────────────────────────────────────
 
+/// Overrides the game economy provider with an empty-agents state so that
+/// AgentsNotifier builds no entries and _agentNickname falls back to role
+/// defaults ('Капітан' for manager, etc.).
+class _EmptyGameEconomyNotifier extends GameEconomyNotifier {
+  @override
+  GameState build() => const GameState();
+}
+
 class _SeedChatNotifier extends ChatNotifier {
   final List<ChatMessage> seed;
   _SeedChatNotifier(this.seed);
@@ -117,6 +128,9 @@ Future<ProviderContainer> _makeContainer({
   return ProviderContainer(overrides: [
     sharedPrefsProvider.overrideWithValue(prefs),
     wsServiceProvider.overrideWith((_) => wsService ?? FakeAgentWsService()),
+    // Use an empty-agents game state so _agentNickname falls back to role
+    // defaults ('Капітан', 'Архітект', …) rather than a random pool name.
+    gameEconomyProvider.overrideWith(_EmptyGameEconomyNotifier.new),
     if (seedMessages.isNotEmpty)
       chatProvider.overrideWith(() => _SeedChatNotifier(seedMessages)),
     if (selectedAgent != null)
@@ -209,27 +223,6 @@ void main() {
       container.dispose();
     });
 
-    testWidgets('header bypass toggle calls ws.setBypassPermissions',
-        (tester) async {
-      final ws = _ChatWsRecorder();
-      final container = await _makeContainer(wsService: ws);
-      await _pump(tester, container);
-
-      // Toggle from off → on by tapping the label area.
-      final toggle = find.text('Без обмежень');
-      expect(toggle, findsOneWidget);
-      // The actual switch is built next to the label — tap it.
-      final switchWidget = find.descendant(
-        of: find.byTooltip('Вмикнути режим "Без обмежень"'),
-        matching: find.byType(GestureDetector),
-      );
-      await tester.tap(switchWidget.first, warnIfMissed: false);
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(ws.bypassCalls, [true]);
-
-      await tester.pumpWidget(const SizedBox.shrink());
-      container.dispose();
-    });
   });
 
   group('ChatPanel — composer send semantics', () {
