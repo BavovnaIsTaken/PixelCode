@@ -74,20 +74,20 @@ void main() {
           reason: 'phase clears to null on successful connect');
     });
 
-    test('sends client_info handshake then get_traits as the first frames',
+    test('sends client_info → set_bypass_permissions → get_traits as the first three frames',
         () async {
       final s = await _startServer();
       addTearDown(() async => s.server.close(force: true));
       final svc = AgentWsService();
       addTearDown(svc.dispose);
 
-      // Capture the first two frames the server receives.
+      // Capture the first three frames the server receives.
       final framesCompleter = Completer<List<String>>();
       final received = <String>[];
       s.sockets.listen((ws) {
         ws.listen((data) {
           received.add(data as String);
-          if (received.length == 2 && !framesCompleter.isCompleted) {
+          if (received.length == 3 && !framesCompleter.isCompleted) {
             framesCompleter.complete(List.of(received));
           }
         });
@@ -107,7 +107,10 @@ void main() {
       expect(clientInfo['platform'], isA<String>());
       expect((clientInfo['platform'] as String).isNotEmpty, isTrue);
 
-      final getTraits = jsonDecode(frames[1]) as Map<String, dynamic>;
+      final bypass = jsonDecode(frames[1]) as Map<String, dynamic>;
+      expect(bypass['type'], 'set_bypass_permissions');
+
+      final getTraits = jsonDecode(frames[2]) as Map<String, dynamic>;
       expect(getTraits['type'], 'get_traits');
     });
 

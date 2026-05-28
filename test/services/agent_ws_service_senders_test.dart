@@ -87,10 +87,10 @@ Future<_Harness> _bootHarness() async {
     ws.listen((data) {
       final map = jsonDecode(data as String) as Map<String, dynamic>;
       seen++;
-      // Drop the first two auto-handshake frames (client_info + get_traits)
-      // so the test's `frames` buffer starts clean.
-      if (seen <= 2) {
-        if (seen == 2 && !handshakeCompleter.isCompleted) {
+      // Drop the first three auto-handshake frames:
+      //   1. client_info  2. set_bypass_permissions  3. get_traits
+      if (seen <= 3) {
+        if (seen == 3 && !handshakeCompleter.isCompleted) {
           handshakeCompleter.complete();
         }
         return;

@@ -85,43 +85,44 @@ void main() {
   });
 
   group('send-when-disconnected', () {
-    test('drops the message and logs instead of throwing', () async {
+    test('non-ephemeral message is queued (not thrown) and logged', () async {
       final svc = AgentWsService();
       addTearDown(svc.dispose);
 
-      // Capture log lines.
-      final dropped = svc.connectionLog
-          .firstWhere((l) => l.contains('Message dropped'))
+      // sendMessage is non-ephemeral → goes to the outbox.
+      final queued = svc.connectionLog
+          .firstWhere((l) => l.contains('send_message'))
           .timeout(const Duration(seconds: 1));
 
-      // Any public sender drives through `_send` → drop path.
       svc.sendMessage('payload');
 
-      final line = await dropped;
-      expect(line, contains('send_message'),
-          reason: 'drop log must include the message type for debugging');
+      final line = await queued;
+      expect(line, contains('Outbox queued'),
+          reason: 'non-ephemeral messages are queued, not dropped');
+      expect(line, contains('send_message'));
     });
 
-    test('multiple drops all emit log lines (no silent failure)', () async {
+    test('ephemeral and non-ephemeral sends each emit a log line', () async {
       final svc = AgentWsService();
       addTearDown(svc.dispose);
 
-      final drops = <String>[];
-      final sub = svc.connectionLog.listen((l) {
-        if (l.contains('Message dropped')) drops.add(l);
-      });
+      final logs = <String>[];
+      final sub = svc.connectionLog.listen(logs.add);
       addTearDown(sub.cancel);
 
+      // new_chat → queued (non-ephemeral)
+      // interrupt / get_status → dropped (ephemeral)
       svc.newChat();
       svc.interrupt();
       svc.getStatus();
 
-      // Stream events are microtasks; let them drain.
       await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(drops, hasLength(3));
-      expect(drops.any((l) => l.contains('new_chat')), isTrue);
-      expect(drops.any((l) => l.contains('interrupt')), isTrue);
-      expect(drops.any((l) => l.contains('get_status')), isTrue);
+      expect(logs.any((l) => l.contains('new_chat')), isTrue);
+      expect(logs.any((l) => l.contains('interrupt')), isTrue);
+      expect(logs.any((l) => l.contains('get_status')), isTrue);
+      // Verify the right policy applied to each
+      expect(logs.any((l) => l.contains('Outbox queued') && l.contains('new_chat')), isTrue);
+      expect(logs.any((l) => l.contains('Ephemeral dropped') && l.contains('interrupt')), isTrue);
     });
   });
 

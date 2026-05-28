@@ -124,14 +124,15 @@ void main() {
       ));
       await failFuture;
 
-      // Send anything — must hit the drop-when-disconnected branch in _send.
+      // Send anything — must hit the offline branch in _send (queue or drop).
       expect(() => svc.sendMessage('x'), returnsNormally);
 
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      // sendMessage is non-ephemeral → logged as "Outbox queued …: send_message"
       expect(
-        logLines.any((l) => l.contains('Message dropped')),
+        logLines.any((l) => l.contains('send_message')),
         isTrue,
-        reason: 'post-FAIL send must log a drop, not throw',
+        reason: 'post-FAIL send must log, not throw',
       );
     });
   });
