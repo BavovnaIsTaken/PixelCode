@@ -24,6 +24,7 @@ import '../../services/agent_export_service.dart';
 import '../personalization/custom_agent_spawn_form.dart';
 import '../personalization/personalization_panel.dart';
 import '../roster/agent_detail_drawer.dart';
+import 'shop_panel_helpers.dart';
 import 'spinning_coin.dart';
 
 part 'roster_tab.dart';
@@ -1337,7 +1338,7 @@ class _CosmeticItemCard extends StatelessWidget {
             ),
             child: Center(
               child: Text(
-                item.preview.length <= 4 ? item.preview : item.preview.substring(0, 1),
+                cosmeticPreviewGlyph(item),
                 style: const TextStyle(fontSize: 18),
                 textAlign: TextAlign.center,
               ),
@@ -1380,8 +1381,7 @@ class _CosmeticItemCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 3),
                 // Preview text for nickname decorations
-                if (item.type == CosmeticType.nicknameDecor ||
-                    item.type == CosmeticType.titleBadge)
+                if (showsTemplatePreview(item))
                   Text(
                     item.preview.replaceAll('{n}', 'NickName'),
                     style: TextStyle(
@@ -1397,15 +1397,15 @@ class _CosmeticItemCard extends StatelessWidget {
           // Action
           if (isOwned)
             _ActionButton(
-              label: isEquipped ? 'Зняти' : 'Одягнути',
+              label: cosmeticActionLabel(
+                  item: item, isOwned: true, isEquipped: isEquipped),
               color: isEquipped ? Colors.white.withValues(alpha: 0.3) : _green,
               onTap: isEquipped ? onUnequip : onEquip,
             )
           else
             _ActionButton(
-              label: item.cost == 0
-                  ? 'Безкоштовно'
-                  : '${_formatNumber(item.cost)}₲',
+              label: cosmeticActionLabel(
+                  item: item, isOwned: false, isEquipped: false),
               color: canBuy ? _accent : Colors.white.withValues(alpha: 0.15),
               onTap: canBuy ? onBuy : null,
             ),
@@ -1419,19 +1419,10 @@ class _AvatarFramePreview extends StatelessWidget {
   final String? frameId;
   const _AvatarFramePreview({this.frameId});
 
-  static const _frameColors = <String, Color>{
-    'frame_neon': Color(0xFF00C0D1),
-    'frame_gold': Color(0xFFFFD700),
-    'frame_fire': Color(0xFFFF6B35),
-    'frame_glitch': Color(0xFF9B59B6),
-    'frame_pixel': Color(0xFF22C55E),
-    'frame_matrix': Color(0xFF00FF41),
-  };
-
   @override
   Widget build(BuildContext context) {
     final frameColor = frameId != null
-        ? (_frameColors[frameId!] ?? _accent)
+        ? (avatarFrameColor(frameId) ?? _accent)
         : Colors.white.withValues(alpha: 0.12);
 
     return Container(
@@ -1727,23 +1718,16 @@ class _ActionButtonState extends State<_ActionButton> {
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+//
+// Shared formatting logic now lives in `shop_panel_helpers.dart` so it can
+// be unit-tested without pumping the panel. These thin wrappers preserve
+// the in-library symbols used by the `part`-imported `roster_tab.dart`.
 
-String _formatNumber(int n) {
-  if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-  if (n >= 1000) return '${(n / 1000).toStringAsFixed(n % 1000 == 0 ? 0 : 1)}K';
-  return n.toString();
-}
+String _formatNumber(int n) => formatGrymni(n);
 
 /// Ukrainian plural forms for "гримня":
 /// 1 гримня, 2-4 гримні, 5-20 гримнів, 21 гримня, 22 гримні …
-String _grymniLabel(int n) {
-  final abs = n.abs();
-  final mod10 = abs % 10;
-  final mod100 = abs % 100;
-  if (mod10 == 1 && mod100 != 11) return 'гримня';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'гримні';
-  return 'гримнів';
-}
+String _grymniLabel(int n) => grymniLabel(n);
 
 // ─── Aggregating donation toast ────────────────────────────────────────────
 

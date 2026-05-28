@@ -29,9 +29,9 @@ void main() {
       expect(foremanColFor(7), 6);
     });
 
-    test('foremanRowFor returns last row index', () {
-      expect(foremanRowFor(14), 13);
-      expect(foremanRowFor(5), 4);
+    test('foremanRowFor returns last row minus headroom (gridRows - 2)', () {
+      expect(foremanRowFor(14), 12);
+      expect(foremanRowFor(5), 3);
     });
   });
 

@@ -56,4 +56,47 @@ void main() {
     expect(_task(difficulty: 1).requiredLevel, 1);
     expect(_task(difficulty: 5).requiredLevel, 11);
   });
+
+  // ─── Edge cases — boundary levels ────────────────────────────────────────
+
+  test('accepts agent exactly on level boundary (level == requiredLevel)', () {
+    // difficulty 4 → requiredLevel 7
+    final t = _task(difficulty: 4, allowedRoles: ['coder']);
+    final a = _agent(roleType: 'coder', level: 7);
+    expect(assignmentRejectionReason(t, a), isNull);
+  });
+
+  test('rejects agent one level below boundary', () {
+    final t = _task(difficulty: 4, allowedRoles: ['coder']);
+    final a = _agent(roleType: 'coder', level: 6);
+    final r = assignmentRejectionReason(t, a);
+    expect(r, isNotNull);
+    expect(r, contains('Lv 7'));
+    expect(r, contains('Lv 6'));
+  });
+
+  test('rejects when none of multiple allowedRoles match', () {
+    final t = _task(allowedRoles: ['tester', 'reviewer']);
+    final a = _agent(roleType: 'coder', level: 10);
+    final r = assignmentRejectionReason(t, a);
+    expect(r, isNotNull);
+    expect(r, contains('роль'));
+  });
+
+  test('rejection message lists every allowed role', () {
+    final t = _task(allowedRoles: ['tester', 'reviewer']);
+    final a = _agent(roleType: 'coder', level: 10);
+    final r = assignmentRejectionReason(t, a)!;
+    // Role labels come from roleCatalogFor; both should be referenced.
+    final testerLabel = roleCatalogFor('tester')!.role;
+    final reviewerLabel = roleCatalogFor('reviewer')!.role;
+    expect(r, contains(testerLabel));
+    expect(r, contains(reviewerLabel));
+  });
+
+  test('empty allowedRoles list always rejects (no eligible role)', () {
+    final t = _task(allowedRoles: const []);
+    final a = _agent(roleType: 'coder', level: 10);
+    expect(assignmentRejectionReason(t, a), isNotNull);
+  });
 }
