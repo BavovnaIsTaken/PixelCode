@@ -586,4 +586,87 @@ void main() {
       expect(ch.state, isNot(CharState.waiting));
     });
   });
+
+  // ─── Walkable-tile clamp (regression: characters past office wall) ────────
+  //
+  // Reproduces the 2026-05-19 bug report: on Galley, the cat label appeared
+  // past the office wall because, after a layout change, the cat's tileCol
+  // pointed at a tile that was no longer walkable (wall, blocked desk, or
+  // outside the new grid). Pathfinding then refused to relocate it because
+  // BFS never re-validates the starting tile. The clamp runs after every
+  // _buildAll() — both on construction and on rebuildLayout — and snaps any
+  // out-of-place entity back to the nearest walkable tile.
+
+  group('walkable-tile clamp', () {
+    bool isWalkable(OfficeGameState s, int col, int row) {
+      if (row < 0 || row >= s.tileMap.length) return false;
+      if (col < 0 || col >= s.tileMap[0].length) return false;
+      if (s.tileMap[row][col] == TileType.wall) return false;
+      return !s.blockedTiles.contains('$col,$row');
+    }
+
+    test('cat default spawn (col=12,row=5) is relocated on garage (7×5)', () {
+      // Garage is only 7×5 — cat default (12, 5) lands outside the grid.
+      // The clamp must move the cat to a walkable tile so it can wander
+      // and BFS doesn't try to start from outside the tilemap.
+      final state = OfficeGameState(level: OfficeLevel.garage);
+      expect(isWalkable(state, state.cat.tileCol, state.cat.tileRow), isTrue,
+          reason: 'cat at (${state.cat.tileCol},${state.cat.tileRow}) must be walkable');
+      expect(state.cat.tileCol, lessThan(state.gridCols - 1));
+      expect(state.cat.tileRow, lessThan(state.gridRows - 1));
+    });
+
+    test('cat is relocated when office downgrades into its tile', () {
+      // Start on Galley (21×44) where col=18 is well inside; downgrade to
+      // garage (7×5) where col=18 is far past the wall. Without clamp, the
+      // cat would render past the office boundary.
+      final state = OfficeGameState(level: OfficeLevel.galley);
+      state.cat.tileCol = 18;
+      state.cat.tileRow = 30;
+      state.cat.x = 18 * kTileSize + kTileSize / 2;
+      state.cat.y = 30 * kTileSize + kTileSize / 2;
+
+      state.rebuildLayout(OfficeLevel.garage, 0, []);
+
+      expect(isWalkable(state, state.cat.tileCol, state.cat.tileRow), isTrue);
+      // Sprite world-space coordinates must follow the clamped tile.
+      expect(state.cat.x, state.cat.tileCol * kTileSize + kTileSize / 2);
+      expect(state.cat.y, state.cat.tileRow * kTileSize + kTileSize / 2);
+    });
+
+    test('cat on wall tile after manual mutation is clamped on rebuild', () {
+      // Belt-and-suspenders: even if some future code path drops the cat
+      // on a wall tile inside the current grid (corrupted save, manual
+      // mutation, race condition), the next layout rebuild fixes it.
+      final state = OfficeGameState(level: OfficeLevel.smallOffice);
+      final lastCol = state.gridCols - 1; // wall column
+      state.cat.tileCol = lastCol;
+      state.cat.tileRow = 2;
+
+      state.rebuildLayout(OfficeLevel.smallOffice, 0, []);
+
+      expect(state.cat.tileCol, lessThan(lastCol));
+      expect(isWalkable(state, state.cat.tileCol, state.cat.tileRow), isTrue);
+    });
+
+    test('hired character outside new grid is clamped on rebuild', () {
+      // Hire a coder on Galley, drop them at col=19; downgrade to garage.
+      // Without clamp, the sprite renders past the right wall.
+      final state = OfficeGameState(level: OfficeLevel.galley);
+      state.syncHiredAgents(['coder#1']);
+      final ch = state.characters['coder#1']!;
+      ch.tileCol = 19;
+      ch.tileRow = 30;
+      ch.seat = null; // make sure clamp doesn't snap back via seat path
+      ch.x = 19 * kTileSize + kTileSize / 2;
+      ch.y = 30 * kTileSize + kTileSize / 2;
+
+      state.rebuildLayout(OfficeLevel.garage, 0, []);
+
+      expect(isWalkable(state, ch.tileCol, ch.tileRow), isTrue);
+      expect(ch.tileCol, lessThan(state.gridCols - 1));
+      expect(ch.tileRow, lessThan(state.gridRows - 1));
+      expect(ch.path, isEmpty);
+    });
+  });
 }

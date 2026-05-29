@@ -104,6 +104,25 @@ const _campus = RoomTheme(
   vignetteAlpha: 0.25,            // bright, airy
 );
 
+// ─── Tier 4-alt: Галера — OfficeLevel.galley ────────────────────────────────
+
+const _galley = RoomTheme(
+  id: 'galley',
+  name: 'Галера',
+  nameEn: 'War Galley',
+  tier: 4,
+  wallBase: Color(0xFF1A1208),    // tarred oak hull, near-black warm brown
+  wallTop: Color(0xFF2E1E0A),     // top planksheer caught by lantern light
+  wallInner: Color(0xFF0E0A04),   // inner hull, deepest shadow
+  floorDark: Color(0xFF1C1408),   // deck seam between planks
+  floorLight: Color(0xFF2A1E0E),  // weathered oak plank surface
+  floorGrid: Color(0xFF221A0C),   // plank groove, mid-tone warm brown
+  deskSurface: Color(0xFF382810), // desk a touch richer than the deck
+  deskEdge: Color(0xFF221A08),    // dark trim
+  accentColor: Color(0xFFCD7F32), // bronze — antique metallic warm
+  vignetteAlpha: 0.30,            // open night sky, lighter than techHub
+);
+
 // ─── Lookup ─────────────────────────────────────────────────────────────────
 
 const _themesByLevel = <OfficeLevel, RoomTheme>{
@@ -112,6 +131,7 @@ const _themesByLevel = <OfficeLevel, RoomTheme>{
   OfficeLevel.modernOffice: _modernOffice,
   OfficeLevel.techHub: _techHub,
   OfficeLevel.campus: _campus,
+  OfficeLevel.galley: _galley,
 };
 
 /// Get the room theme for a given office level.
@@ -124,4 +144,5 @@ const allRoomThemes = <RoomTheme>[
   _modernOffice,
   _techHub,
   _campus,
+  _galley,
 ];

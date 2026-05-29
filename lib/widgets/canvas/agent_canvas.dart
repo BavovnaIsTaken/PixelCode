@@ -14,14 +14,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
+import '../../providers/agent_operational_status_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/build_mode_provider.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/office_simulation_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
-import '../../services/agent_id_format.dart';
 import 'build_menu.dart';
 import 'character_sprites.dart';
+import 'edit_mode_logic.dart';
 import 'snap_logic.dart';
 import 'foreman_overlay_painter.dart';
 import 'office_game_state.dart';
@@ -51,6 +52,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   /// over a buffer tile. Drives the hover/press wash in [PixelOfficePainter].
   ({int col, int row})? _hoveredBufferTile;
   bool _bufferTilePressed = false;
+
+  /// Tile under the cursor while edit mode has a held or selected furniture
+  /// item — drives the translucent "drop preview" footprint that follows the
+  /// pointer, mirroring the buy-mode ghost. Null when nothing in hand, when
+  /// the pointer left the canvas, or outside edit mode.
+  ({int col, int row})? _furnitureGhostTile;
 
   /// 150 ms fade for the buffer hover wash. Forwards 0→1 on tile-enter,
   /// reverses on tile-exit so the colour swap doesn't pop.
@@ -132,7 +139,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     super.dispose();
   }
 
-  bool _logExpanded = false;
   String? _hoveredAgentId;
 
   final Map<String, DateTime> _toastCooldown = {};
@@ -162,10 +168,11 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     // change identity over the app lifetime — `ref.watch` here is just to
     // create the dependency edge (and trigger creation if not yet built).
     final service = ref.watch(officeSimulationProvider);
-    final agents = ref.watch(agentsProvider);
-    final metrics = ref.watch(metricsProvider);
-    final activityLog = ref.watch(activityLogProvider);
-    final commEvents = ref.watch(commGraphProvider);
+    // C.2.6 — read the reconciled view (status forced to idle when the
+    // server's active_agents registry says no run is in flight) so the
+    // canvas stops painting "still working" sprites for hung/cancelled
+    // queries that never sent a final agent_status: idle push.
+    final agents = ref.watch(reconciledAgentsProvider);
     final gameEconomy = ref.watch(gameEconomyProvider);
 
     // Reset zoom + pan transform on every entry/exit of build mode so a prior
@@ -206,16 +213,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
               if (activeAgents.isNotEmpty)
                 _ActiveAgentsStrip(agents: activeAgents, tick: slowTick),
               Expanded(child: _buildOffice(agents, gameEconomy, slowTick)),
-              if (metrics.isNotEmpty) _TeamMetricsBar(metrics: metrics),
-              if (commEvents.isNotEmpty) _CommGraphPanel(events: commEvents),
-              _ActivityLogPanel(
-                events: activityLog,
-                expanded: _logExpanded,
-                onToggle: () =>
-                    setState(() => _logExpanded = !_logExpanded),
-                onClear: () =>
-                    ref.read(activityLogProvider.notifier).clear(),
-              ),
             ],
           ),
         );
@@ -322,6 +319,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                   ? _ghostStatus(buildMode, gameEconomy.placedRooms)
                   : null;
               final cursor = _buildModeCursor(buildMode, ghostStatus);
+              final furnitureGhost = editMode
+                  ? _resolveFurnitureGhost(gameEconomy)
+                  : (item: null, col: null, row: null, valid: false);
               return Stack(
                 children: [
                   // Graphite "construction lot" backdrop — only painted in
@@ -371,6 +371,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                       onHover: (event) {
                         _onCanvasHover(event.localPosition, constraints);
                         _updateBuildGhost(event.localPosition, constraints);
+                        _updateFurnitureGhost(event.localPosition, constraints);
                       },
                       onExit: (_) {
                         setState(() {
@@ -378,13 +379,22 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                           _foremanHovering = false;
                           _hoveredBufferTile = null;
                           _bufferTilePressed = false;
+                          _furnitureGhostTile = null;
                         });
                         if (_bufferHoverFade.value > 0) {
                           _bufferHoverFade.reverse();
                         }
                       },
                       child: GestureDetector(
-                        onTapDown: (d) =>
+                        // `onTapUp` (not `onTapDown`) so the tap handler only
+                        // fires after the gesture arena confirms a tap won.
+                        // Long-press is deliberately NOT bound — it was the
+                        // delete affordance for placed furniture, but in
+                        // practice it fired on any "slightly long" click and
+                        // ate the pickup, deleting the item by accident.
+                        // Delete now lives as an explicit button in the
+                        // build menu, surfaced only while something is held.
+                        onTapUp: (d) =>
                             _onCanvasTap(d.localPosition, constraints),
                         child: Stack(
                           children: [
@@ -405,6 +415,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                   editMode: editMode,
                                   selectedFurnitureId:
                                       ref.watch(selectedFurnitureIdProvider),
+                                  heldPlacedFurnitureIndex: ref.watch(
+                                      heldPlacedFurnitureIndexProvider),
                                   buildMode: buildMode.active,
                                   ghostRoomType: editMode
                                       ? null
@@ -448,6 +460,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                       if (e.value.specializations.isNotEmpty)
                                         e.key: e.value.specializations,
                                   },
+                                  ghostFurnitureItem: furnitureGhost.item,
+                                  ghostFurnitureCol: furnitureGhost.col,
+                                  ghostFurnitureRow: furnitureGhost.row,
+                                  ghostFurnitureValid: furnitureGhost.valid,
                                 ),
                               ),
                             ),
@@ -665,16 +681,9 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   /// Convert screen position to world position and hit-test characters.
   String? _hitTestCharacter(Offset screenPos, BoxConstraints constraints) {
-    final cw = _gameState.canvasWidth;
-    final ch = _gameState.canvasHeight;
-    final scaleX = constraints.maxWidth / cw;
-    final scaleY = constraints.maxHeight / ch;
-    final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - cw * scale) / 2;
-    final offsetY = (constraints.maxHeight - ch * scale) / 2;
-
-    final worldX = (screenPos.dx - offsetX) / scale;
-    final worldY = (screenPos.dy - offsetY) / scale;
+    final fit = _canvasFit(constraints);
+    final worldX = (screenPos.dx - fit.offsetX) / fit.scale;
+    final worldY = (screenPos.dy - fit.offsetY) / fit.scale;
 
     // Check characters sorted by Y descending (front-most first)
     final chars = _gameState.characters.values.toList()
@@ -790,13 +799,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       return;
     }
 
-    // Furniture edit mode (outside build mode, from Shop panel toggle):
-    // place or remove furniture on grid.
-    if (isEditMode) {
-      _handleFurnitureTap(pos, constraints);
-      return;
-    }
-
     // Back-wall door → open upgrade dialog. Check before the foreman so the
     // door wins when hit regions happen to overlap on very small grids.
     if (_hitTestDoor(pos, constraints)) {
@@ -815,7 +817,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       // [hit] is already an instanceId — select that specific agent directly.
       final ch = _gameState.characters[hit];
       if (ch != null && ch.isHired) {
-        ref.read(selectedAgentProvider.notifier).state = hit;
+        ref.read(selectedAgentProvider.notifier).select(hit);
         if (!_selectionVisible) setState(() => _selectionVisible = true);
         return;
       }
@@ -830,115 +832,90 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   /// Edit mode in Build Mode: tap a placed room to refund+remove it; tap a
   /// placed furniture item to remove it. Rooms take priority over furniture
   /// when both occupy the tile (furniture visually sits inside a room).
+  /// Tap handler for placement / move / delete-room while in furniture edit
+  /// mode. Pure decision logic lives in [decideEditModeTap] — this method
+  /// builds the input snapshot from current state, then applies the
+  /// resulting action through providers and the game notifier.
   void _handleEditModeTap(Offset screenPos, BoxConstraints constraints) {
     final world = _screenToWorld(screenPos, constraints);
     final col = (world.dx / kTileSize).floor();
     final row = (world.dy / kTileSize).floor();
-    if (col < 1 ||
-        col >= _gameState.gridCols - 1 ||
-        row < 1 ||
-        row >= _gameState.gridRows - 1) {
-      return;
-    }
 
     final game = ref.read(gameEconomyProvider);
     final notifier = ref.read(gameEconomyProvider.notifier);
+    final input = EditModeTapInput(
+      col: col,
+      row: row,
+      gridCols: _gameState.gridCols,
+      gridRows: _gameState.gridRows,
+      blockedTiles: _gameState.blockedTiles,
+      placedFurniture: game.placedFurniture,
+      placedRooms: game.placedRooms,
+      heldPlacedIndex: ref.read(heldPlacedFurnitureIndexProvider),
+      selectedFurnitureId: ref.read(selectedFurnitureIdProvider),
+      lookupItem: furnitureById,
+    );
 
-    for (int i = 0; i < game.placedFurniture.length; i++) {
-      final p = game.placedFurniture[i];
-      final item = furnitureById(p.itemId);
-      if (item == null) continue;
-      if (col >= p.col &&
-          col < p.col + item.widthTiles &&
-          row >= p.row &&
-          row < p.row + item.heightTiles) {
-        notifier.removePlacedFurniture(i);
+    final action = decideEditModeTap(input);
+    switch (action) {
+      case TapNoOp():
         return;
-      }
-    }
-
-    for (final room in game.placedRooms) {
-      if (col >= room.col &&
-          col < room.col + room.type.widthTiles &&
-          row >= room.row &&
-          row < room.row + room.type.heightTiles) {
-        notifier.removeRoom(room.id);
+      case TapReleaseHold():
+      case TapReleaseStaleHold():
+        FurnitureEditModeCoord.releaseHold(ref);
         return;
-      }
-    }
-  }
-
-  void _handleFurnitureTap(Offset screenPos, BoxConstraints constraints) {
-    final cw = _gameState.canvasWidth;
-    final ch = _gameState.canvasHeight;
-    final scaleX = constraints.maxWidth / cw;
-    final scaleY = constraints.maxHeight / ch;
-    final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - cw * scale) / 2;
-    final offsetY = (constraints.maxHeight - ch * scale) / 2;
-
-    final worldX = (screenPos.dx - offsetX) / scale;
-    final worldY = (screenPos.dy - offsetY) / scale;
-
-    final col = (worldX / kTileSize).floor();
-    final row = (worldY / kTileSize).floor();
-
-    // Must be on floor (not wall)
-    if (col < 1 || col >= _gameState.gridCols - 1 || row < 1 || row >= _gameState.gridRows - 1) {
-      return;
-    }
-
-    // Check if tapping on existing placed furniture → remove it
-    final game = ref.read(gameEconomyProvider);
-    for (int i = 0; i < game.placedFurniture.length; i++) {
-      final p = game.placedFurniture[i];
-      final item = furnitureById(p.itemId);
-      if (item == null) continue;
-      if (col >= p.col &&
-          col < p.col + item.widthTiles &&
-          row >= p.row &&
-          row < p.row + item.heightTiles) {
-        ref.read(gameEconomyProvider.notifier).removePlacedFurniture(i);
+      case TapPickUp(:final placedIndex):
+        FurnitureEditModeCoord.enterMove(ref, placedIndex);
         return;
-      }
-    }
-
-    // Place selected furniture
-    final selectedId = ref.read(selectedFurnitureIdProvider);
-    if (selectedId == null) return;
-    final item = furnitureById(selectedId);
-    if (item == null) return;
-
-    // Check tile is not blocked
-    final blocked = _gameState.blockedTiles;
-    for (int dc = 0; dc < item.widthTiles; dc++) {
-      for (int dr = 0; dr < item.heightTiles; dr++) {
-        if (blocked.contains('${col + dc},${row + dr}')) return;
-      }
-    }
-
-    ref.read(gameEconomyProvider.notifier).placeFurniture(selectedId, col, row);
-    // Deselect once inventory for this item is exhausted.
-    if (ref.read(gameEconomyProvider).furnitureAvailable(selectedId) <= 0) {
-      ref.read(selectedFurnitureIdProvider.notifier).state = null;
+      case TapMoveHere(:final placedIndex, :final col, :final row):
+        notifier.moveFurniture(placedIndex, col, row);
+        FurnitureEditModeCoord.releaseHold(ref);
+        return;
+      case TapPlaceFromInventory(:final itemId, :final col, :final row):
+        notifier.placeFurniture(itemId, col, row);
+        if (ref.read(gameEconomyProvider).furnitureAvailable(itemId) <= 0) {
+          FurnitureEditModeCoord.releaseHold(ref);
+        }
+        return;
+      case TapRemoveRoom(:final roomId):
+        notifier.removeRoom(roomId);
+        return;
     }
   }
 
   // ─── Build Mode ────────────────────────────────────────────────────────────
 
   Offset _screenToWorld(Offset screenPos, BoxConstraints constraints) {
-    // Mirror painter.paint(): include any active build-buffer in the canvas
-    // dims so taps in the foundation-buffer area map to correct world coords.
+    final fit = _canvasFit(constraints);
+    return Offset(
+      (screenPos.dx - fit.offsetX) / fit.scale,
+      (screenPos.dy - fit.offsetY) / fit.scale,
+    );
+  }
+
+  /// Shared fit-to-viewport math used by [PixelOfficePainter] and every
+  /// overlay / hit-test on this canvas. Owning a single source of truth here
+  /// is load-bearing: a previous incarnation duplicated this math in four
+  /// places, and characters appeared past the office wall whenever any
+  /// off-by-one diverged (most visibly on Galley, where the deck is long and
+  /// the sea fills the surrounding viewport). Includes the build-mode
+  /// foundation buffer so the foundation tiles past the right/bottom walls
+  /// stay clickable and labels stay anchored to their sprites while the
+  /// painter shifts to accommodate the buffer.
+  _CanvasFit _canvasFit(BoxConstraints constraints) {
     final buildMode = ref.read(buildModeProvider);
     final buf = buildMode.active ? _bufferDims() : (cols: 0, rows: 0);
     final cw = _gameState.canvasWidth + buf.cols * kTileSize;
     final ch = _gameState.canvasHeight + buf.rows * kTileSize;
     final scale = math.min(
-        constraints.maxWidth / cw, constraints.maxHeight / ch);
-    final ox = (constraints.maxWidth - cw * scale) / 2;
-    final oy = (constraints.maxHeight - ch * scale) / 2;
-    return Offset(
-        (screenPos.dx - ox) / scale, (screenPos.dy - oy) / scale);
+      constraints.maxWidth / cw,
+      constraints.maxHeight / ch,
+    );
+    return _CanvasFit(
+      scale: scale,
+      offsetX: (constraints.maxWidth - cw * scale) / 2,
+      offsetY: (constraints.maxHeight - ch * scale) / 2,
+    );
   }
 
   /// Number of foundation-buffer tiles drawn past each owned grid edge in
@@ -1217,18 +1194,79 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     }
   }
 
+  /// Mirrors the buy-mode ghost for the furniture edit flow: as long as the
+  /// player has something in hand (held placed item OR selected inventory
+  /// item), keep a hover-tile in widget state so the painter can render the
+  /// translucent footprint that "follows" the cursor. Cleared when the hand
+  /// is empty or edit mode is off, so the ghost disappears with the same
+  /// gesture that emptied the hand (drop, cancel, exit).
+  /// Resolves the held/selected furniture item under the ghost tile and runs
+  /// the same placement validity check the tap handler uses, so the painter
+  /// can colour the ghost green (will accept the drop) or red (will refuse).
+  /// Returns nulls when nothing is in hand or the ghost tile is unset.
+  ({FurnitureItem? item, int? col, int? row, bool valid})
+      _resolveFurnitureGhost(GameState gameEconomy) {
+    final tile = _furnitureGhostTile;
+    if (tile == null) {
+      return (item: null, col: null, row: null, valid: false);
+    }
+    final heldIdx = ref.watch(heldPlacedFurnitureIndexProvider);
+    final selectedId = ref.watch(selectedFurnitureIdProvider);
+    FurnitureItem? item;
+    int? exclude;
+    if (heldIdx != null &&
+        heldIdx >= 0 &&
+        heldIdx < gameEconomy.placedFurniture.length) {
+      item = furnitureById(gameEconomy.placedFurniture[heldIdx].itemId);
+      exclude = heldIdx;
+    } else if (selectedId != null) {
+      item = furnitureById(selectedId);
+    }
+    if (item == null) {
+      return (item: null, col: null, row: null, valid: false);
+    }
+    final valid = canPlaceFurnitureAt(
+      col: tile.col,
+      row: tile.row,
+      item: item,
+      gridCols: _gameState.gridCols,
+      gridRows: _gameState.gridRows,
+      blockedTiles: _gameState.blockedTiles,
+      placedFurniture: gameEconomy.placedFurniture,
+      lookupItem: furnitureById,
+      excludePlacedIndex: exclude,
+    );
+    return (item: item, col: tile.col, row: tile.row, valid: valid);
+  }
+
+  void _updateFurnitureGhost(Offset screenPos, BoxConstraints constraints) {
+    if (!ref.read(furnitureEditModeProvider)) {
+      if (_furnitureGhostTile != null) {
+        setState(() => _furnitureGhostTile = null);
+      }
+      return;
+    }
+    final held = ref.read(heldPlacedFurnitureIndexProvider);
+    final selected = ref.read(selectedFurnitureIdProvider);
+    if (held == null && selected == null) {
+      if (_furnitureGhostTile != null) {
+        setState(() => _furnitureGhostTile = null);
+      }
+      return;
+    }
+    final world = _screenToWorld(screenPos, constraints);
+    final col = (world.dx / kTileSize).floor();
+    final row = (world.dy / kTileSize).floor();
+    if (_furnitureGhostTile?.col != col || _furnitureGhostTile?.row != row) {
+      setState(() => _furnitureGhostTile = (col: col, row: row));
+    }
+  }
+
 
   bool _hitTestPlant(Offset screenPos, BoxConstraints constraints) {
-    final cw = _gameState.canvasWidth;
-    final ch = _gameState.canvasHeight;
-    final scaleX = constraints.maxWidth / cw;
-    final scaleY = constraints.maxHeight / ch;
-    final scale = math.min(scaleX, scaleY);
-    final offsetX = (constraints.maxWidth - cw * scale) / 2;
-    final offsetY = (constraints.maxHeight - ch * scale) / 2;
-
-    final worldX = (screenPos.dx - offsetX) / scale;
-    final worldY = (screenPos.dy - offsetY) / scale;
+    final fit = _canvasFit(constraints);
+    final worldX = (screenPos.dx - fit.offsetX) / fit.scale;
+    final worldY = (screenPos.dy - fit.offsetY) / fit.scale;
 
     for (final placement in _gameState.placedFurniture) {
       if (!placement.itemId.startsWith('plant_')) continue;
@@ -1253,13 +1291,16 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     BoxConstraints constraints, {
     bool buildModeActive = false,
   }) {
-    final cw = _gameState.canvasWidth;
-    final ch = _gameState.canvasHeight;
-    final scaleX = constraints.maxWidth / cw;
-    final scaleY = constraints.maxHeight / ch;
-    final scale = scaleX < scaleY ? scaleX : scaleY;
-    final offsetX = (constraints.maxWidth - cw * scale) / 2;
-    final offsetY = (constraints.maxHeight - ch * scale) / 2;
+    final fit = _canvasFit(constraints);
+    final scale = fit.scale;
+    final offsetX = fit.offsetX;
+    final offsetY = fit.offsetY;
+
+    // Soft-clamped UI scale for floating nameplates. We don't want the
+    // labels to grow past their design baseline (cap at 1.0) and we don't
+    // want them to shrink past readability on heavily zoomed-out big offices
+    // like the galley (floor at 0.55).
+    final uiScale = scale.clamp(0.55, 1.0);
 
     final widgets = <Widget>[];
 
@@ -1299,13 +1340,14 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       final highlighted = isSelected || isHovered;
       const borderColor = Color(0xFFFFC107); // amber for both hover & select
 
+      final bannerW = 96 * uiScale;
       widgets.add(
         Positioned(
-          left: screenX - 40,
+          left: screenX - bannerW / 2,
           top: screenY,
           child: GestureDetector(
             onTap: () {
-              ref.read(selectedAgentProvider.notifier).state = instanceId;
+              ref.read(selectedAgentProvider.notifier).select(instanceId);
               if (!_selectionVisible) {
                 setState(() => _selectionVisible = true);
               }
@@ -1320,14 +1362,14 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                 }
               },
               child: Container(
-                width: 96,
-                padding:
-                    const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                width: bannerW,
+                padding: EdgeInsets.symmetric(
+                    vertical: 2 * uiScale, horizontal: 4 * uiScale),
                 decoration: BoxDecoration(
                   color: highlighted
                       ? borderColor.withValues(alpha: 0.15)
                       : const Color(0xCC1A1A2E),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(6 * uiScale),
                   border: Border.all(
                     color: highlighted
                         ? borderColor.withValues(alpha: 0.4)
@@ -1349,7 +1391,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                             : isActive
                                 ? color
                                 : Colors.white.withValues(alpha: 0.85),
-                        fontSize: 9,
+                        fontSize: 9 * uiScale,
                         fontWeight: FontWeight.w600,
                         letterSpacing: 0.5,
                         shadows: const [
@@ -1368,7 +1410,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                         color: highlighted
                             ? Colors.white.withValues(alpha: 0.7)
                             : Colors.white.withValues(alpha: 0.5),
-                        fontSize: 7,
+                        fontSize: 7 * uiScale,
                         fontWeight: FontWeight.w400,
                       ),
                     ),
@@ -1379,7 +1421,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: color.withValues(alpha: 0.6),
-                          fontSize: 7,
+                          fontSize: 7 * uiScale,
                           fontWeight: FontWeight.w400,
                         ),
                       ),
@@ -1400,31 +1442,33 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       // Sprite bottom = (fRow + 1) * kTileSize + kForemanVertOffset; label 2 px below.
       final fScreenY = offsetY + ((fRow + 1) * kTileSize + kForemanVertOffset + 2) * scale;
 
+      final foremanW = 80 * uiScale;
       widgets.add(
         Positioned(
-          left: fScreenX - 40,
+          left: fScreenX - foremanW / 2,
           top: fScreenY,
           child: IgnorePointer(
             child: Container(
-              width: 80,
-              padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+              width: foremanW,
+              padding: EdgeInsets.symmetric(
+                  vertical: 2 * uiScale, horizontal: 4 * uiScale),
               decoration: BoxDecoration(
                 color: const Color(0xCC1A1A2E),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(6 * uiScale),
                 border: Border.all(
                   color: const Color(0xFFFFD700).withValues(alpha: 0.25),
                   width: 1,
                 ),
               ),
-              child: const Text(
+              child: Text(
                 'Фрімен',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Color(0xFFFFD700),
-                  fontSize: 9,
+                  color: const Color(0xFFFFD700),
+                  fontSize: 9 * uiScale,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.5,
-                  shadows: [
+                  shadows: const [
                     Shadow(color: Color(0xCC000000), blurRadius: 2),
                   ],
                 ),
@@ -2029,586 +2073,6 @@ class _ActiveAgentsStrip extends StatelessWidget {
   }
 }
 
-// ─── Comm Graph Panel ───────────────────────────────────────────────────────
-
-class _CommGraphPanel extends StatefulWidget {
-  final List<CommEvent> events;
-  const _CommGraphPanel({required this.events});
-
-  @override
-  State<_CommGraphPanel> createState() => _CommGraphPanelState();
-}
-
-class _CommGraphPanelState extends State<_CommGraphPanel> {
-  int? _windowMinutes = 30;
-
-  static const _windows = <int?, String>{
-    5: '5m',
-    30: '30m',
-    60: '1h',
-    180: '3h',
-    600: '10h',
-    1440: '24h',
-    null: 'Все',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final cutoff =
-        _windowMinutes != null ? now - _windowMinutes! * 60 * 1000 : 0;
-    final filtered =
-        widget.events.where((e) => e.timestamp >= cutoff).toList();
-
-    final edges = <(String, String), int>{};
-    for (final e in filtered) {
-      final key = (e.from, e.to);
-      edges[key] = (edges[key] ?? 0) + 1;
-    }
-
-    final sorted = edges.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
-    final c = context.appColors;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: c.surfaceDim,
-        border: Border(
-          top: BorderSide(color: c.divider),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.hub_outlined,
-                  size: 14, color: Colors.white.withValues(alpha: 0.4)),
-              const SizedBox(width: 6),
-              Text(
-                'Комунікації',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.5),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(width: 8),
-              for (final entry in _windows.entries)
-                Padding(
-                  padding: const EdgeInsets.only(right: 3),
-                  child: GestureDetector(
-                    onTap: () =>
-                        setState(() => _windowMinutes = entry.key),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: _windowMinutes == entry.key
-                            ? const Color(0xFF00C0D1)
-                                .withValues(alpha: 0.15)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                          color: _windowMinutes == entry.key
-                              ? const Color(0xFF00C0D1)
-                                  .withValues(alpha: 0.3)
-                              : Colors.white.withValues(alpha: 0.06),
-                        ),
-                      ),
-                      child: Text(
-                        entry.value,
-                        style: TextStyle(
-                          color: _windowMinutes == entry.key
-                              ? const Color(0xFF00C0D1)
-                              : Colors.white.withValues(alpha: 0.25),
-                          fontSize: 8,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          if (sorted.isEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                'Немає комунікацій у цьому вікні',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  fontSize: 9,
-                ),
-              ),
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final edge in sorted.take(12))
-                    _CommEdge(
-                      from: edge.key.$1,
-                      to: edge.key.$2,
-                      count: edge.value,
-                      fromColor: agentAccentColor(edge.key.$1),
-                      toColor: agentAccentColor(edge.key.$2),
-                    ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CommEdge extends StatelessWidget {
-  final String from;
-  final String to;
-  final int count;
-  final Color fromColor;
-  final Color toColor;
-
-  const _CommEdge({
-    required this.from,
-    required this.to,
-    required this.count,
-    required this.fromColor,
-    required this.toColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.03),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            from == 'user' ? 'Ви' : from,
-            style: TextStyle(
-              color: fromColor,
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 3),
-            child: Icon(
-              Icons.arrow_forward_rounded,
-              size: 9,
-              color: Colors.white.withValues(alpha: 0.2),
-            ),
-          ),
-          Text(
-            to == 'user' ? 'Ви' : to,
-            style: TextStyle(
-              color: toColor,
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-            decoration: BoxDecoration(
-              color: const Color(0xFF00C0D1).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(3),
-            ),
-            child: Text(
-              '$count',
-              style: const TextStyle(
-                color: Color(0xFF00C0D1),
-                fontSize: 8,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Team Metrics Bar ───────────────────────────────────────────────────────
-
-class _TeamMetricsBar extends StatelessWidget {
-  final Map<String, AgentMetrics> metrics;
-
-  const _TeamMetricsBar({required this.metrics});
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.appColors;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: BoxDecoration(
-        color: c.surface,
-        border: Border(
-          top: BorderSide(color: c.divider),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.analytics_outlined,
-                  size: 14, color: Colors.white.withValues(alpha: 0.4)),
-              const SizedBox(width: 6),
-              Text(
-                'Метрики команди',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.5),
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 12,
-            runSpacing: 6,
-            children: [
-              for (final entry in metrics.entries)
-                _buildChip(entry.key, entry.value),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildChip(String agentId, AgentMetrics m) {
-    return _MetricChip(
-      label: shortAgentLabel(agentId),
-      color: agentAccentColor(agentRoleOf(agentId)),
-      assigned: m.tasksAssigned,
-      completed: m.tasksCompleted,
-      rework: m.reworkCount,
-    );
-  }
-}
-
-class _MetricChip extends StatelessWidget {
-  final String label;
-  final Color color;
-  final int assigned;
-  final int completed;
-  final int rework;
-
-  const _MetricChip({
-    required this.label,
-    required this.color,
-    required this.assigned,
-    required this.completed,
-    required this.rework,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final hasRework = rework > 0;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: hasRework
-              ? const Color(0xFFEF4444).withValues(alpha: 0.3)
-              : color.withValues(alpha: 0.15),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 9,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$completed/$assigned',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 9,
-            ),
-          ),
-          if (hasRework) ...[
-            const SizedBox(width: 4),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-              decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(3),
-              ),
-              child: Text(
-                '${rework}rw',
-                style: const TextStyle(
-                  color: Color(0xFFEF4444),
-                  fontSize: 8,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Activity Log Panel ─────────────────────────────────────────────────────
-
-class _ActivityLogPanel extends StatefulWidget {
-  final List<ActivityEventMessage> events;
-  final bool expanded;
-  final VoidCallback onToggle;
-  final VoidCallback onClear;
-
-  const _ActivityLogPanel({
-    required this.events,
-    required this.expanded,
-    required this.onToggle,
-    required this.onClear,
-  });
-
-  @override
-  State<_ActivityLogPanel> createState() => _ActivityLogPanelState();
-}
-
-class _ActivityLogPanelState extends State<_ActivityLogPanel> {
-  final _scrollController = ScrollController();
-
-  @override
-  void didUpdateWidget(_ActivityLogPanel old) {
-    super.didUpdateWidget(old);
-    if (widget.events.length > old.events.length && widget.expanded) {
-      _scrollToBottom();
-    }
-  }
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 50), () {
-      if (_scrollController.hasClients) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
-    });
-  }
-
-  static const _eventIcons = <String, IconData>{
-    'started': Icons.play_arrow_rounded,
-    'tool_use': Icons.build_rounded,
-    'completed': Icons.check_circle_outline_rounded,
-    'delegated': Icons.call_split_rounded,
-    'error': Icons.error_outline_rounded,
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final count = widget.events.length;
-
-    final c = context.appColors;
-    return Container(
-      decoration: BoxDecoration(
-        color: c.surfaceDim,
-        border: Border(
-          top: BorderSide(color: c.divider),
-        ),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: widget.onToggle,
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.history_rounded,
-                    size: 14,
-                    color: Colors.white.withValues(alpha: 0.4),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Журнал активності',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.5),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  if (count > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00C0D1)
-                            .withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '$count',
-                        style: const TextStyle(
-                          color: Color(0xFF00C0D1),
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  const Spacer(),
-                  Icon(
-                    widget.expanded
-                        ? Icons.keyboard_arrow_down_rounded
-                        : Icons.keyboard_arrow_up_rounded,
-                    size: 16,
-                    color: Colors.white.withValues(alpha: 0.3),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (widget.expanded)
-            SizedBox(
-              height: 180,
-              child: Stack(
-                children: [
-                  count == 0
-                      ? Center(
-                          child: Text(
-                            'Поки що немає активності',
-                            style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.15),
-                              fontSize: 11,
-                            ),
-                          ),
-                        )
-                      : ListView.builder(
-                          controller: _scrollController,
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                          itemCount: count,
-                          itemBuilder: (context, i) {
-                            final e = widget.events[i];
-                            final color = agentAccentColor(e.agentId);
-                            final icon = _eventIcons[e.event] ??
-                                Icons.circle_outlined;
-                            final time =
-                                '${e.timestamp.hour.toString().padLeft(2, '0')}:'
-                                '${e.timestamp.minute.toString().padLeft(2, '0')}:'
-                                '${e.timestamp.second.toString().padLeft(2, '0')}';
-
-                            return Padding(
-                              padding: const EdgeInsets.only(top: 3),
-                              child: Row(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
-                                children: [
-                                  SizedBox(
-                                    width: 52,
-                                    child: Text(
-                                      time,
-                                      style: TextStyle(
-                                        color: Colors.white
-                                            .withValues(alpha: 0.2),
-                                        fontSize: 9,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                  ),
-                                  Icon(icon, size: 11, color: color),
-                                  const SizedBox(width: 4),
-                                  SizedBox(
-                                    width: 62,
-                                    child: Text(
-                                      e.agentId,
-                                      style: TextStyle(
-                                        color: color,
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Expanded(
-                                    child: Text(
-                                      e.detail,
-                                      style: TextStyle(
-                                        color: Colors.white
-                                            .withValues(alpha: 0.45),
-                                        fontSize: 9,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                  if (count > 0)
-                    Positioned(
-                      right: 8,
-                      bottom: 8,
-                      child: GestureDetector(
-                        onTap: widget.onClear,
-                        child: Container(
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E1E24),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.08),
-                            ),
-                          ),
-                          child: Icon(
-                            Icons.delete_outline_rounded,
-                            size: 14,
-                            color: Colors.white.withValues(alpha: 0.3),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
 
 /// Resolves the cursor shown over the build-mode canvas.
 ///
@@ -2652,4 +2116,17 @@ String ghostInvalidReasonLabel(GhostInvalidReason? reason) {
     case GhostInvalidReason.insufficientGrymni:
       return 'не вистачає ₲';
   }
+}
+
+/// Result of fitting the office canvas into the available viewport. Shared by
+/// the painter, overlay widgets, and hit-tests so the three never drift.
+class _CanvasFit {
+  final double scale;
+  final double offsetX;
+  final double offsetY;
+  const _CanvasFit({
+    required this.scale,
+    required this.offsetX,
+    required this.offsetY,
+  });
 }

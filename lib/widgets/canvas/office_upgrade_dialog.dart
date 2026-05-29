@@ -74,36 +74,6 @@ class _OfficeUpgradeDialog extends ConsumerWidget {
                     ),
                   ),
                   const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: _gold.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: _gold.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text('₲',
-                            style: TextStyle(
-                                color: _gold,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900)),
-                        const SizedBox(width: 4),
-                        Text(
-                          _formatNumber(game.grymni),
-                          style: const TextStyle(
-                            color: _gold,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   IconButton(
                     onPressed: () => Navigator.of(context).pop(),
                     icon: Icon(

@@ -11,7 +11,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/game_economy_provider.dart';
 import '../../providers/ws_provider.dart';
+import 'foreman_overlay_painter.dart' show doorLeftColFor;
+import 'office_game_state.dart' show kTileSize;
 
 // ─── Sprite data (8 cols × 12 rows) ─────────────────────────────────────────
 
@@ -95,9 +98,16 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
 
   _Phase _phase = _Phase.hidden;
 
-  // Normalised position within canvas [0..1]
-  double _nx = 0.5, _ny = -0.20;
-  double _targetNx = 0.4, _targetNy = 0.45;
+  // Position in office tile-space. (0,0) = top-left of grid; walkable deck is
+  // cols [1..gridCols-2], rows [1..gridRows-2]. Negative ty means the janitor
+  // is behind the back wall (off-grid, hidden).
+  double _tx = 10.0, _ty = -1.5;
+  double _targetTx = 8.0, _targetTy = 4.0;
+
+  // Latest grid dimensions captured each build from gameEconomyProvider — used
+  // by ticker math (which runs outside build) to clamp wander targets.
+  int _gridCols = 20;
+  int _gridRows = 12;
 
   // Walk animation
   int _walkFrame = 0;
@@ -114,11 +124,9 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
   // 5-second delay timer before janitor appears
   Timer? _delayTimer;
 
-  // Filled by LayoutBuilder each build
-  Size _size = Size.zero;
-
-  static const _kSpeed = 55.0;
-  static const _kFastSpeed = 90.0;
+  // Tiles per second.
+  static const _kSpeed = 3.4;
+  static const _kFastSpeed = 5.6;
   static const _kFrameRate = 0.14;
   static const _kPixelSize = 3.0;
   static const _kSweepAmp = 0.6;
@@ -127,10 +135,11 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
   static const _kHandOffsetY = 0.30;
   static const _kHandleLen = 28.0;
 
-  // Back-wall door x (mirrors doorLeftColFor for gridCols=20: col 9 → 9.5 tiles → nx≈0.475)
-  static const _kDoorNx = 0.475;
-  // Off-screen above the canvas: character is fully hidden until it walks in
-  static const _kDoorOffNy = -0.20;
+  // Off-grid Y for entry/exit — 1.5 tiles above the back wall so the sprite
+  // is fully hidden above the deck.
+  static const _kDoorOffTy = -1.5;
+
+  double get _doorCenterTx => doorLeftColFor(_gridCols) + 1.0;
 
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -157,12 +166,12 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
     _delayTimer?.cancel();
     _delayTimer = Timer(const Duration(seconds: 5), () {
       if (!mounted || _phase != _Phase.hidden) return;
-      // Start at the door position (off-screen above back wall)
-      _nx = _kDoorNx;
-      _ny = _kDoorOffNy;
-      // First wander target: somewhere in the upper-middle office area
-      _targetNx = 0.25 + _rng.nextDouble() * 0.50;
-      _targetNy = 0.35 + _rng.nextDouble() * 0.25;
+      // Start at the door position (off-grid above the back wall).
+      _tx = _doorCenterTx;
+      _ty = _kDoorOffTy;
+      // First wander target: somewhere in the upper half of the deck.
+      _targetTx = 2.0 + _rng.nextDouble() * (_gridCols - 5).clamp(1, 999);
+      _targetTy = 2.0 + _rng.nextDouble() * ((_gridRows - 5) * 0.5).clamp(1, 999);
       _facingLeft = false;
       _isSweeping = false;
       setState(() => _phase = _Phase.doorEntry);
@@ -180,8 +189,15 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
   }
 
   void _pickTarget() {
-    _targetNx = 0.10 + _rng.nextDouble() * 0.80;
-    _targetNy = 0.30 + _rng.nextDouble() * 0.50;
+    // Stay inside the deck with a one-tile margin from walls. For very small
+    // grids the clamp collapses the range to a single point — that's fine,
+    // the janitor will just stop in the middle.
+    final minTx = 2.0;
+    final maxTx = (_gridCols - 3).toDouble().clamp(minTx, double.infinity);
+    final minTy = 2.0;
+    final maxTy = (_gridRows - 3).toDouble().clamp(minTy, double.infinity);
+    _targetTx = minTx + _rng.nextDouble() * (maxTx - minTx);
+    _targetTy = minTy + _rng.nextDouble() * (maxTy - minTy);
   }
 
   // ─── Ticker ────────────────────────────────────────────────────────────────
@@ -192,7 +208,7 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
         .clamp(0.0, 0.1);
     _lastElapsed = elapsed;
 
-    if (_phase == _Phase.hidden || _size == Size.zero) return;
+    if (_phase == _Phase.hidden) return;
     _step(dt);
     setState(() {});
   }
@@ -203,9 +219,9 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
         // Walk in from door; switch to wandering once the first target is reached.
         _moveTo(dt, _kFastSpeed);
         _tickFrame(dt);
-        final edx = (_targetNx - _nx) * _size.width;
-        final edy = (_targetNy - _ny) * _size.height;
-        if (edx * edx + edy * edy < 16.0) {
+        final edx = _targetTx - _tx;
+        final edy = _targetTy - _ty;
+        if (edx * edx + edy * edy < 0.25) {
           _isSweeping = false;
           _pickTarget();
           _phase = _Phase.wandering;
@@ -215,12 +231,12 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
         _wander(dt);
 
       case _Phase.doorExit:
-        // Walk back to door and disappear off the top edge.
-        _targetNx = _kDoorNx;
-        _targetNy = _kDoorOffNy;
+        // Walk back to door and disappear above the back wall.
+        _targetTx = _doorCenterTx;
+        _targetTy = _kDoorOffTy;
         _moveTo(dt, _kFastSpeed);
         _tickFrame(dt);
-        if (_ny <= _kDoorOffNy + 0.02) {
+        if (_ty <= _kDoorOffTy + 0.2) {
           _phase = _Phase.hidden;
         }
 
@@ -247,9 +263,9 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
     } else {
       _moveTo(dt, _kSpeed);
       _tickFrame(dt);
-      final dx = (_targetNx - _nx) * _size.width;
-      final dy = (_targetNy - _ny) * _size.height;
-      if (dx * dx + dy * dy < 16.0) {
+      final dx = _targetTx - _tx;
+      final dy = _targetTy - _ty;
+      if (dx * dx + dy * dy < 0.25) {
         _isSweeping = true;
         _sweepTimer = 2.0 + _rng.nextDouble() * 2.5;
         _sweepDir = 1.0;
@@ -261,13 +277,13 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
   }
 
   void _moveTo(double dt, double speed) {
-    final dx = (_targetNx - _nx) * _size.width;
-    final dy = (_targetNy - _ny) * _size.height;
+    final dx = _targetTx - _tx;
+    final dy = _targetTy - _ty;
     final dist = math.sqrt(dx * dx + dy * dy);
-    if (dist < 0.5) return;
+    if (dist < 0.02) return;
     final step = math.min(speed * dt, dist);
-    _nx += dx / dist * step / _size.width;
-    _ny += dy / dist * step / _size.height;
+    _tx += dx / dist * step;
+    _ty += dy / dist * step;
     _facingLeft = dx < 0;
   }
 
@@ -292,25 +308,26 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
       }
     });
 
+    final game = ref.watch(gameEconomyProvider);
+    _gridCols = game.gridCols;
+    _gridRows = game.gridRows;
+
     if (_phase == _Phase.hidden) return const SizedBox.expand();
 
-    return LayoutBuilder(
-      builder: (_, constraints) {
-        _size = constraints.biggest;
-        return IgnorePointer(
-          child: CustomPaint(
-            painter: _JanitorPainter(
-              nx: _nx,
-              ny: _ny,
-              walkFrame: _walkFrame,
-              facingLeft: _facingLeft,
-              isSweeping: _isSweeping,
-              sweepAngle: _sweepAngle,
-            ),
-            child: const SizedBox.expand(),
-          ),
-        );
-      },
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _JanitorPainter(
+          tx: _tx,
+          ty: _ty,
+          gridCols: _gridCols,
+          gridRows: _gridRows,
+          walkFrame: _walkFrame,
+          facingLeft: _facingLeft,
+          isSweeping: _isSweeping,
+          sweepAngle: _sweepAngle,
+        ),
+        child: const SizedBox.expand(),
+      ),
     );
   }
 }
@@ -318,7 +335,8 @@ class _JanitorOverlayState extends ConsumerState<JanitorOverlay>
 // ─── Painter ─────────────────────────────────────────────────────────────────
 
 class _JanitorPainter extends CustomPainter {
-  final double nx, ny;
+  final double tx, ty;
+  final int gridCols, gridRows;
   final int walkFrame;
   final bool facingLeft;
   final bool isSweeping;
@@ -334,8 +352,10 @@ class _JanitorPainter extends CustomPainter {
   double get _charH => 12 * _ps;
 
   const _JanitorPainter({
-    required this.nx,
-    required this.ny,
+    required this.tx,
+    required this.ty,
+    required this.gridCols,
+    required this.gridRows,
     required this.walkFrame,
     required this.facingLeft,
     required this.isSweeping,
@@ -346,8 +366,16 @@ class _JanitorPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
 
-    final cx = nx * size.width;
-    final cy = ny * size.height;
+    // Replicate PixelOfficePainter's fit-to-viewport transform so tile-space
+    // coordinates land on the actual deck, regardless of letterboxing.
+    final canvasW = gridCols * kTileSize;
+    final canvasH = gridRows * kTileSize;
+    final scale = math.min(size.width / canvasW, size.height / canvasH);
+    final offsetX = (size.width - canvasW * scale) / 2;
+    final offsetY = (size.height - canvasH * scale) / 2;
+
+    final cx = offsetX + tx * kTileSize * scale;
+    final cy = offsetY + ty * kTileSize * scale;
 
     // Skip drawing if fully off-screen (performance guard)
     if (cy < -_charH * 1.5 || cy > size.height + _charH) return;
@@ -426,8 +454,10 @@ class _JanitorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_JanitorPainter old) =>
-      old.nx != nx ||
-      old.ny != ny ||
+      old.tx != tx ||
+      old.ty != ty ||
+      old.gridCols != gridCols ||
+      old.gridRows != gridRows ||
       old.walkFrame != walkFrame ||
       old.facingLeft != facingLeft ||
       old.isSweeping != isSweeping ||

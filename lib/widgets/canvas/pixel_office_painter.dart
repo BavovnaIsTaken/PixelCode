@@ -19,6 +19,7 @@ import 'character_skins.dart';
 import 'room_sprites.dart';
 import 'character_sprites.dart';
 import 'computer_sprites.dart';
+import 'galley_sprites.dart';
 import 'office_game_state.dart';
 import 'pixel_sprites.dart';
 import 'room_themes.dart';
@@ -49,6 +50,11 @@ class PixelOfficePainter extends CustomPainter {
   final List<PlacedRoom> placedRooms;
   final bool editMode;
   final String? selectedFurnitureId;
+
+  /// Index into [placedFurniture] of an item the player has picked up to
+  /// move. Drawn with a pulsing outline in the edit overlay so the player
+  /// sees what's "in hand". Null when nothing is held.
+  final int? heldPlacedFurnitureIndex;
   final bool buildMode;
   final RoomType? ghostRoomType;
   final int? ghostRoomCol;
@@ -106,6 +112,17 @@ class PixelOfficePainter extends CustomPainter {
   /// Used to draw a micro-glyph above specialized agents on the canvas.
   final Map<String, Set<String>> agentSpecializations;
 
+  /// Translucent "drop preview" footprint for the furniture edit flow. The
+  /// painter draws this rectangle at (col,row) sized to the item's tile
+  /// footprint, tinted green when [ghostFurnitureValid] is true and red
+  /// otherwise. Mirrors the buy-mode ghost so a held / selected item visibly
+  /// follows the cursor. Null fields mean "no ghost" (empty hand or pointer
+  /// outside the canvas).
+  final FurnitureItem? ghostFurnitureItem;
+  final int? ghostFurnitureCol;
+  final int? ghostFurnitureRow;
+  final bool ghostFurnitureValid;
+
   PixelOfficePainter({
     required this.gameState,
     this.sprites,
@@ -118,6 +135,7 @@ class PixelOfficePainter extends CustomPainter {
     this.placedRooms = const [],
     this.editMode = false,
     this.selectedFurnitureId,
+    this.heldPlacedFurnitureIndex,
     this.buildMode = false,
     this.ghostRoomType,
     this.ghostRoomCol,
@@ -138,6 +156,10 @@ class PixelOfficePainter extends CustomPainter {
     this.corridorAnchorCol,
     this.corridorAnchorRow,
     this.agentSpecializations = const {},
+    this.ghostFurnitureItem,
+    this.ghostFurnitureCol,
+    this.ghostFurnitureRow,
+    this.ghostFurnitureValid = true,
   });
 
   bool get _hasImages => sprites != null && sprites!.isLoaded;
@@ -177,16 +199,187 @@ class PixelOfficePainter extends CustomPainter {
     canvas.translate(offsetX, offsetY);
     canvas.scale(scale);
 
+    final isGalley = officeLevel == OfficeLevel.galley;
+    if (isGalley) {
+      // Sea fills the FULL visible viewport, not just the painter's
+      // effective canvas — so empty space around the galley is open ocean,
+      // not the black void of an unpainted canvas. Compute the viewport in
+      // painter-local coords (post translate+scale) and feed that as bounds.
+      final visibleBounds = Rect.fromLTWH(
+        -offsetX / scale,
+        -offsetY / scale,
+        size.width / scale,
+        size.height / scale,
+      );
+      drawGalleySea(
+        canvas: canvas,
+        bounds: visibleBounds,
+        deckRect: Rect.fromLTWH(
+          0,
+          0,
+          gameState.canvasWidth,
+          gameState.canvasHeight,
+        ),
+        tick: tick,
+      );
+    }
+
     _drawFloorAndWalls(canvas);
+    if (isGalley) _drawGalleyHullDecor(canvas);
     _drawPlacedRooms(canvas);
     _drawCorridors(canvas);
     _drawScene(canvas);
+    if (isGalley) _drawGalleyTopLayer(canvas);
     _drawBubbles(canvas);
     _drawVignette(canvas);
     if (editMode) _drawEditOverlay(canvas);
     if (buildMode) _drawBuildOverlay(canvas);
 
     canvas.restore();
+  }
+
+  // ─── Galley environment ─────────────────────────────────────────────────
+
+  /// Hull cap + foam rim drawn directly after the wall ring. Painted in the
+  /// translated grid-space (origin at the top-left of the wall ring), so the
+  /// outerWallRect is the full grid rect.
+  void _drawGalleyHullDecor(Canvas canvas) {
+    final outerWallRect = Rect.fromLTWH(
+      0,
+      0,
+      gameState.canvasWidth,
+      gameState.canvasHeight,
+    );
+    drawGalleyHullCap(canvas: canvas, outerWallRect: outerWallRect);
+
+    // Static deck decor: barrels, anchor, drum, rope coils, amphorae.
+    // Positioned along the inner edges of the deck so they read as ship
+    // gear without obstructing agent pathing in the centre.
+    final gCols = gameState.gridCols;
+    final gRows = gameState.gridRows;
+    final innerLeftPx = kTileSize.toDouble();
+    final innerTopPx = kTileSize.toDouble();
+    final innerRightPx = (gCols - 1) * kTileSize - 1;
+    final innerBottomPx = (gRows - 1) * kTileSize - 1;
+
+    // Structural fixtures only — barrels/amphorae/rope coils are now
+    // purchasable furniture so the player decorates the deck themselves.
+    // Drum + anchor stay as ship-iconography props.
+    drawGalleyAnchor(
+      canvas: canvas,
+      x: innerRightPx - 18,
+      y: innerBottomPx - 22,
+    );
+    drawGalleyWarDrum(
+      canvas: canvas,
+      x: innerLeftPx + 4,
+      y: innerTopPx + 4,
+      tick: tick,
+    );
+
+    // Hanging lanterns on the long sides (mid-points)
+    drawGalleyLantern(
+      canvas: canvas,
+      x: innerLeftPx + (innerRightPx - innerLeftPx) * 0.25 - 4,
+      y: innerTopPx + 2,
+      tick: tick,
+    );
+    drawGalleyLantern(
+      canvas: canvas,
+      x: innerLeftPx + (innerRightPx - innerLeftPx) * 0.75 - 4,
+      y: innerTopPx + 2,
+      tick: tick,
+    );
+
+    // Through-hull oars: handle on the deck, blade out in the water. Count
+    // scales with the galley length (every ~3 tiles along the bulwark) so a
+    // longer ship gets a longer rowing bank. Reserve 4 tiles at each end for
+    // bow/stern clearance. Staggered tick offsets desynchronise the rowing
+    // cycle for organic motion.
+    final gRowsLocal = gameState.gridRows;
+    final reservedEndTiles = 4;
+    final bankSpan = gRowsLocal - 2 * reservedEndTiles;
+    final oarCount = (bankSpan / 3).floor().clamp(2, 14);
+    final leftPivotX = kTileSize.toDouble();
+    final rightPivotX = (gameState.gridCols - 1) * kTileSize.toDouble();
+    for (int i = 0; i < oarCount; i++) {
+      final t = (i + 0.5) / oarCount;
+      final pivotY = reservedEndTiles * kTileSize + bankSpan * kTileSize * t;
+      drawGalleyOarThroughHull(
+        canvas: canvas,
+        pivotX: leftPivotX,
+        pivotY: pivotY,
+        direction: -1,
+        tick: tick + i * 7,
+      );
+      drawGalleyOarThroughHull(
+        canvas: canvas,
+        pivotX: rightPivotX,
+        pivotY: pivotY,
+        direction: 1,
+        tick: tick + i * 11,
+      );
+    }
+  }
+
+  /// Galley structural features drawn after the z-sorted scene so they
+  /// read as foreground silhouettes: bow ram + forecastle at the front,
+  /// stern platform + lantern + shields along the back.
+  void _drawGalleyTopLayer(Canvas canvas) {
+    final gCols = gameState.gridCols;
+    final gRows = gameState.gridRows;
+    final innerCols = gCols - 2;
+
+    // Bow ram extending past the top wall — pointed prow read.
+    final bowWidthTiles = (innerCols - 1).clamp(2, innerCols);
+    final bowWidth = kTileSize * bowWidthTiles;
+    final bowRect = Rect.fromLTWH(
+      (gCols * kTileSize - bowWidth) / 2,
+      -kTileSize * 0.75,
+      bowWidth,
+      kTileSize,
+    );
+    drawGalleyBow(canvas: canvas, bowRect: bowRect, figureheadEnabled: true);
+
+    // Stern platform near the back of the ship — captain's deck.
+    final sternWidthTiles = (innerCols - 1).clamp(2, innerCols);
+    final sternWidth = kTileSize * sternWidthTiles;
+    final sternRect = Rect.fromLTWH(
+      (gCols * kTileSize - sternWidth) / 2,
+      (gRows - 2) * kTileSize - 2,
+      sternWidth,
+      kTileSize * 1.2,
+    );
+    drawGalleySternPlatform(
+      canvas: canvas,
+      platformRect: sternRect,
+      tick: tick,
+    );
+
+    // Stern lantern post on the rear corner of the platform.
+    drawGalleyLantern(
+      canvas: canvas,
+      x: sternRect.right - 10,
+      y: sternRect.top - 10,
+      tick: tick,
+    );
+    drawGalleyLantern(
+      canvas: canvas,
+      x: sternRect.left + 2,
+      y: sternRect.top - 10,
+      tick: tick + 13,
+    );
+
+    // Shields lining the long bulwarks — alternating sides, evenly spaced.
+    // Skip the first/last two rows so they don't clash with bow/stern.
+    final shieldCount = ((gRows - 6) / 4).floor().clamp(2, 12);
+    for (int i = 0; i < shieldCount; i++) {
+      final t = (i + 1) / (shieldCount + 1);
+      final y = 2 * kTileSize + (gRows - 4) * kTileSize * t;
+      final leftSide = i.isEven;
+      final x = leftSide ? kTileSize.toDouble() - 4 : (gCols - 1) * kTileSize - 8;
+      drawGalleyShieldOnRail(canvas: canvas, x: x, y: y);
+    }
   }
 
   // ─── Floor & walls ──────────────────────────────────────────────────────
@@ -827,6 +1020,10 @@ class PixelOfficePainter extends CustomPainter {
         continue;
       }
 
+      if (_addGalleyCargoSprite(drawables, placement, item)) {
+        continue;
+      }
+
       final baseX = placement.col * kTileSize;
       final baseY = placement.row * kTileSize;
       final w = item.widthTiles * kTileSize;
@@ -867,6 +1064,51 @@ class PixelOfficePainter extends CustomPainter {
         );
       }));
     }
+  }
+
+  // ─── Galley cargo sprites (purchasable ship-themed furniture) ────────
+
+  /// Returns true when [item] is a galley cargo prop and a sprite was added;
+  /// the caller then skips the generic furniture fallback. Always anchored
+  /// inside the placement's footprint so move/sell/edit gestures keep working
+  /// through the existing furniture system unchanged.
+  bool _addGalleyCargoSprite(
+    List<_Drawable> drawables,
+    FurniturePlacement placement,
+    FurnitureItem item,
+  ) {
+    final baseX = placement.col * kTileSize.toDouble();
+    final baseY = placement.row * kTileSize.toDouble();
+    final zY = (placement.row + 1) * kTileSize.toDouble();
+
+    switch (item.id) {
+      case 'ship_barrel':
+        drawables.add(_Drawable(zY, (c) {
+          drawGalleyBarrel(canvas: c, x: baseX + 2, y: baseY + 3, stacked: false);
+        }));
+        return true;
+      case 'ship_barrel_stack':
+        drawables.add(_Drawable(zY, (c) {
+          drawGalleyBarrel(canvas: c, x: baseX, y: baseY, stacked: true);
+        }));
+        return true;
+      case 'ship_crate':
+        drawables.add(_Drawable(zY, (c) {
+          drawGalleyCrate(canvas: c, x: baseX + 1, y: baseY + 2);
+        }));
+        return true;
+      case 'ship_amphora':
+        drawables.add(_Drawable(zY, (c) {
+          drawGalleyAmphora(canvas: c, x: baseX + 4, y: baseY + 1);
+        }));
+        return true;
+      case 'ship_rope_coil':
+        drawables.add(_Drawable(zY, (c) {
+          drawGalleyRopeCoil(canvas: c, x: baseX + 2, y: baseY + 4);
+        }));
+        return true;
+    }
+    return false;
   }
 
   // ─── Plant sprite (purchasable decoration with bounce easter egg) ────
@@ -1539,7 +1781,12 @@ class PixelOfficePainter extends CustomPainter {
       );
     }
 
-    // Highlight placed furniture outlines
+    // Highlight placed furniture outlines. The held item (player picked it
+    // up to move) gets a thicker, brighter, pulsing stroke so it reads as
+    // distinct from passive "you can edit me" outlines.
+    final pulse = ((tick % 30) / 30.0); // 0..1 sawtooth
+    final pulseAlpha = 0.55 + 0.35 * (1 - (pulse - 0.5).abs() * 2).clamp(0, 1);
+
     for (int i = 0; i < placedFurniture.length; i++) {
       final placement = placedFurniture[i];
       final item = furnitureById(placement.itemId);
@@ -1549,13 +1796,53 @@ class PixelOfficePainter extends CustomPainter {
       final fy = placement.row * kTileSize;
       final fw = item.widthTiles * kTileSize;
       final fh = item.heightTiles * kTileSize;
+      final isHeld = i == heldPlacedFurnitureIndex;
 
       canvas.drawRect(
         Rect.fromLTWH(fx + 0.5, fy + 0.5, fw - 1, fh - 1),
         Paint()
-          ..color = const Color(0xFFFFD700).withValues(alpha: 0.5)
+          ..color = isHeld
+              ? const Color(0xFF7CFF7C).withValues(alpha: pulseAlpha)
+              : const Color(0xFFFFD700).withValues(alpha: 0.5)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1,
+          ..strokeWidth = isHeld ? 2 : 1,
+      );
+
+      if (isHeld) {
+        // Inner glow — softens the harsh stroke and reads as "lifted".
+        canvas.drawRect(
+          Rect.fromLTWH(fx + 1.5, fy + 1.5, fw - 3, fh - 3),
+          Paint()
+            ..color = const Color(0xFF7CFF7C).withValues(alpha: 0.18)
+            ..style = PaintingStyle.fill,
+        );
+      }
+    }
+
+    // Drop-preview ghost: the held / selected item's footprint at the current
+    // hover tile, tinted by validity. Drawn last so it sits on top of the
+    // gridlines and the held-item outline.
+    final ghostItem = ghostFurnitureItem;
+    final ghostCol = ghostFurnitureCol;
+    final ghostRow = ghostFurnitureRow;
+    if (ghostItem != null && ghostCol != null && ghostRow != null) {
+      final gx = ghostCol * kTileSize;
+      final gy = ghostRow * kTileSize;
+      final gw = ghostItem.widthTiles * kTileSize;
+      final gh = ghostItem.heightTiles * kTileSize;
+      final tint = ghostFurnitureValid
+          ? const Color(0xFF7CFF7C)
+          : const Color(0xFFFF6B6B);
+      canvas.drawRect(
+        Rect.fromLTWH(gx, gy, gw, gh),
+        Paint()..color = tint.withValues(alpha: 0.22),
+      );
+      canvas.drawRect(
+        Rect.fromLTWH(gx + 0.5, gy + 0.5, gw - 1, gh - 1),
+        Paint()
+          ..color = tint.withValues(alpha: 0.9)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
       );
     }
   }

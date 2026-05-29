@@ -135,7 +135,10 @@ class BuildMenu extends ConsumerWidget {
           IconButton(
             tooltip: 'Вийти',
             icon: Icon(Icons.close, color: c.textHigh),
-            onPressed: () => ref.read(buildModeProvider.notifier).exit(),
+            onPressed: () {
+              FurnitureEditModeCoord.exit(ref);
+              ref.read(buildModeProvider.notifier).exit();
+            },
           ),
           const SizedBox(height: 4),
           _SlidingRail(
@@ -145,23 +148,25 @@ class BuildMenu extends ConsumerWidget {
           ),
           const Spacer(),
           IconButton(
-            tooltip: isEditMode ? 'Вийти з редагування' : 'Видалити кімнати',
+            tooltip:
+                isEditMode ? 'Вийти з редагування' : 'Редагувати розміщене',
             icon: Icon(
               isEditMode ? Icons.edit_off : Icons.edit_outlined,
               color: isEditMode ? c.gold : c.textMedium,
             ),
             onPressed: () {
-              final next = !ref.read(furnitureEditModeProvider);
-              if (!next) {
-                // Exiting edit mode: clear furniture placement selection.
-                ref.read(selectedFurnitureIdProvider.notifier).state = null;
+              if (isEditMode) {
+                FurnitureEditModeCoord.exit(ref);
               } else {
-                // Entering edit mode abandons any in-flight pick — can't
-                // place and delete at the same time.
+                // Entering edit mode abandons any in-flight room/template
+                // pick — can't place rooms and manipulate furniture
+                // simultaneously.
                 ref.read(buildModeProvider.notifier).clearSelection();
+                FurnitureEditModeCoord.enterEmpty(ref);
               }
             },
           ),
+          if (isEditMode) _DeleteHeldButton(c: c),
           const SizedBox(height: 12),
         ],
       ),
@@ -261,6 +266,7 @@ class BuildMenu extends ConsumerWidget {
 
   Widget _chipRow(BuildContext context, WidgetRef ref, BuildSection active) {
     final c = context.appColors;
+    final isEditMode = ref.watch(furnitureEditModeProvider);
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -269,10 +275,33 @@ class BuildMenu extends ConsumerWidget {
           IconButton(
             tooltip: 'Вийти',
             icon: Icon(Icons.close, color: c.textHigh, size: 20),
-            onPressed: () => ref.read(buildModeProvider.notifier).exit(),
+            onPressed: () {
+              FurnitureEditModeCoord.exit(ref);
+              ref.read(buildModeProvider.notifier).exit();
+            },
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
+          IconButton(
+            tooltip:
+                isEditMode ? 'Вийти з редагування' : 'Редагувати розміщене',
+            icon: Icon(
+              isEditMode ? Icons.edit_off : Icons.edit_outlined,
+              color: isEditMode ? c.gold : c.textMedium,
+              size: 20,
+            ),
+            onPressed: () {
+              if (isEditMode) {
+                FurnitureEditModeCoord.exit(ref);
+              } else {
+                ref.read(buildModeProvider.notifier).clearSelection();
+                FurnitureEditModeCoord.enterEmpty(ref);
+              }
+            },
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          ),
+          if (isEditMode) _DeleteHeldButton(c: c, compact: true),
           const SizedBox(width: 8),
           Expanded(
             child: ListView(
@@ -780,6 +809,47 @@ class BuildMenu extends ConsumerWidget {
 
   bool _isRoomAvailable(RoomType type, GameState game) =>
       isRoomAvailableForTier(type, game.officeLevel);
+}
+
+/// Explicit "delete held furniture" affordance. Surfaced inside the build
+/// menu only while the player is holding a placed item (after picking it up
+/// in edit mode). Replaces the old long-press-on-canvas delete, which was
+/// indistinguishable from a slightly-long click and ate the pickup.
+///
+/// Held → pressing this removes the item from the office and clears the
+/// hold so the player exits the move flow cleanly. Empty hand → hidden, so
+/// the surface stays inert until there's something to delete.
+class _DeleteHeldButton extends ConsumerWidget {
+  final ThemeColors c;
+  final bool compact;
+  const _DeleteHeldButton({required this.c, this.compact = false});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final heldIdx = ref.watch(heldPlacedFurnitureIndexProvider);
+    if (heldIdx == null) return const SizedBox.shrink();
+    return IconButton(
+      tooltip: 'Видалити вибране',
+      icon: Icon(
+        Icons.delete_outline,
+        color: const Color(0xFFFF6B6B),
+        size: compact ? 20 : 24,
+      ),
+      onPressed: () {
+        final economy = ref.read(gameEconomyProvider);
+        if (heldIdx < 0 || heldIdx >= economy.placedFurniture.length) {
+          FurnitureEditModeCoord.releaseHold(ref);
+          return;
+        }
+        ref.read(gameEconomyProvider.notifier).removePlacedFurniture(heldIdx);
+        FurnitureEditModeCoord.releaseHold(ref);
+      },
+      padding: compact ? EdgeInsets.zero : null,
+      constraints: compact
+          ? const BoxConstraints(minWidth: 32, minHeight: 32)
+          : null,
+    );
+  }
 }
 
 class _SectionLabel extends StatelessWidget {

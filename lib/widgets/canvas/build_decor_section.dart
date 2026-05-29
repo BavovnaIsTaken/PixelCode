@@ -116,9 +116,8 @@ class _BuildDecorSectionState extends ConsumerState<BuildDecorSection> {
               );
             },
             onActivate: () =>
-                ref.read(selectedFurnitureIdProvider.notifier).state = item.id,
-            onDeactivate: () =>
-                ref.read(selectedFurnitureIdProvider.notifier).state = null,
+                FurnitureEditModeCoord.enterPlacement(ref, item.id),
+            onDeactivate: () => FurnitureEditModeCoord.releaseHold(ref),
           ),
       ],
     );

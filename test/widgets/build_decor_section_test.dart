@@ -63,20 +63,46 @@ void main() {
     container.dispose();
   });
 
-  testWidgets('furnitureEditModeProvider is derived from selectedFurnitureIdProvider',
+  testWidgets(
+      'FurnitureEditModeCoord keeps editMode/selectedId/held invariants',
       (tester) async {
     final container = await _makeContainer();
     await _pumpDecor(tester, container);
     await tester.pump();
 
     expect(container.read(furnitureEditModeProvider), isFalse);
-    container.read(selectedFurnitureIdProvider.notifier).state =
-        'coffee_table_basic';
-    await tester.pump();
-    expect(container.read(furnitureEditModeProvider), isTrue);
 
-    container.read(selectedFurnitureIdProvider.notifier).state = null;
+    // enterPlacement turns edit on and sets selected, clears held.
+    FurnitureEditModeCoordContainer.enterPlacement(
+        container, 'coffee_table_basic');
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(
+        container.read(selectedFurnitureIdProvider), 'coffee_table_basic');
+    expect(container.read(heldPlacedFurnitureIndexProvider), isNull);
+
+    // enterMove swaps to held, clears selected, keeps edit on.
+    FurnitureEditModeCoordContainer.enterMove(container, 3);
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    expect(container.read(heldPlacedFurnitureIndexProvider), 3);
+
+    // releaseHold clears in-hand items but leaves edit mode on.
+    FurnitureEditModeCoordContainer.releaseHold(container);
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    expect(container.read(heldPlacedFurnitureIndexProvider), isNull);
+
+    // exit drops everything.
+    FurnitureEditModeCoordContainer.exit(container);
     expect(container.read(furnitureEditModeProvider), isFalse);
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    expect(container.read(heldPlacedFurnitureIndexProvider), isNull);
+
+    // enterEmpty (pencil button entry) flips edit on without any in-hand.
+    FurnitureEditModeCoordContainer.enterEmpty(container);
+    expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(container.read(selectedFurnitureIdProvider), isNull);
+    expect(container.read(heldPlacedFurnitureIndexProvider), isNull);
 
     await tester.pumpWidget(const SizedBox.shrink());
     container.dispose();
@@ -104,23 +130,29 @@ void main() {
     container.dispose();
   });
 
-  testWidgets('tapping active item deactivates placement', (tester) async {
+  testWidgets('tapping Скасувати releases the in-hand item but leaves edit mode on',
+      (tester) async {
     final container = await _makeContainer();
     container
         .read(gameEconomyProvider.notifier)
         .purchaseFurniture('coffee_table_basic');
-    container.read(selectedFurnitureIdProvider.notifier).state =
-        'coffee_table_basic';
+    FurnitureEditModeCoordContainer.enterPlacement(
+        container, 'coffee_table_basic');
 
     await _pumpDecor(tester, container);
     await tester.pump();
 
     expect(container.read(furnitureEditModeProvider), isTrue);
+    expect(container.read(selectedFurnitureIdProvider), 'coffee_table_basic');
+
     await tester.tap(find.text('Скасувати').first);
     await tester.pump();
 
+    // Cancelling the in-flight pick drops the inventory hand …
     expect(container.read(selectedFurnitureIdProvider), isNull);
-    expect(container.read(furnitureEditModeProvider), isFalse);
+    // … but edit mode stays on so the player can pick a different item or
+    // delete/move with empty hand. The pencil button is the explicit exit.
+    expect(container.read(furnitureEditModeProvider), isTrue);
 
     await tester.pumpWidget(const SizedBox.shrink());
     container.dispose();

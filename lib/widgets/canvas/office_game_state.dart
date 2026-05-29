@@ -453,6 +453,7 @@ class OfficeGameState {
         _placedCorridors = placedCorridors {
     _buildAll();
     cat = OfficeCat();
+    _clampEntitiesToWalkable();
   }
 
   bool get isFrozen => _frozen;
@@ -602,6 +603,76 @@ class OfficeGameState {
     _placedFurniture = newFurniture;
     _placedCorridors = newCorridors;
     _buildAll();
+    _clampEntitiesToWalkable();
+  }
+
+  /// Belt-and-suspenders defense against entities (characters or the cat)
+  /// landing on a non-walkable tile — wall, blocked desk, or position past
+  /// the current grid bounds. Triggers can include office tier downgrade,
+  /// expansion rollback after a refund, save-data migration, or any future
+  /// code path that mutates layout without re-pathing entities. The visual
+  /// symptom of skipping this is a character/cat appearing past the office
+  /// wall (especially on the long Galley deck), even though BFS later
+  /// refuses to give them a path back.
+  void _clampEntitiesToWalkable() {
+    if (walkableTiles.isEmpty) return;
+    for (final ch in characters.values) {
+      if (_isWalkable(ch.tileCol, ch.tileRow, tileMap, blockedTiles)) continue;
+      if (ch.seat != null &&
+          _isWalkable(ch.seat!.seatCol, ch.seat!.seatRow, tileMap, blockedTiles)) {
+        ch.tileCol = ch.seat!.seatCol;
+        ch.tileRow = ch.seat!.seatRow;
+      } else {
+        final t = _nearestWalkable(ch.tileCol, ch.tileRow);
+        ch.tileCol = t.col;
+        ch.tileRow = t.row;
+      }
+      ch.x = ch.tileCol * kTileSize + kTileSize / 2;
+      ch.y = ch.tileRow * kTileSize + kTileSize / 2;
+      ch.path = [];
+      ch.moveProgress = 0;
+      if (ch.state == CharState.walk ||
+          ch.state == CharState.skateMount ||
+          ch.state == CharState.skateDismount) {
+        ch.state = CharState.idle;
+        ch.frame = 0;
+        ch.frameTimer = 0;
+        ch.wanderTimer = _randomRange(kWanderPauseMin, kWanderPauseMax);
+      }
+      ch.isOnSkateboard = false;
+    }
+    if (!_isWalkable(cat.tileCol, cat.tileRow, tileMap, blockedTiles)) {
+      final t = _nearestWalkable(cat.tileCol, cat.tileRow);
+      cat.tileCol = t.col;
+      cat.tileRow = t.row;
+      cat.x = cat.tileCol * kTileSize + kTileSize / 2;
+      cat.y = cat.tileRow * kTileSize + kTileSize / 2;
+      cat.path = [];
+      cat.moveProgress = 0;
+      if (cat.state == CatAction.walk) {
+        cat.state = CatAction.idle;
+        cat.stateTimer = _randomRange(kCatIdlePauseMin, kCatIdlePauseMax);
+        cat.frame = 0;
+        cat.frameTimer = 0;
+      }
+    }
+  }
+
+  /// Return the walkable tile with the smallest Manhattan distance to
+  /// (col, row). Falls back to the first walkable tile when the grid is so
+  /// small no candidate matches — guaranteed non-empty by the early return
+  /// in [_clampEntitiesToWalkable].
+  TilePos _nearestWalkable(int col, int row) {
+    TilePos best = walkableTiles.first;
+    int bestDist = (best.col - col).abs() + (best.row - row).abs();
+    for (final t in walkableTiles) {
+      final d = (t.col - col).abs() + (t.row - row).abs();
+      if (d < bestDist) {
+        bestDist = d;
+        best = t;
+      }
+    }
+    return best;
   }
 
   void _buildExtraStations() {
