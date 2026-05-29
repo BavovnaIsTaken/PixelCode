@@ -27,11 +27,15 @@ Future<ProviderContainer> _makeContainer() async {
   ]);
 }
 
-Future<void> _pumpShopPanel(WidgetTester tester, ProviderContainer container) =>
-    tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: const MaterialApp(home: Scaffold(body: ShopPanel())),
-    ));
+Future<void> _pumpShopPanel(WidgetTester tester, ProviderContainer container,
+    {Size surfaceSize = const Size(800, 600)}) async {
+  await tester.binding.setSurfaceSize(surfaceSize);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: const MaterialApp(home: Scaffold(body: ShopPanel())),
+  ));
+}
 
 void main() {
   group('ShopPanel — tab bar', () {
@@ -138,7 +142,11 @@ void main() {
     testWidgets('lists every OfficeLevel with localised label',
         (tester) async {
       final container = await _makeContainer();
-      await _pumpShopPanel(tester, container);
+      // Office tab uses a tall ListView (6 tiers) — give the surface enough
+      // height for every item to be built into the tree, so we can assert
+      // by find.text without scrolling through a paginated list.
+      await _pumpShopPanel(tester, container,
+          surfaceSize: const Size(800, 2400));
       await tester.pump();
 
       container.read(shopDeepLinkProvider.notifier).state = shopTabOffice;
@@ -242,7 +250,8 @@ void main() {
   });
 
   group('ShopPanel — Cosmetics tab', () {
-    testWidgets('renders category chips for every CosmeticType',
+    testWidgets('renders category chips for every CosmeticType '
+        'except sendButtonStyle (which lives in its own Stamp tab)',
         (tester) async {
       final container = await _makeContainer();
       await _pumpShopPanel(tester, container);
@@ -257,7 +266,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 50));
 
+      // sendButtonStyle was promoted to its own top-level Stamp tab
+      // (shopTabStamp = 4) and is intentionally skipped on the Cosmetics
+      // chip row. Other types still need their chip.
       for (final type in CosmeticType.values) {
+        if (type == CosmeticType.sendButtonStyle) {
+          expect(find.text(type.label), findsNothing,
+              reason: 'sendButtonStyle (${type.label}) must NOT appear as a '
+                  'cosmetics chip — its tab is separate');
+          continue;
+        }
         expect(find.text(type.label), findsWidgets,
             reason: '${type.label} chip should be visible');
       }
@@ -363,10 +381,9 @@ void main() {
       container.dispose();
     });
 
-    testWidgets('free unowned cosmetic (send_classic) shows "Безкоштовно" CTA',
-        (tester) async {
+    testWidgets('send_classic is the auto-equipped default stamp', (tester) async {
       final container = await _makeContainer();
-      // Tall viewport so every cosmetic card is laid out without lazy clipping.
+      // Tall viewport so every stamp card is laid out without lazy clipping.
       tester.view.physicalSize = const Size(800, 4000);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -375,20 +392,20 @@ void main() {
       await _pumpShopPanel(tester, container);
       await tester.pump();
 
-      container.read(shopDeepLinkProvider.notifier).state = 3;
+      // sendButtonStyle cosmetics moved out of the generic Cosmetics tab
+      // (index 3) into their own «Печатка» tab (shopTabStamp = 4).
+      container.read(shopDeepLinkProvider.notifier).state = shopTabStamp;
       await tester.pump(const Duration(milliseconds: 50));
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 50));
 
-      // send_classic (Класичний) is the only cost-0 cosmetic NOT seeded as
-      // owned in `GameState.initial`, so its CTA still renders "Безкоштовно".
-      await tester.tap(find.text('Кнопка «Надіслати»').last);
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.pump(const Duration(milliseconds: 350));
-      await tester.pump(const Duration(milliseconds: 50));
-
+      // send_classic (Класичний) has cost == 0, so the Stamp tab auto-owns
+      // it. With nothing else equipped, the card flags itself as "Активна".
       expect(find.text('Класичний'), findsOneWidget);
-      expect(find.text('Безкоштовно'), findsOneWidget);
+      expect(find.text('Активна'), findsOneWidget,
+          reason: 'Stamp tab marks send_classic as the active default '
+              'because cost==0 implies auto-owned + auto-equipped when no '
+              'other stamp is equipped');
 
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();

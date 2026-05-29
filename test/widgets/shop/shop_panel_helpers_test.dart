@@ -25,15 +25,18 @@ void main() {
       expect(formatGrymni(12345), '12.3K');
     });
 
-    test('renders millions with one decimal', () {
-      expect(formatGrymni(1000000), '1.0M');
+    test('renders millions without decimal when exact, decimal otherwise', () {
+      // Canonical formatGrymni (utils/grymni_format.dart) drops the
+      // trailing ".0" for exact multiples — kept consistent across shop
+      // labels, hub toolbar and donation toasts.
+      expect(formatGrymni(1000000), '1M');
       expect(formatGrymni(2500000), '2.5M');
     });
 
     test('handles negative values with a leading sign', () {
       expect(formatGrymni(-500), '-500');
       expect(formatGrymni(-1500), '-1.5K');
-      expect(formatGrymni(-1000000), '-1.0M');
+      expect(formatGrymni(-1000000), '-1M');
     });
   });
 

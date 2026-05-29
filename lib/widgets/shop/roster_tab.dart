@@ -53,13 +53,20 @@ class _RosterTabState extends ConsumerState<RosterTab> {
         _TeamSection(
           agents: hired,
           onFire: (id) {
-            final wasSelected = ref.read(selectedAgentProvider) == id;
-            notifier.fireAgent(id);
-            if (wasSelected) {
-              final managers = ref.read(gameEconomyProvider).instancesOfRole('manager');
-              ref.read(selectedAgentProvider.notifier).state =
-                  managers.isNotEmpty ? managers.first.instanceId : 'manager#1';
+            final fired = notifier.fireAgent(id);
+            if (!fired && context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Не можна звільнити останнього координатора — '
+                    'без нього команда не зможе працювати.',
+                  ),
+                  duration: Duration(seconds: 3),
+                ),
+              );
             }
+            // Selection auto-heals via selectedAgentProvider — no widget-side
+            // redirect needed when the fired agent was selected.
           },
         ),
         const SizedBox(height: 18),
@@ -185,22 +192,14 @@ class _TeamRow extends StatelessWidget {
   const _TeamRow({required this.instance, required this.onFire});
 
   void _showMemories(BuildContext context) {
-    showModalBottomSheet<void>(
+    showAppBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.35,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (_, scrollController) => ClipRRect(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-          child: PersonalizationPanel(
-            agentId: instance.instanceId,
-            agentName: instance.nickname,
-          ),
-        ),
+      initialSize: 0.6,
+      minSize: 0.35,
+      maxSize: 0.9,
+      builder: (_, _) => PersonalizationPanel(
+        agentId: instance.instanceId,
+        agentName: instance.nickname,
       ),
     );
   }
@@ -259,20 +258,7 @@ class _TeamRow extends StatelessWidget {
               ],
             ),
           ),
-          GestureDetector(
-            onTap: () => _showMemories(context),
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Tooltip(
-                message: 'Пам\'ять агента',
-                child: Icon(
-                  Icons.psychology_outlined,
-                  size: 15,
-                  color: Colors.white.withValues(alpha: 0.3),
-                ),
-              ),
-            ),
-          ),
+          _MemoryIconButton(onTap: () => _showMemories(context)),
           const SizedBox(width: 2),
           if (isManager)
             Container(
@@ -901,6 +887,76 @@ class _VendorPill extends StatelessWidget {
           color: color,
           fontSize: 8,
           fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Memory icon button (Roster row → opens PersonalizationPanel) ──────────
+
+/// 🧠 icon next to a hired-agent row. Tap opens the agent's memory panel.
+///
+/// Hover affordance (pointer devices — desktop, web, tablet trackpad):
+///  - pointer turns into a click cursor
+///  - icon brightens from alpha 0.3 → 1.0
+///  - subtle accent halo appears behind the icon
+///  - micro scale-up for tactile feedback
+///
+/// On touch-only devices these states never trigger, so the rest-state look
+/// stays identical to the previous static icon. No new dependencies.
+class _MemoryIconButton extends StatefulWidget {
+  final VoidCallback onTap;
+
+  const _MemoryIconButton({required this.onTap});
+
+  @override
+  State<_MemoryIconButton> createState() => _MemoryIconButtonState();
+}
+
+class _MemoryIconButtonState extends State<_MemoryIconButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final iconColor = Color.lerp(
+      Colors.white.withValues(alpha: 0.3),
+      _accent,
+      _hovered ? 1.0 : 0.0,
+    )!;
+    final haloColor = _accent.withValues(alpha: _hovered ? 0.18 : 0.0);
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Tooltip(
+          message: 'Пам\'ять агента',
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOut,
+              decoration: BoxDecoration(
+                color: haloColor,
+                shape: BoxShape.circle,
+              ),
+              padding: const EdgeInsets.all(2),
+              child: AnimatedScale(
+                scale: _hovered ? 1.12 : 1.0,
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOut,
+                child: Icon(
+                  Icons.psychology_outlined,
+                  size: 15,
+                  color: iconColor,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );

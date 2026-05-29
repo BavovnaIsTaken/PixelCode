@@ -9,24 +9,9 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../models/game_economy.dart';
+import '../../utils/grymni_format.dart';
 
-// ─── Currency formatting ────────────────────────────────────────────────────
-
-/// Compact currency formatter — used everywhere a grymni amount is shown.
-///
-/// Examples:
-///   * 999       → "999"
-///   * 1000      → "1K"
-///   * 1500      → "1.5K"
-///   * 1_000_000 → "1.0M"
-///
-/// Negative values are rendered with their abs() rule + a leading "-".
-String formatGrymni(int n) {
-  if (n < 0) return '-${formatGrymni(-n)}';
-  if (n >= 1000000) return '${(n / 1000000).toStringAsFixed(1)}M';
-  if (n >= 1000) return '${(n / 1000).toStringAsFixed(n % 1000 == 0 ? 0 : 1)}K';
-  return n.toString();
-}
+export '../../utils/grymni_format.dart' show formatGrymni;
 
 /// Ukrainian plural agreement for "гримня" — picks one of three forms based
 /// on the last two digits of [n], which matches Slavic plural rules.

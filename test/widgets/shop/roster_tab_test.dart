@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -294,6 +295,58 @@ void main() {
     });
   });
 
+  // ─── Singleton manager fire guard ──────────────────────────────────────
+
+  group('Manager fire guard', () {
+    testWidgets(
+        'manager row shows "Основа" badge instead of a fire button',
+        (tester) async {
+      // Primary UX defense: the manager row never renders a destructive
+      // "Звільнити" action, so the user cannot trigger the singleton block
+      // in normal flow. The toast (and fireAgent → false contract) is the
+      // defense-in-depth backstop.
+      final container = await _makeContainer();
+      await _pumpRosterTab(tester, container);
+      await tester.pump();
+
+      // Manager row exists.
+      expect(find.byKey(const Key('team-row-manager#1')), findsOneWidget);
+      // The team row for the manager carries the "Основа" badge.
+      final managerRow = find.byKey(const Key('team-row-manager#1'));
+      expect(
+        find.descendant(of: managerRow, matching: find.text('Основа')),
+        findsOneWidget,
+      );
+      // …and does NOT render the "Звільнити" action.
+      expect(
+        find.descendant(of: managerRow, matching: find.text('Звільнити')),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+
+    testWidgets(
+        'firing the only manager via the provider is a no-op '
+        '(defense-in-depth)',
+        (tester) async {
+      final container = await _makeContainer();
+      await _pumpRosterTab(tester, container);
+      await tester.pump();
+
+      final before = container.read(gameEconomyProvider).agents.length;
+      final fired = container
+          .read(gameEconomyProvider.notifier)
+          .fireAgent('manager#1');
+      expect(fired, isFalse);
+      expect(container.read(gameEconomyProvider).agents.length, before);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+  });
+
   // ─── _ImportAgentCard ──────────────────────────────────────────────────────
 
   group('ImportAgentCard', () {
@@ -424,5 +477,112 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();
     });
+
+    // ─── Memory icon (Roster row → PersonalizationPanel) ─────────────────
+
+    testWidgets('memory icon: tap opens PersonalizationPanel bottom-sheet',
+        (WidgetTester tester) async {
+      final container = await _makeContainer();
+      // A hired agent is required to render a _TeamRow.
+      final notifier = container.read(gameEconomyProvider.notifier);
+      final tetyana = rosterCatalog.firstWhere((c) => c.id == 'tetyana_tester');
+      notifier.hireCharacter(tetyana.id);
+
+      await _pumpRosterTab(tester, container);
+      await tester.pumpAndSettle();
+
+      // The memory icon is rendered once per hired-agent row.
+      final iconFinder = find.byIcon(Icons.psychology_outlined);
+      expect(iconFinder, findsWidgets,
+          reason: '🧠 memory icon should render for the hired agent');
+
+      // Tap → bottom-sheet renders with the agent name.
+      await tester.tap(iconFinder.first);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Пам\'ять агента'), findsAtLeastNWidgets(1));
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    });
+
+    testWidgets(
+      'memory icon: hover brightens icon color and adds halo background',
+      (WidgetTester tester) async {
+        final container = await _makeContainer();
+        final notifier = container.read(gameEconomyProvider.notifier);
+        final tetyana =
+            rosterCatalog.firstWhere((c) => c.id == 'tetyana_tester');
+        notifier.hireCharacter(tetyana.id);
+
+        await _pumpRosterTab(tester, container);
+        await tester.pumpAndSettle();
+
+        final iconFinder = find.byIcon(Icons.psychology_outlined).first;
+        final preColor = tester.widget<Icon>(iconFinder).color!;
+        expect(
+          preColor.a,
+          lessThan(0.5),
+          reason: 'rest-state icon should be dim',
+        );
+
+        // Move a synthetic mouse pointer onto the icon.
+        final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        addTearDown(gesture.removePointer);
+        await gesture.addPointer(location: Offset.zero);
+        await tester.pump();
+        await gesture.moveTo(tester.getCenter(iconFinder));
+        // Allow hover animation (140ms) plus a safety margin to settle.
+        await tester.pump(const Duration(milliseconds: 200));
+
+        final hoverColor =
+            tester.widget<Icon>(find.byIcon(Icons.psychology_outlined).first).color!;
+        expect(
+          hoverColor.a,
+          greaterThan(preColor.a),
+          reason:
+              'hover state must brighten the icon (alpha higher than rest)',
+        );
+
+        // Move pointer away — icon must revert.
+        await gesture.moveTo(const Offset(2000, 2000));
+        await tester.pump(const Duration(milliseconds: 200));
+        final restoredColor = tester
+            .widget<Icon>(find.byIcon(Icons.psychology_outlined).first)
+            .color!;
+        expect(
+          restoredColor.a,
+          closeTo(preColor.a, 0.001),
+          reason: 'on pointer exit the icon must return to rest-state alpha',
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        container.dispose();
+      },
+    );
+
+    testWidgets(
+      'memory icon: hover does not affect the rest-state look on touch-only paths',
+      (WidgetTester tester) async {
+        // Without any mouse pointer, the icon must remain in its dim rest-state
+        // — touch-only devices (phones, tablets without trackpad) should see
+        // the same look as before the hover affordance was introduced.
+        final container = await _makeContainer();
+        final notifier = container.read(gameEconomyProvider.notifier);
+        final tetyana =
+            rosterCatalog.firstWhere((c) => c.id == 'tetyana_tester');
+        notifier.hireCharacter(tetyana.id);
+
+        await _pumpRosterTab(tester, container);
+        await tester.pumpAndSettle();
+
+        final iconColor = tester
+            .widget<Icon>(find.byIcon(Icons.psychology_outlined).first)
+            .color!;
+        expect(iconColor.a, lessThan(0.5));
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        container.dispose();
+      },
+    );
   });
 }

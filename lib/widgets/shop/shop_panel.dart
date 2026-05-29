@@ -4,6 +4,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
@@ -14,13 +15,15 @@ import '../../models/agent_message.dart';
 import '../../models/app_theme.dart';
 import '../../models/game_economy.dart';
 import '../../models/roster_catalog.dart';
-import '../../providers/agent_provider.dart' show selectedAgentProvider;
+import '../../models/send_button_style.dart';
 import '../../providers/game_economy_provider.dart';
 import '../../providers/deepseek_auth_provider.dart';
 import '../../providers/gemini_auth_provider.dart';
 import '../../providers/kimi_auth_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/agent_export_service.dart';
+import '../chat/send_button.dart';
+import '../hub/app_bottom_sheet.dart';
 import '../personalization/custom_agent_spawn_form.dart';
 import '../personalization/personalization_panel.dart';
 import '../roster/agent_detail_drawer.dart';
@@ -28,6 +31,7 @@ import 'shop_panel_helpers.dart';
 import 'spinning_coin.dart';
 
 part 'roster_tab.dart';
+part 'stamp_tab.dart';
 
 // ─── Fallback colours (used when context isn't available) ─────────────────
 // Widgets that have BuildContext should prefer `context.appColors` instead.
@@ -54,7 +58,7 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 5, vsync: this);
+    _tabCtrl = TabController(length: 6, vsync: this);
   }
 
   @override
@@ -110,12 +114,13 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
                 indicatorColor: c.accent,
                 indicatorWeight: 2,
                 dividerColor: Colors.transparent,
-                tabs: const [
-                  Tab(text: 'Наймання'),
-                  Tab(text: 'Навички'),
-                  Tab(text: 'Офіс'),
-                  Tab(text: 'Косметика'),
-                  Tab(text: 'Донат'),
+                tabs: [
+                  const Tab(text: 'Наймання'),
+                  const Tab(text: 'Навички'),
+                  const Tab(text: 'Офіс'),
+                  const Tab(text: 'Косметика'),
+                  Tab(child: _StampTabChip(controller: _tabCtrl)),
+                  const Tab(text: 'Донат'),
                 ],
               ),
             ),
@@ -129,6 +134,7 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
                   RepaintBoundary(child: _SkillsTab()),
                   RepaintBoundary(child: _OfficeTab()),
                   RepaintBoundary(child: _CosmeticsTab()),
+                  RepaintBoundary(child: _StampTab()),
                   RepaintBoundary(child: _DonationTab()),
                 ],
               ),
@@ -142,70 +148,116 @@ class _ShopPanelState extends ConsumerState<ShopPanel>
 
 // ─── Balance header ────────────────────────────────────────────────────────
 
-class _BalanceHeader extends StatelessWidget {
+class _BalanceHeader extends StatefulWidget {
   final int grymni;
   final int totalEarned;
 
   const _BalanceHeader({required this.grymni, required this.totalEarned});
 
   @override
+  State<_BalanceHeader> createState() => _BalanceHeaderState();
+}
+
+class _BalanceHeaderState extends State<_BalanceHeader>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _flash;
+
+  @override
+  void initState() {
+    super.initState();
+    _flash = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 360),
+    );
+  }
+
+  @override
+  void didUpdateWidget(_BalanceHeader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Flash on decrease only — earning glow is handled separately via toast.
+    if (widget.grymni < oldWidget.grymni) {
+      _flash.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _flash.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            _gold.withValues(alpha: 0.08),
-            _gold.withValues(alpha: 0.02),
-          ],
-        ),
-        border: Border(
-          bottom: BorderSide(color: _gold.withValues(alpha: 0.15)),
-        ),
-      ),
-      child: Row(
-        children: [
-          // Currency icon — spinning 3D coin
-          const SpinningCoin(size: 32, layers: 5),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _formatNumber(grymni),
-                style: const TextStyle(
-                  color: _gold,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
+    return AnimatedBuilder(
+      animation: _flash,
+      builder: (context, _) {
+        // Bell curve 0→1→0 so the flash pulses then settles.
+        final t = _flash.value;
+        final pulse = (4 * t * (1 - t)).clamp(0.0, 1.0);
+        final scale = 1.0 + pulse * 0.10;
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                _gold.withValues(alpha: 0.08 + pulse * 0.10),
+                _gold.withValues(alpha: 0.02),
+              ],
+            ),
+            border: Border(
+              bottom: BorderSide(
+                color: _gold.withValues(alpha: 0.15 + pulse * 0.25),
               ),
-              Text(
-                _grymniLabel(grymni),
-                style: TextStyle(
-                  color: _gold.withValues(alpha: 0.5),
-                  fontSize: 10,
+            ),
+          ),
+          child: Row(
+            children: [
+              const SpinningCoin(size: 32, layers: 5),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Transform.scale(
+                    alignment: Alignment.centerLeft,
+                    scale: scale,
+                    child: Text(
+                      _formatNumber(widget.grymni),
+                      style: TextStyle(
+                        color: Color.lerp(_gold, Colors.white, pulse * 0.35)!,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _grymniLabel(widget.grymni),
+                    style: TextStyle(
+                      color: _gold.withValues(alpha: 0.5),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Зароблено: ${_formatNumber(widget.totalEarned)}₲',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    fontSize: 9,
+                  ),
                 ),
               ),
             ],
           ),
-          const Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.04),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              'Зароблено: ${_formatNumber(totalEarned)}₲',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.3),
-                fontSize: 9,
-              ),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -884,11 +936,20 @@ class _OfficeTab extends ConsumerWidget {
           _OfficeLevelCard(
             level: level,
             isCurrent: game.officeLevel == level,
-            isUnlocked: level.index <= game.officeLevel.index,
-            isNext: level == game.officeLevel.nextLevel,
-            canUpgrade: level == game.officeLevel.nextLevel &&
-                notifier.canUpgradeOffice(),
-            onUpgrade: () => notifier.upgradeOffice(),
+            // Parallel-option offices (e.g. galley) are always considered
+            // unlocked — they sit off the linear upgrade chain.
+            isUnlocked: level.isParallelOption ||
+                level.index <= game.officeLevel.index,
+            isNext: level.isParallelOption
+                ? game.officeLevel != level
+                : level == game.officeLevel.nextLevel,
+            canUpgrade: level.isParallelOption
+                ? notifier.canSwitchToOffice(level)
+                : (level == game.officeLevel.nextLevel &&
+                    notifier.canUpgradeOffice()),
+            onUpgrade: () => level.isParallelOption
+                ? notifier.switchToOffice(level)
+                : notifier.upgradeOffice(),
             currentExpansions:
                 game.officeLevel == level ? game.officeExpansions : 0,
             nextExpansion:
@@ -1187,7 +1248,7 @@ class _CosmeticsTabState extends ConsumerState<_CosmeticsTab> {
           const SizedBox(height: 16),
         ],
 
-        // Type selector
+        // Type selector — `sendButtonStyle` lives in its own «Печатка» tab.
         _SectionHeader(icon: Icons.palette_outlined, title: 'Категорія'),
         const SizedBox(height: 8),
         RepaintBoundary(
@@ -1196,11 +1257,12 @@ class _CosmeticsTabState extends ConsumerState<_CosmeticsTab> {
             runSpacing: 6,
             children: [
               for (final type in CosmeticType.values)
-                _CosmeticTypeChip(
-                  type: type,
-                  isSelected: _selectedType == type,
-                  onTap: () => setState(() => _selectedType = type),
-                ),
+                if (type != CosmeticType.sendButtonStyle)
+                  _CosmeticTypeChip(
+                    type: type,
+                    isSelected: _selectedType == type,
+                    onTap: () => setState(() => _selectedType = type),
+                  ),
             ],
           ),
         ),
