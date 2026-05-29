@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pixelcode/models/agent_message.dart';
 import 'package:pixelcode/models/agent_trait.dart';
 import 'package:pixelcode/providers/agent_provider.dart';
 import 'package:pixelcode/providers/agent_traits_provider.dart';
@@ -57,6 +58,8 @@ class PersonalizationPanel extends ConsumerWidget {
             learningEnabled: consent,
             onToggleLearning: settingsNotifier.setLearningConsentEnabled,
           ),
+          const Divider(height: 1, color: _border),
+          const _SystemHealthBanner(),
           const Divider(height: 1, color: _border),
           Expanded(
             child: totalCount == 0
@@ -541,6 +544,292 @@ class _ClearAllButton extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── System health banner — confabulation-gate KPIs ─────────────────────────
+
+/// Header banner rendering the personalization-system health snapshot at a
+/// glance. Compact by default (single line with a traffic light + verdict);
+/// tap to expand into per-signal KPIs and recent constraint violations.
+///
+/// Surfaces the same data as `server/scripts/reflection-health.ts`. Source of
+/// truth for the thresholds is [ReflectionKpiMessage.overallHealthy] etc — do
+/// not duplicate threshold values here. Mirrors CLAUDE.md §5.
+class _SystemHealthBanner extends ConsumerStatefulWidget {
+  const _SystemHealthBanner();
+
+  @override
+  ConsumerState<_SystemHealthBanner> createState() => _SystemHealthBannerState();
+}
+
+class _SystemHealthBannerState extends ConsumerState<_SystemHealthBanner> {
+  bool _expanded = false;
+  bool _requested = false;
+
+  @override
+  Widget build(BuildContext context) {
+    // Lazy-fetch on first build of this panel so closed bottom-sheets do not
+    // burn cycles for no reason.
+    if (!_requested) {
+      _requested = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(reflectionKpiProvider.notifier).refresh(sinceDays: 30);
+        }
+      });
+    }
+
+    final kpi = ref.watch(reflectionKpiProvider);
+
+    if (kpi == null) {
+      // Static placeholder while the WS round-trip lands. Avoid spinners here:
+      // a constantly-animating CircularProgressIndicator prevents
+      // pumpAndSettle in widget tests from ever settling.
+      return _bannerShell(
+        leading: const Icon(Icons.hourglass_empty, size: 13, color: _textMid),
+        title: 'Перевіряю стан пам\'яті команди…',
+        subtitle: null,
+      );
+    }
+
+    if (!kpi.hasData) {
+      return _bannerShell(
+        leading: const Icon(Icons.cloud_off_outlined, size: 14, color: _textMid),
+        title: 'Пам\'ять команди ще "холодна"',
+        subtitle: 'Дані з\'являться після перших ~10 чат-сесій',
+      );
+    }
+
+    final healthy = kpi.overallHealthy ?? false;
+    final dotColor = healthy ? _green : _red;
+    final verdict = healthy
+        ? 'Усе ок — gate працює, confabulations не пропускає'
+        : 'Знайдено сигнал тривоги — натисни для деталей';
+
+    return Column(
+      children: [
+        InkWell(
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: _bannerShell(
+            leading: _Dot(color: dotColor),
+            title: 'Пам\'ять команди: ${healthy ? "🟢 здорова" : "🔴 потребує уваги"}',
+            subtitle: verdict,
+            trailing: Icon(
+              _expanded ? Icons.expand_less : Icons.expand_more,
+              size: 16,
+              color: _textMid,
+            ),
+          ),
+        ),
+        if (_expanded) _ExpandedHealth(kpi: kpi),
+      ],
+    );
+  }
+
+  Widget _bannerShell({
+    required Widget leading,
+    required String title,
+    required String? subtitle,
+    Widget? trailing,
+  }) {
+    return Container(
+      width: double.infinity,
+      color: _surface,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      child: Row(
+        children: [
+          leading,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: _textHigh,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: _textMid, fontSize: 10),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final Color color;
+  const _Dot({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(color: color.withValues(alpha: 0.4), blurRadius: 6, spreadRadius: 1),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExpandedHealth extends StatelessWidget {
+  final ReflectionKpiMessage kpi;
+  const _ExpandedHealth({required this.kpi});
+
+  @override
+  Widget build(BuildContext context) {
+    final window = kpi.windowDays != null ? 'за останні ${kpi.windowDays} днів' : 'за весь час';
+    return Container(
+      width: double.infinity,
+      color: _surface,
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Метрики $window',
+            style: const TextStyle(color: _textLow, fontSize: 9),
+          ),
+          const SizedBox(height: 8),
+          _Kpi(
+            label: 'Promotion rate',
+            value: _pct(kpi.promotionRate),
+            healthy: kpi.promotionRateOk,
+            hint: kpi.promotionRateOk
+                ? 'У здоровому діапазоні 10–70%'
+                : kpi.promotionRate < 0.1
+                    ? 'Занизько — gate може бути занадто жорстким'
+                    : 'Зависоко — gate може бути занадто м\'яким',
+          ),
+          _Kpi(
+            label: 'Bypass rate',
+            value: _pct(kpi.bypassRate),
+            healthy: kpi.bypassRateOk,
+            hint: kpi.bypassRateOk
+                ? 'Gate робить корисну роботу'
+                : 'Більшість promotions йдуть в обхід gate (через existing trait)',
+          ),
+          _Kpi(
+            label: 'Violation rate',
+            value: _pct(kpi.violationRate),
+            healthy: kpi.violationRateOk,
+            hint: kpi.violationRateOk
+                ? 'LLM поважає hard-constraint'
+                : 'LLM генерує "tool unavailable"-style claims попри ground-truth',
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Активність: ${kpi.submitted} candidates submitted • '
+            '${kpi.promotedViaThreshold + kpi.promotedViaBypass} promoted • '
+            '${kpi.tooSoon} too-soon (burst-defense)',
+            style: const TextStyle(color: _textLow, fontSize: 9),
+          ),
+          if (kpi.recentViolations.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Останні порушення:',
+              style: TextStyle(
+                color: _red,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (final v in kpi.recentViolations.take(3))
+              Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text(
+                  '• [${v.agentId}] ${v.tag} — ${v.phrases.join(", ")}',
+                  style: const TextStyle(
+                    color: _textMid,
+                    fontSize: 9,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _pct(double v) => '${(v * 100).toStringAsFixed(1)}%';
+}
+
+class _Kpi extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool healthy;
+  final String hint;
+
+  const _Kpi({
+    required this.label,
+    required this.value,
+    required this.healthy,
+    required this.hint,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = healthy ? _green : _red;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Dot(color: color),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: _textHigh,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 52,
+            child: Text(
+              value,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              hint,
+              style: const TextStyle(color: _textMid, fontSize: 9),
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -52,6 +52,7 @@
 | Дата | totalEntries | bucketsConfident | health | Нотатка |
 |---|---|---|---|---|
 | 2026-05-18 | — | — | — | C.2 + analyzer ship-day. Pipeline тільки що приземлився, перший справжній log запишеться з наступним dispatch-ем. Очікую `no_entries` info на старті. |
+| 2026-05-29 | 4 | 0/2 | OK | Перший real-data зріз. `manager\|chat` n=3 — cost $0.034–$0.044, turns med 1, tools med 0 (норм для chat-режиму). `character-artist\|dispatch` n=1 — turns=30, tools=29, EXACTLY на `maxTurns=30` cap, duration 92s, cost $0.21. Health-warn немає (n=1 не тригерить `all_zero_*`), але cap-hit підозрілий — див. Findings 2026-05-29. |
 
 <!-- Шаблон для нового рядка:
 | YYYY-MM-DD | <totalEntries> | <countConfident>/<totalBuckets> | <code1, code2, ...> або OK | <коротка нотатка> |
@@ -108,3 +109,31 @@ $0.04 через 50 entries" — цінна emrpicial константа, яку
 ### YYYY-MM-DD — короткий заголовок
 Що помічено, чому має значення, що з тим робити (або null якщо просто факт).
 -->
+
+### 2026-05-29 — character-artist dispatch on maxTurns ceiling (n=1)
+
+**Що:** Перший dispatch-run `character-artist` приземлився у лог з `numTurns=30`,
+`numToolCalls=29`, `durationMs=92286`, `costUsd=$0.2067`. 30 — це **рівно
+поточний `maxTurns` cap** для dispatch у SDK options. Якщо це не випадковий збіг
+двох-знаків, то агента **обрубило truncation-ом**, а не natural-finish-ем.
+
+**Чому має значення:** distribution-аналіз на C.2+30d буде сильно зміщений,
+якщо більшість dispatch-run-ів насправді truncated. `duration p95` для роліу
+буде "стелею", а не реальною продуктивністю. Outlier-warning UI (Q3 2026 +
+30d) тоді буде показувати "забагато roles upper-bound" замість справжніх
+outlier-ів.
+
+**Що робити:**
+1. **Класифікувати конкретний run:** глянути `agent_runs.jsonl` для того
+   runId → поле `status`. Якщо `interrupted` / `error` — truncation. Якщо
+   `completed` — natural finish на 30 turns (теж дивно для одного task-а, але
+   не bug).
+2. **Зібрати ще 2–3 character-artist dispatch-и.** Якщо pattern повторюється
+   (кожен на 30 turns) → cap треба піднімати для цієї ролі **АБО** task-и для
+   character-artist розбивати на менші, бо 30 turns не вистачає.
+3. **Поки що — НЕ міняти `MIN_CONFIDENT_SAMPLES`** і не маркувати n=1 як
+   "viable". Це baseline на baseline-і — потрібен patience.
+
+**Гіпотеза:** character-artist робить iterative refinement (skin → review →
+adjust → review → ...), що природно з'їдає turns. Якщо так — це **legit signal
+що cap=30 малий для цієї ролі**, а не bug у pipeline.

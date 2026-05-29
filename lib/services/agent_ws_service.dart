@@ -507,6 +507,15 @@ class AgentWsService {
     _send({'type': 'remove_lesson', 'lessonId': lessonId});
   }
 
+  /// Request a snapshot of reflection-telemetry KPIs (confabulation-gate
+  /// health). [sinceDays] narrows the rolling window; omit for full log.
+  void getReflectionKpi({int? sinceDays}) {
+    _send({
+      'type': 'get_reflection_kpi',
+      'sinceDays': ?sinceDays,
+    });
+  }
+
   // ─── Dungeon training ────────────────────────────────────────────────────
 
   void startDungeon({

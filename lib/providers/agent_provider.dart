@@ -83,13 +83,55 @@ final tunnelUrlProvider = Provider<String?>((ref) {
 /// Default picks the first hired manager instance so the user always starts
 /// pointed at their coordinator. Falls back to `'manager#1'` for the very
 /// first launch before any state is seeded.
-final selectedAgentProvider = StateProvider<String>((ref) {
-  final agents = ref.watch(gameEconomyProvider.select((g) => g.agents));
-  for (final a in agents.values) {
-    if (a.roleType == 'manager') return a.instanceId;
+///
+/// Self-healing: if the agent that's currently selected is removed from the
+/// roster (e.g. `fireAgent` from another tab, server-side delete, persistence
+/// load with missing entry), the notifier listens to the agents map and
+/// silently switches the selection to the first manager. Callers that wrote
+/// `.state = id` directly continue to work — the heal only fires when the
+/// current selection becomes invalid.
+class SelectedAgentNotifier extends Notifier<String> {
+  static const _fallbackId = 'manager#1';
+
+  @override
+  String build() {
+    ref.listen<Map<String, AgentGameData>>(
+      gameEconomyProvider.select((g) => g.agents),
+      _onAgentsChanged,
+    );
+
+    final agents = ref.read(gameEconomyProvider).agents;
+    return _firstManagerId(agents) ?? _fallbackId;
   }
-  return 'manager#1';
-});
+
+  void _onAgentsChanged(
+    Map<String, AgentGameData>? prev,
+    Map<String, AgentGameData> next,
+  ) {
+    final current = state;
+    if (next.containsKey(current)) return;
+    final managerId = _firstManagerId(next);
+    if (managerId != null && managerId != current) {
+      state = managerId;
+    }
+  }
+
+  String? _firstManagerId(Map<String, AgentGameData> agents) {
+    for (final a in agents.values) {
+      if (a.roleType == 'manager') return a.instanceId;
+    }
+    return null;
+  }
+
+  /// Switch the focused agent. Public entry point — replaces direct writes to
+  /// `.notifier.state` (which is protected on `Notifier`).
+  void select(String instanceId) {
+    state = instanceId;
+  }
+}
+
+final selectedAgentProvider =
+    NotifierProvider<SelectedAgentNotifier, String>(SelectedAgentNotifier.new);
 
 // ─── Bypass permissions toggle ───────────────────────────────────────────
 
@@ -898,6 +940,41 @@ class TraitsNotifier extends Notifier<List<AgentTrait>> {
 
 final traitsProvider = NotifierProvider<TraitsNotifier, List<AgentTrait>>(
   TraitsNotifier.new,
+);
+
+// ─── Reflection KPI ────────────────────────────────────────────────────────
+
+/// Confabulation-gate health metrics, fetched on demand via WebSocket.
+/// `null` means "not yet fetched in this session" — render a loading state
+/// rather than zero-counts.
+class ReflectionKpiNotifier extends Notifier<ReflectionKpiMessage?> {
+  StreamSubscription<ServerMessage>? _sub;
+
+  @override
+  ReflectionKpiMessage? build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onMessage);
+    ref.onDispose(() => _sub?.cancel());
+    return null;
+  }
+
+  void _onMessage(ServerMessage msg) {
+    if (msg is ReflectionKpiMessage) {
+      state = msg;
+    }
+  }
+
+  /// Request a fresh snapshot. Optional [sinceDays] narrows the rolling
+  /// window — omit for the entire log.
+  void refresh({int? sinceDays}) {
+    ref.read(wsServiceProvider).getReflectionKpi(sinceDays: sinceDays);
+  }
+}
+
+final reflectionKpiProvider =
+    NotifierProvider<ReflectionKpiNotifier, ReflectionKpiMessage?>(
+  ReflectionKpiNotifier.new,
 );
 
 // ─── Queue status ──────────────────────────────────────────────────────────

@@ -146,6 +146,9 @@ export type ClientMessage =
   | { type: "remove_lesson"; lessonId: string }
   | { type: "set_consent"; agentId: string; enabled: boolean }
   | { type: "get_consent" }
+  // Personalization-system health KPIs (telemetry summary).
+  // Optional sinceDays narrows the rolling window; absent = entire log.
+  | { type: "get_reflection_kpi"; sinceDays?: number }
   // Live input sync
   | { type: "input_text"; text: string }
   | { type: "input_images"; images: string[] }
@@ -669,6 +672,33 @@ export type ServerMessage =
       }>;
     }
   | { type: "consent_state"; consent: Record<string, boolean> }
+  // Reflection-telemetry KPI snapshot — surfaced into Personalization UI so
+  // users see "is the confabulation gate healthy?" without running CLI tools.
+  // Mirrors fields of ReflectionKpiSnapshot in server/src/reflection_prompt.ts.
+  | {
+      type: "reflection_kpi";
+      windowDays: number | null;
+      hasData: boolean;
+      submitted: number;
+      promotedViaThreshold: number;
+      promotedViaBypass: number;
+      pending: number;
+      duplicate: number;
+      tooSoon: number;
+      prunedStale: number;
+      decayedPruned: number;
+      constraintViolations: number;
+      promotionRate: number;
+      bypassRate: number;
+      violationRate: number;
+      recentViolations: Array<{
+        agentId: string;
+        tag: string;
+        phrases: string[];
+        lesson: string;
+        ts: string;
+      }>;
+    }
   // Server connection info (sent on connect + when tunnel becomes available)
   | {
       type: "server_info";
@@ -697,6 +727,17 @@ export type ServerMessage =
       result: string;
       costUsd: number;
       durationMs: number;
+    }
+  // C.2.5 — discriminated terminal failure. Emitted alongside the
+  // generic `error` toast so the client can clear partial tool-progress
+  // state and choose UX per reason (timeout = retry; breaker = surface
+  // the cost budget; error = generic message).
+  | {
+      type: "subagent_failed";
+      dispatchId: string;
+      agentId: string;
+      reason: "timeout" | "breaker" | "error";
+      message: string;
     }
   | {
       type: "queue_status";
