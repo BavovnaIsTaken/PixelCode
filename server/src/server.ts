@@ -3935,26 +3935,73 @@ httpServer.listen(PORT);
 // ─── mDNS advertisement ──────────────────────────────────────────────────────
 // Advertise this server on the local network so PixelCode clients can
 // discover it automatically without manual IP entry.
-const bonjour = new Bonjour();
+//
+// On macOS we delegate to the system dns-sd(1) daemon so that the pure-JS
+// bonjour-service library does not send its own A-record announcements and
+// trigger a hostname-conflict dialog ("SSG-Bavovna.local is already in use").
 let mdnsActive = false;
-let mdnsService: ReturnType<Bonjour["publish"]>;
+let mdnsDnsSdProcess: ChildProcess | null = null;
+let mdnsBonjourInstance: Bonjour | null = null;
+
+function unpublishMdns(cb?: () => void): void {
+  if (mdnsDnsSdProcess) {
+    mdnsDnsSdProcess.kill();
+    mdnsDnsSdProcess = null;
+    mdnsActive = false;
+    cb?.();
+    return;
+  }
+  if (mdnsBonjourInstance) {
+    mdnsBonjourInstance.unpublishAll(() => {
+      try { mdnsBonjourInstance!.destroy(); } catch { /* already destroyed */ }
+      mdnsBonjourInstance = null;
+      mdnsActive = false;
+      cb?.();
+    });
+    return;
+  }
+  cb?.();
+}
 
 function publishMdns(): void {
-  mdnsService = bonjour.publish({
-    name: `PixelCode @ ${hostname()}`,
-    type: "pixelcode",
-    protocol: "tcp",
-    port: PORT,
-    // Explicit TXT record — required for iOS NWBrowser.bonjourWithTXTRecord
-    // (used by the `bonsoir` package) to surface the service. Without a TXT
-    // record, iOS silently filters the service out, even though Android
-    // (NsdManager) and raw mDNS tools still see it.
-    txt: { version: "1" },
-  });
-  mdnsService.on("up", () => {
-    mdnsActive = true;
-    dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${mdnsService.name}"`);
-  });
+  const name = `PixelCode @ ${hostname()}`;
+  if (process.platform === "darwin") {
+    // dns-sd -R registers via mDNSResponder which already owns the hostname
+    // A-record — no conflict with the system daemon is possible.
+    mdnsDnsSdProcess = spawn("dns-sd", [
+      "-R", name, "_pixelcode._tcp", ".", String(PORT), "version=1",
+    ]);
+    mdnsDnsSdProcess.on("spawn", () => {
+      mdnsActive = true;
+      dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${name}"`);
+    });
+    mdnsDnsSdProcess.on("error", (err) => {
+      dbg("warn", "mDNS", `dns-sd spawn failed: ${err.message}`);
+    });
+    mdnsDnsSdProcess.on("exit", (code) => {
+      if (mdnsActive) {
+        mdnsActive = false;
+        dbg("warn", "mDNS", `dns-sd exited unexpectedly (code=${code})`);
+      }
+    });
+  } else {
+    mdnsBonjourInstance = new Bonjour();
+    const svc = mdnsBonjourInstance.publish({
+      name,
+      type: "pixelcode",
+      protocol: "tcp",
+      port: PORT,
+      // Explicit TXT record — required for iOS NWBrowser.bonjourWithTXTRecord
+      // (used by the `bonsoir` package) to surface the service. Without a TXT
+      // record, iOS silently filters the service out, even though Android
+      // (NsdManager) and raw mDNS tools still see it.
+      txt: { version: "1" },
+    });
+    svc.on("up", () => {
+      mdnsActive = true;
+      dbg("info", "mDNS", `Advertised _pixelcode._tcp on port ${PORT} as "${name}"`);
+    });
+  }
 }
 
 publishMdns();
@@ -3962,9 +4009,9 @@ publishMdns();
 async function restartMdns(): Promise<boolean> {
   mdnsActive = false;
   return new Promise((resolve) => {
-    bonjour.unpublishAll(() => {
+    unpublishMdns(() => {
       publishMdns();
-      // Give Bonjour a moment to re-advertise and fire the "up" event.
+      // Give mDNS a moment to re-advertise and become active.
       setTimeout(() => resolve(mdnsActive), 1500);
     });
   });
@@ -3988,10 +4035,7 @@ function gracefulExit(code: number, reason: string): void {
   try { flushBoard(); } catch (e) { dbg("warn", "shutdown", `flushBoard failed: ${e}`); }
   let exited = false;
   const doExit = () => { if (!exited) { exited = true; process.exit(code); } };
-  bonjour.unpublishAll(() => {
-    try { bonjour.destroy(); } catch { /* already destroyed */ }
-    doExit();
-  });
+  unpublishMdns(doExit);
   setTimeout(doExit, 1500);
 }
 
@@ -4047,8 +4091,7 @@ adminContext = {
 };
 process.on("exit", () => {
   try { flushBoard(); } catch { /* best effort */ }
-  bonjour.unpublishAll();
-  bonjour.destroy();
+  unpublishMdns();
 });
 
 /** Broadcast a message to every connected client. */
