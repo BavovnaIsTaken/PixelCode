@@ -16,10 +16,12 @@ import '../../widgets/deploy/device_deploy_popover.dart';
 import '../../providers/settings_provider.dart';
 import '../../providers/shop_navigation_provider.dart';
 import '../../services/logo_path_program.dart';
+import '../../utils/grymni_format.dart';
 import '../../widgets/board/task_board_panel.dart';
 import '../../widgets/canvas/agent_canvas.dart';
 import '../../widgets/canvas/build_menu.dart';
 import '../../widgets/chat/chat_panel.dart';
+import '../../widgets/hub/activity_overlay.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
 import '../../widgets/debug/debug_console.dart';
 import '../../widgets/facilitator/facilitator_auto_onboarder.dart';
@@ -50,6 +52,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
   double _shutdownHeight = 0;
   int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop
   bool _showGames = false;
+  bool _activityOverlayOpen = false;
   int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop
   int _prevMobileTab = 0;
 
@@ -555,6 +558,29 @@ class _HubScreenState extends ConsumerState<HubScreen>
                     viewIndex: _viewIndex,
                     onChanged: (i) => setState(() => _viewIndex = i),
                   ),
+                ),
+              ),
+            // Peek button — bottom-edge notch that mirrors the top view
+            // switcher. Tap opens the standard modal bottom sheet (scrim +
+            // animation handled by Flutter). Only on Office view.
+            if (isConnected && _viewIndex == 0 && !_debugOpen)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Center(
+                  child: Builder(builder: (sheetContext) {
+                    return ActivityPeekButton(
+                      isOpen: _activityOverlayOpen,
+                      onTap: () async {
+                        setState(() => _activityOverlayOpen = true);
+                        await showActivityOverlay(sheetContext);
+                        if (mounted) {
+                          setState(() => _activityOverlayOpen = false);
+                        }
+                      },
+                    );
+                  }),
                 ),
               ),
           ],
@@ -1136,9 +1162,6 @@ class _GrymniDisplay extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final grymni = ref.watch(gameEconomyProvider.select((s) => s.grymni));
-    final label = grymni >= 1000
-        ? '${(grymni / 1000).toStringAsFixed(grymni % 1000 == 0 ? 0 : 1)}K'
-        : grymni.toString();
     return Tooltip(
       message: 'Поповнити гримні',
       child: MouseRegion(
@@ -1179,13 +1202,20 @@ class _GrymniDisplay extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(width: 4),
-                Text(
-                  label,
-                  style: const TextStyle(
-                    color: Color(0xFFFFD700),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
+                TweenAnimationBuilder<double>(
+                  tween: Tween<double>(begin: grymni.toDouble(), end: grymni.toDouble()),
+                  duration: const Duration(milliseconds: 450),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, animated, _) {
+                    return Text(
+                      formatGrymni(animated.round()),
+                      style: const TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
