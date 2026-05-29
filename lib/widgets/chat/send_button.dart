@@ -18,14 +18,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/app_theme.dart';
+import '../../models/game_economy.dart';
 import '../../models/send_button_style.dart';
+import '../../providers/game_economy_provider.dart';
 import '../../providers/theme_provider.dart';
 
 const double _kButtonSize = 44;
 
 // ─── Public widget ────────────────────────────────────────────────────────
 
-class SendButton extends ConsumerWidget {
+class SendButton extends ConsumerStatefulWidget {
   const SendButton({
     super.key,
     required this.onPressed,
@@ -36,23 +38,142 @@ class SendButton extends ConsumerWidget {
   final VoidCallback onPressed;
 
   /// When set, renders this variant regardless of the equipped cosmetic
-  /// (used for settings previews). When null, reads the active variant
-  /// from [activeSendButtonVariantProvider].
+  /// (used for shop and settings previews). When null, reads the active
+  /// variant from [activeSendButtonVariantProvider].
   final SendButtonVariant? variantOverride;
 
   final double size;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SendButton> createState() => _SendButtonState();
+}
+
+class _SendButtonState extends ConsumerState<SendButton>
+    with TickerProviderStateMixin {
+  late final AnimationController _firstCast;
+  bool _firstCastPlaying = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _firstCast = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 520),
+    )..addStatusListener((s) {
+        if (s == AnimationStatus.completed && mounted) {
+          setState(() => _firstCastPlaying = false);
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _firstCast.dispose();
+    super.dispose();
+  }
+
+  void _handlePressed() {
+    // First-cast only fires for the live chat send button (no override),
+    // and only for premium stamps the player hasn't cast yet.
+    if (widget.variantOverride == null) {
+      final equippedId = ref
+          .read(gameEconomyProvider)
+          .equippedFor(CosmeticType.sendButtonStyle);
+      if (equippedId != null && equippedId != 'send_classic') {
+        final eco = ref.read(gameEconomyProvider.notifier);
+        if (eco.isStampVirgin(equippedId)) {
+          eco.markStampCast(equippedId);
+          setState(() => _firstCastPlaying = true);
+          _firstCast.forward(from: 0);
+        }
+      }
+    }
+    widget.onPressed();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final SendButtonVariant variant =
-        variantOverride ?? ref.watch(activeSendButtonVariantProvider);
-    return _SendButtonBody(
+        widget.variantOverride ?? ref.watch(activeSendButtonVariantProvider);
+    final body = _SendButtonBody(
       variant: variant,
-      onPressed: onPressed,
-      size: size,
+      onPressed: _handlePressed,
+      size: widget.size,
       accent: context.appColors.accent,
     );
+
+    if (!_firstCastPlaying) return body;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      alignment: Alignment.center,
+      children: [
+        body,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: _firstCast,
+              builder: (context, _) => CustomPaint(
+                painter: _FirstCastSparklePainter(
+                  t: _firstCast.value,
+                  accent: context.appColors.accent,
+                  size: widget.size,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
+}
+
+// ─── First-cast sparkle painter ─────────────────────────────────────────────
+
+/// Eight pixel-sized white/gold particles flying radially outward from the
+/// button center on first send after equipping a premium stamp. Fires once
+/// per stamp per lifetime (tracked via [GameState.castStamps]).
+class _FirstCastSparklePainter extends CustomPainter {
+  _FirstCastSparklePainter({
+    required this.t,
+    required this.accent,
+    required this.size,
+  });
+
+  final double t;
+  final Color accent;
+  final double size;
+
+  static const int _count = 8;
+
+  @override
+  void paint(Canvas canvas, Size canvasSize) {
+    if (t <= 0 || t >= 1) return;
+    final center = canvasSize.center(Offset.zero);
+    final eased = Curves.easeOutCubic.transform(t);
+    final radius = size * 0.55 + eased * size * 0.85;
+    final alpha = (1.0 - t).clamp(0.0, 1.0);
+
+    for (int i = 0; i < _count; i++) {
+      final angle = (i / _count) * 2 * math.pi;
+      final pos = Offset(
+        center.dx + math.cos(angle) * radius,
+        center.dy + math.sin(angle) * radius,
+      );
+      final particleSize = 3.0 * (1.0 - eased * 0.5);
+      final paint = Paint()
+        ..color = (i.isEven ? Colors.white : accent).withValues(alpha: alpha)
+        ..isAntiAlias = false;
+      canvas.drawRect(
+        Rect.fromCenter(center: pos, width: particleSize, height: particleSize),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FirstCastSparklePainter oldDelegate) =>
+      oldDelegate.t != t;
 }
 
 // ─── Interaction + render core ────────────────────────────────────────────

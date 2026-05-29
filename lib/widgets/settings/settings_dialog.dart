@@ -29,7 +29,6 @@ import 'claude_avatar.dart';
 import 'diagnostics_section.dart';
 import 'usage_baselines_tab.dart';
 import 'logo_path_editor.dart';
-import 'send_button_section.dart';
 import 'theme_section.dart';
 
 /// Opens the settings dialog as a full-screen modal on mobile,
@@ -64,14 +63,25 @@ class _SettingsPage extends ConsumerWidget {
       backgroundColor: c.background,
       appBar: AppBar(
         backgroundColor: c.surface,
-        title: const Text(
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        toolbarHeight: 56,
+        titleSpacing: 0,
+        title: Text(
           'Налаштування',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: c.textHigh,
+            fontSize: 17,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.1,
+          ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.close),
+          icon: Icon(Icons.close, color: c.textMedium, size: 22),
+          splashRadius: 20,
           onPressed: () => Navigator.of(context).pop(),
         ),
+        shape: Border(bottom: BorderSide(color: c.border, width: 1)),
       ),
       body: const SafeArea(child: _SettingsContent()),
     );
@@ -108,35 +118,41 @@ class _SettingsDialog extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 12, 0),
-              child: Row(
-                children: [
-                  const Text(
-                    'Налаштування',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+            // Header — fixed 56px bar with symmetric padding so the close
+            // button's splash circle stays inside the header.
+            SizedBox(
+              height: 56,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 24, right: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Налаштування',
+                        style: TextStyle(
+                          color: c.textHigh,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    icon: Icon(
-                      Icons.close,
-                      size: 18,
-                      color: Colors.white.withValues(alpha: 0.5),
+                    IconButton(
+                      icon: Icon(Icons.close, size: 20, color: c.textMedium),
+                      splashRadius: 18,
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 36,
+                      ),
+                      padding: EdgeInsets.zero,
+                      tooltip: 'Закрити',
+                      onPressed: () => Navigator.of(context).pop(),
                     ),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-            const Divider(
-              color: Color(0xFF2A2A30),
-              height: 1,
-            ),
+            Divider(color: c.border, height: 1, thickness: 1),
             // Content
             const Flexible(child: _SettingsContent()),
           ],
@@ -151,12 +167,10 @@ class _SettingsDialog extends ConsumerWidget {
 enum _SettingsCategory {
   account(Icons.person_outline, 'Обліковий запис'),
   themes(Icons.palette_outlined, 'Теми'),
-  sendButton(Icons.send_outlined, 'Кнопка «Надіслати»'),
-  network(Icons.hub_outlined, 'Мережа'),
-  activeAgents(Icons.flash_on_outlined, 'Активні агенти'),
+  network(Icons.cloud_outlined, 'Мережа'),
+  activeAgents(Icons.groups_outlined, 'Активні агенти'),
   usageBaselines(Icons.query_stats_outlined, 'Використання'),
   ergonomics(Icons.chair_outlined, 'Ергономіка'),
-  logo(Icons.memory, 'Лого'),
   danger(Icons.warning_amber_rounded, 'Небезпечна зона');
 
   const _SettingsCategory(this.icon, this.label);
@@ -179,6 +193,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.appColors;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -188,7 +203,7 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             child: _buildSection(_cat),
           ),
         ),
-        Container(width: 1, color: const Color(0xFF2A2A30)),
+        Container(width: 1, color: c.border),
         _CategoryRail(
           selected: _cat,
           onSelect: (c) => setState(() => _cat = c),
@@ -203,8 +218,6 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return const _AccountSection();
       case _SettingsCategory.themes:
         return _buildThemes();
-      case _SettingsCategory.sendButton:
-        return _buildSendButton();
       case _SettingsCategory.network:
         return _buildNetwork();
       case _SettingsCategory.activeAgents:
@@ -213,14 +226,13 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
         return const UsageBaselinesTab();
       case _SettingsCategory.ergonomics:
         return _buildErgonomics();
-      case _SettingsCategory.logo:
-        return _buildLogo();
       case _SettingsCategory.danger:
         return _buildDanger();
     }
   }
 
   Widget _buildThemes() {
+    final settings = ref.watch(settingsProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -230,20 +242,72 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
             'Преміум теми можна кастомізувати.'),
         const SizedBox(height: 14),
         const ThemeSection(),
-      ],
-    );
-  }
 
-  Widget _buildSendButton() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Кнопка «Надіслати»'),
-        const SizedBox(height: 12),
-        _desc('Ексклюзивні ручні дизайни найчастіше натискуваної '
-            'кнопки. Преміум-варіанти — найдорожча косметика в магазині.'),
+        const SizedBox(height: 32),
+
+        // ── Section: Logo ─────────────────────────────────
+        _SectionHeader(title: 'Лого'),
+        const SizedBox(height: 16),
+
+        _SectionHeader(title: 'Глітч-ефект'),
+        const SizedBox(height: 8),
+        _desc('Налаштування візуального глітч-ефекту на логотипі.'),
         const SizedBox(height: 14),
-        const SendButtonSection(),
+        _GlitchControls(
+          enabled: settings.glitchEnabled,
+          intensity: settings.glitchIntensity,
+          speed: settings.glitchSpeed,
+          bandHeight: settings.glitchBandHeight,
+          bandHeightMin: settings.glitchBandHeightMin,
+          shift: settings.glitchShift,
+          chroma: settings.glitchChroma,
+          onEnabledChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchEnabled(v),
+          onIntensityChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchIntensity(v),
+          onSpeedChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchSpeed(v),
+          onBandHeightChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchBandHeight(v),
+          onBandHeightMinChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchBandHeightMin(v),
+          onShiftChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchShift(v),
+          onChromaChanged: (v) =>
+              ref.read(settingsProvider.notifier).setGlitchChroma(v),
+        ),
+
+        const SizedBox(height: 28),
+
+        _SectionHeader(title: 'Алгоритм руху'),
+        const SizedBox(height: 8),
+        _desc('Власна функція позиції логотипа під час анімації вимкнення. '
+            'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
+            'Output: return Point(x, y).'),
+        const SizedBox(height: 14),
+        LogoPathEditor(
+          script: settings.logoPathScript ?? kDefaultLogoPathScript,
+          onSaved: (script) {
+            final isDefault = script.trim() == kDefaultLogoPathScript.trim();
+            ref
+                .read(settingsProvider.notifier)
+                .setLogoPathScript(isDefault ? null : script);
+          },
+        ),
+
+        const SizedBox(height: 20),
+
+        _SectionHeader(title: 'Час анімації'),
+        const SizedBox(height: 8),
+        _desc('Скільки триває політ іконки під час вимкнення. '
+            'Native window collapse (400 мс) підлаштовується автоматично.'),
+        const SizedBox(height: 12),
+        _LogoAnimationDurationControl(
+          value: settings.logoAnimationDurationMs,
+          onChanged: (v) => ref
+              .read(settingsProvider.notifier)
+              .setLogoAnimationDurationMs(v),
+        ),
       ],
     );
   }
@@ -347,80 +411,6 @@ class _SettingsContentState extends ConsumerState<_SettingsContent> {
           value: ref.watch(settingsProvider).deskHeight,
           onChanged: (v) =>
               ref.read(settingsProvider.notifier).setDeskHeight(v),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLogo() {
-    final settings = ref.watch(settingsProvider);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: 'Лого'),
-        const SizedBox(height: 16),
-
-        // ── Subsection: Glitch effect ─────────────────────
-        _SectionHeader(title: 'Глітч-ефект'),
-        const SizedBox(height: 8),
-        _desc('Налаштування візуального глітч-ефекту на логотипі.'),
-        const SizedBox(height: 14),
-        _GlitchControls(
-          enabled: settings.glitchEnabled,
-          intensity: settings.glitchIntensity,
-          speed: settings.glitchSpeed,
-          bandHeight: settings.glitchBandHeight,
-          bandHeightMin: settings.glitchBandHeightMin,
-          shift: settings.glitchShift,
-          chroma: settings.glitchChroma,
-          onEnabledChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchEnabled(v),
-          onIntensityChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchIntensity(v),
-          onSpeedChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchSpeed(v),
-          onBandHeightChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchBandHeight(v),
-          onBandHeightMinChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchBandHeightMin(v),
-          onShiftChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchShift(v),
-          onChromaChanged: (v) =>
-              ref.read(settingsProvider.notifier).setGlitchChroma(v),
-        ),
-
-        const SizedBox(height: 28),
-
-        // ── Subsection: Movement algorithm ────────────────
-        _SectionHeader(title: 'Алгоритм руху'),
-        const SizedBox(height: 8),
-        _desc('Власна функція позиції логотипа під час анімації вимкнення. '
-            'Inputs: start, end, screenWidth, screenHeight, t (0→1). '
-            'Output: return Point(x, y).'),
-        const SizedBox(height: 14),
-        LogoPathEditor(
-          script: settings.logoPathScript ?? kDefaultLogoPathScript,
-          onSaved: (script) {
-            final isDefault = script.trim() == kDefaultLogoPathScript.trim();
-            ref
-                .read(settingsProvider.notifier)
-                .setLogoPathScript(isDefault ? null : script);
-          },
-        ),
-
-        const SizedBox(height: 20),
-
-        // ── Subsection: Animation duration ────────────────
-        _SectionHeader(title: 'Час анімації'),
-        const SizedBox(height: 8),
-        _desc('Скільки триває політ іконки під час вимкнення. '
-            'Native window collapse (400 мс) підлаштовується автоматично.'),
-        const SizedBox(height: 12),
-        _LogoAnimationDurationControl(
-          value: settings.logoAnimationDurationMs,
-          onChanged: (v) => ref
-              .read(settingsProvider.notifier)
-              .setLogoAnimationDurationMs(v),
         ),
       ],
     );
@@ -684,13 +674,8 @@ class _CategoryRail extends StatelessWidget {
                 active: cat == selected,
                 danger: cat == _SettingsCategory.danger,
                 onTap: () => onSelect(cat),
-                customIcon: cat == _SettingsCategory.logo
-                    ? Image.asset(
-                        'assets/logo_pixel.png',
-                        width: 16,
-                        height: 16,
-                        filterQuality: FilterQuality.none,
-                      )
+                customIcon: cat == _SettingsCategory.network
+                    ? const _CloudInOutIcon()
                     : null,
               ),
               const SizedBox(height: 6),
@@ -755,6 +740,94 @@ class _RailButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CloudInOutIcon extends StatelessWidget {
+  const _CloudInOutIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 16,
+      height: 16,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          const Icon(Icons.cloud_outlined, size: 16),
+          Positioned.fill(
+            child: CustomPaint(painter: const _CloudArrowsPainter()),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CloudArrowsPainter extends CustomPainter {
+  const _CloudArrowsPainter();
+
+  static const double _tiltRad = -25 * pi / 180;
+  // Up-arrow head is rotated more sharply so its spine aligns with the
+  // tangent of the bowed shaft at the connection point.
+  static const double _upTiltRad = -50 * pi / 180;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final fill = Paint()
+      ..color = const Color(0xFFFFFFFF)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+    final stroke = Paint()
+      ..color = const Color(0xFFFFFFFF)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1
+      ..strokeCap = StrokeCap.butt
+      ..isAntiAlias = true;
+
+    // ↓ arrow — arrowhead rigid; pivot shifted (-0.58, +0.91) so the apex
+    // extends ~1px further along the arrow direction and ~1px left.
+    canvas.save();
+    canvas.translate(11.42, 14.91);
+    canvas.rotate(_tiltRad);
+    final downHead = Path()
+      ..moveTo(-1.9, 1.2)
+      ..lineTo(1.9, 1.2)
+      ..lineTo(0, 4.4)
+      ..close();
+    canvas.drawPath(downHead, fill);
+    canvas.restore();
+
+    // Curved shaft bows left (control x < midpoint x).
+    final downShaft = Path()
+      ..moveTo(9.46, 8.56)
+      ..quadraticBezierTo(9.50, 12.28, 11.93, 16.00);
+    canvas.drawPath(downShaft, stroke);
+
+    // ↑ arrow — head tilted -50° so its spine aligns with the bowed shaft's
+    // tangent at the join. Pivot chosen so apex lands at (0.14, 0.01); base
+    // center then sits at (2.59, 2.07).
+    canvas.save();
+    canvas.translate(3.51, 2.84);
+    canvas.rotate(_upTiltRad);
+    final upHead = Path()
+      ..moveTo(-1.9, -1.2)
+      ..lineTo(1.9, -1.2)
+      ..lineTo(0, -4.4)
+      ..close();
+    canvas.drawPath(upHead, fill);
+    canvas.restore();
+
+    // Curved shaft. Control point chosen along the arrowhead's spine
+    // (P2 + k*(0.766, 0.643)) so tangent at head matches the head's rotation.
+    final upShaft = Path()
+      ..moveTo(6.54, 9.44)
+      ..quadraticBezierTo(7.57, 6.25, 2.59, 2.07);
+    canvas.drawPath(upShaft, stroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // ─── Framed avatar ─────────────────────────────────────────────────────────

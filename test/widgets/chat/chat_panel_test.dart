@@ -115,6 +115,18 @@ class _SeedChatNotifier extends ChatNotifier {
   }
 }
 
+/// Test stub for `selectedAgentProvider` — bypasses the real notifier's
+/// self-healing logic (which reads `gameEconomyProvider.agents` and would
+/// resolve any seeded id back to `manager#1` because the test's empty-state
+/// game has no agents). Returns the seeded id verbatim.
+class _SeedSelectedAgentNotifier extends SelectedAgentNotifier {
+  final String seed;
+  _SeedSelectedAgentNotifier(this.seed);
+
+  @override
+  String build() => seed;
+}
+
 Future<ProviderContainer> _makeContainer({
   AgentWsService? wsService,
   List<ChatMessage> seedMessages = const [],
@@ -134,7 +146,8 @@ Future<ProviderContainer> _makeContainer({
     if (seedMessages.isNotEmpty)
       chatProvider.overrideWith(() => _SeedChatNotifier(seedMessages)),
     if (selectedAgent != null)
-      selectedAgentProvider.overrideWith((_) => selectedAgent),
+      selectedAgentProvider
+          .overrideWith(() => _SeedSelectedAgentNotifier(selectedAgent)),
   ]);
 }
 
@@ -438,7 +451,7 @@ void main() {
       await _pump(tester, container);
       // Manager is the seeded selection — hint should not render.
       expect(
-        find.textContaining('Краще писати Капітану'),
+        find.textContaining('Краще написати'),
         findsNothing,
       );
 
@@ -451,7 +464,7 @@ void main() {
       final container = await _makeContainer(selectedAgent: 'coder#1');
       await _pump(tester, container);
       expect(
-        find.textContaining('Краще писати Капітану'),
+        find.textContaining('Краще написати'),
         findsOneWidget,
       );
       // Both dismiss controls visible.
@@ -472,7 +485,7 @@ void main() {
       );
       await _pump(tester, container);
       expect(
-        find.textContaining('Краще писати Капітану'),
+        find.textContaining('Краще написати'),
         findsNothing,
       );
 
@@ -485,10 +498,10 @@ void main() {
       final container = await _makeContainer(selectedAgent: 'coder#1');
       await _pump(tester, container);
 
-      expect(find.textContaining('Краще писати Капітану'), findsOneWidget);
+      expect(find.textContaining('Краще написати'), findsOneWidget);
       await tester.tap(find.text('Не показувати'));
       await tester.pump();
-      expect(find.textContaining('Краще писати Капітану'), findsNothing);
+      expect(find.textContaining('Краще написати'), findsNothing);
 
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();

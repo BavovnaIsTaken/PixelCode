@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:super_drag_and_drop/super_drag_and_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,11 +15,13 @@ import 'package:image_picker/image_picker.dart';
 import '../../models/agent_message.dart';
 import '../../models/agent_trait.dart';
 import '../../models/app_theme.dart';
+import '../../providers/agent_operational_status_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../providers/agent_traits_provider.dart';
 import '../../providers/settings_provider.dart';
 import '../../services/clipboard_service.dart';
 import '../../services/facilitator_session_service.dart';
+import '../common/image_preview_dialog.dart';
 import '../team_pulse_strip.dart';
 import 'board_added_bubble.dart';
 import 'chat_grouping.dart';
@@ -116,6 +119,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
   AnimationController? _tsAnim;
   double _tsRevealAnimFrom = 0;
 
+  Timer? _statusShowTimer;
+  Timer? _statusHideTimer;
+  bool _statusVisible = false;
+  String _statusLabel = '';
+  AgentStatus _lastEffectiveStatus = AgentStatus.idle;
+
   @override
   void initState() {
     super.initState();
@@ -156,6 +165,12 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
           if (mounted) setState(() => _showSkeleton = true);
         });
       }
+      _updateStatusIndicator(
+        _deriveEffectiveStatus(
+          ref.read(agentOperationalStatusesProvider),
+          ref.read(selectedAgentProvider),
+        ),
+      );
     });
 
     _boardTaskSub = facilitatorBoardTaskStream.listen(_onBoardTaskAdded);
@@ -267,6 +282,29 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
     return _roleTypeOf(selected) != 'manager';
   }
 
+  /// First hired manager instance, or `null` if no manager is on the team.
+  String? _managerInstanceId() {
+    final agents = ref.read(agentsProvider);
+    for (final id in agents.keys) {
+      if (_roleTypeOf(id) == 'manager') return id;
+    }
+    return null;
+  }
+
+  /// Display nickname of the team's manager, falling back to the role's
+  /// default label when no manager is hired yet.
+  String _managerNickname() {
+    final id = _managerInstanceId();
+    return id != null ? _agentNickname(ref, id) : 'Капітан';
+  }
+
+  /// Switch the chat tab to the manager, if one exists.
+  void _selectManager() {
+    final id = _managerInstanceId();
+    if (id == null) return;
+    ref.read(selectedAgentProvider.notifier).select(id);
+  }
+
   void _onInputChanged() {
     if (_applyingRemoteUpdate) return;
     ref.read(wsServiceProvider).sendInputText(_controller.text);
@@ -276,6 +314,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
   void dispose() {
     _boardTaskSub?.cancel();
     _skeletonTimer?.cancel();
+    _statusShowTimer?.cancel();
+    _statusHideTimer?.cancel();
     _controller.removeListener(_onInputChanged);
     _scrollController.removeListener(_onScroll);
     _controller.dispose();
@@ -667,7 +707,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
                             color: Colors.transparent,
                             child: InkWell(
                               onTap: () {
-                                ref.read(selectedAgentProvider.notifier).state = agentId;
+                                ref.read(selectedAgentProvider.notifier)
+                                    .select(agentId);
                                 Navigator.pop(context);
                               },
                               hoverColor: Colors.white.withValues(alpha: 0.05),
@@ -810,9 +851,73 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
         _ => Icons.person,
       };
 
+  // Effective "is something working" status for the header indicator:
+  // the selected agent's reconciled status, falling back to any busy
+  // subagent (captain delegations leave the selected agent idle while
+  // team works). C.2.6 — reads agentOperationalStatusesProvider, which
+  // forces idle for any agent not in the server's active_agents set even
+  // if a stale agent_status push left the local cache non-idle.
+  AgentStatus _deriveEffectiveStatus(
+      Map<String, AgentStatus> reconciled, String selectedId) {
+    final selectedStatus = reconciled[selectedId] ?? AgentStatus.idle;
+    if (selectedStatus != AgentStatus.idle) return selectedStatus;
+    for (final e in reconciled.entries) {
+      if (e.key != selectedId && e.value != AgentStatus.idle) return e.value;
+    }
+    return AgentStatus.idle;
+  }
+
+  String _labelFor(AgentStatus status) => switch (status) {
+        AgentStatus.thinking => 'Thinking',
+        AgentStatus.typing => 'Writing',
+        AgentStatus.reading => 'Reading',
+        AgentStatus.running => 'Working',
+        AgentStatus.waiting => 'Thinking',
+        AgentStatus.idle => '',
+      };
+
+  // Debounce the header status indicator so brief idle gaps between
+  // assistant_message_done → tool_use → next text (100-300ms within one
+  // query) don't flicker the dot+label on and off. Show after 250ms of
+  // sustained work; hide after 1000ms of sustained idle.
+  void _updateStatusIndicator(AgentStatus status) {
+    if (status == _lastEffectiveStatus) return;
+    _lastEffectiveStatus = status;
+
+    if (status == AgentStatus.idle) {
+      _statusShowTimer?.cancel();
+      _statusShowTimer = null;
+      if (_statusVisible && _statusHideTimer == null) {
+        _statusHideTimer = Timer(const Duration(milliseconds: 1000), () {
+          _statusHideTimer = null;
+          if (!mounted) return;
+          setState(() => _statusVisible = false);
+        });
+      }
+      return;
+    }
+
+    _statusHideTimer?.cancel();
+    _statusHideTimer = null;
+    final newLabel = _labelFor(status);
+    if (_statusVisible) {
+      if (newLabel != _statusLabel) {
+        setState(() => _statusLabel = newLabel);
+      }
+      return;
+    }
+    _statusShowTimer ??= Timer(const Duration(milliseconds: 250), () {
+      _statusShowTimer = null;
+      if (!mounted) return;
+      setState(() {
+        _statusVisible = true;
+        _statusLabel = _labelFor(_lastEffectiveStatus);
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final selectedAgent = ref.watch(selectedAgentProvider);
     final messages = ref.watch(chatProvider);
     final visibleMessages = _activeAgentFilter == null
         ? messages
@@ -823,43 +928,23 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
             .toList();
     final groupedItems = buildChatItems(visibleMessages);
     final syncState = ref.watch(chatSyncStateProvider);
-    final agentStatus = ref.watch(
-      agentsProvider.select((m) => m[selectedAgent]?.status ?? AgentStatus.idle),
-    );
-    final agentToolDesc = ref.watch(
-      agentsProvider.select((m) => m[selectedAgent]?.lastToolDescription),
-    );
-    // Team activity: when the selected agent delegates (common for captain),
-    // its own status returns to idle while subagents keep working. Surface a
-    // team-busy indicator so the chat doesn't look frozen.
-    final busySubagents = ref.watch(
-      agentsProvider.select((m) => [
-        for (final e in m.entries)
-          if (e.key != selectedAgent && e.value.isActive) e.value,
-      ]),
-    );
-    final hasStreamingBubble =
-        messages.isNotEmpty && messages.last.isStreaming;
-    final selectedIsActive = agentStatus != AgentStatus.idle;
-    final showThinking =
-        (selectedIsActive || busySubagents.isNotEmpty) && !hasStreamingBubble;
-    final thinkingStatus = showThinking
-        ? (selectedIsActive ? agentStatus : busySubagents.first.status)
-        : agentStatus;
-    final thinkingToolDesc = showThinking
-        ? (selectedIsActive
-            ? agentToolDesc
-            : busySubagents.first.lastToolDescription)
-        : agentToolDesc;
-    final thinkingSubtitle = !showThinking || selectedIsActive
-        ? null
-        : busySubagents.length == 1
-            ? busySubagents.first.info.name
-            : '${busySubagents.length} агентів працюють';
+    // C.2.6 — listen on the reconciled provider, not the raw agent_status
+    // cache. This makes the indicator react both to push events AND to
+    // active_agents membership changes (e.g. server.ts cleanup after a
+    // hung query terminates).
+    ref.listen(agentOperationalStatusesProvider, (prev, next) {
+      _updateStatusIndicator(
+        _deriveEffectiveStatus(next, ref.read(selectedAgentProvider)),
+      );
+    });
 
     ref.listen(selectedAgentProvider, (prev, next) {
       _autoScroll = true;
       _scrollToBottom();
+      _updateStatusIndicator(
+        _deriveEffectiveStatus(
+          ref.read(agentOperationalStatusesProvider), next),
+      );
     });
 
     ref.listen(chatSyncStateProvider, (prev, next) {
@@ -967,10 +1052,30 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
                               fontWeight: FontWeight.w600,
                             ),
                           ),
-                          if (selectedIsActive) ...[
-                            const SizedBox(width: 6),
-                            _AgentBusyDot(),
-                          ],
+                          AnimatedSize(
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            alignment: Alignment.centerLeft,
+                            child: _statusVisible
+                                ? Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const SizedBox(width: 6),
+                                      _AgentBusyDot(),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '$_statusLabel…',
+                                        style: TextStyle(
+                                          color: Colors.white
+                                              .withValues(alpha: 0.45),
+                                          fontSize: 11,
+                                          fontStyle: FontStyle.italic,
+                                        ),
+                                      ),
+                                    ],
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
                         ],
                       ),
                     ),
@@ -1060,7 +1165,7 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
                 ? (_showSkeleton
                     ? const _PixelChatSkeleton()
                     : const SizedBox.shrink())
-                : (messages.isEmpty && !showThinking)
+                : (messages.isEmpty && !_statusVisible)
                     ? _buildEmptyState()
                     : GestureDetector(
                         behavior: HitTestBehavior.translucent,
@@ -1089,17 +1194,9 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
                             reverse: true,
                             controller: _scrollController,
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                            itemCount: groupedItems.length + (showThinking ? 1 : 0),
+                            itemCount: groupedItems.length,
                             itemBuilder: (context, index) {
-                              if (showThinking && index == 0) {
-                                return _ThinkingBubble(
-                                  status: thinkingStatus,
-                                  toolDescription: thinkingToolDesc,
-                                  subtitle: thinkingSubtitle,
-                                );
-                              }
-                              final msgIndex = showThinking ? index - 1 : index;
-                              final gi = groupedItems.length - 1 - msgIndex;
+                              final gi = groupedItems.length - 1 - index;
                               final item = groupedItems[gi];
                               final belowItem = gi + 1 < groupedItems.length ? groupedItems[gi + 1] : null;
                               final sender = itemSender(item);
@@ -1310,6 +1407,8 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
           // Hint: user is addressing a non-manager agent.
           if (_shouldShowDirectMsgHint())
             _DirectMsgHint(
+              managerNickname: _managerNickname(),
+              onManagerTap: _selectManager,
               onDismiss: () => setState(() => _directMsgHintDismissed = true),
               onDontShowAgain: () {
                 ref.read(settingsProvider.notifier)
@@ -1356,11 +1455,21 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
                                     ),
                                   ),
                                 )
-                              : Image.memory(
-                                  imageBytes,
-                                  width: 80,
-                                  height: 80,
-                                  fit: BoxFit.cover,
+                              : Material(
+                                  color: Colors.transparent,
+                                  child: InkWell(
+                                    onTap: () => showImagePreviewDialog(
+                                      context,
+                                      imageBytes,
+                                    ),
+                                    child: Image.memory(
+                                      imageBytes,
+                                      width: 80,
+                                      height: 80,
+                                      fit: BoxFit.cover,
+                                      gaplessPlayback: true,
+                                    ),
+                                  ),
                                 ),
                         ),
                         if (!isLoading)
@@ -1476,10 +1585,14 @@ class _ChatPanelState extends ConsumerState<ChatPanel>
 // ─── Direct Messaging Hint ────────────────────────────────────────────────────
 
 class _DirectMsgHint extends StatelessWidget {
+  final String managerNickname;
+  final VoidCallback onManagerTap;
   final VoidCallback onDismiss;
   final VoidCallback onDontShowAgain;
 
   const _DirectMsgHint({
+    required this.managerNickname,
+    required this.onManagerTap,
     required this.onDismiss,
     required this.onDontShowAgain,
   });
@@ -1506,15 +1619,36 @@ class _DirectMsgHint extends StatelessWidget {
                 child: Icon(Icons.info_outline, size: 14, color: accent),
               ),
               const SizedBox(width: 6),
-              const Expanded(
-                child: Text(
-                  'Краще писати Капітану — він розподілить роботу між командою. '
-                  'Пряме повідомлення конкретному колезі — тонке керування: '
-                  'роби так лише якщо добре розумієш, що й кому делегуєш.',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                    height: 1.35,
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      height: 1.35,
+                    ),
+                    children: [
+                      const TextSpan(text: 'Краще написати '),
+                      TextSpan(
+                        text: managerNickname,
+                        style: const TextStyle(
+                          color: accent,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Color(0x8C00C0D1),
+                          decorationThickness: 1.0,
+                        ),
+                        recognizer: TapGestureRecognizer()
+                          ..onTap = onManagerTap,
+                        mouseCursor: SystemMouseCursors.click,
+                      ),
+                      const TextSpan(
+                        text:
+                            ' — він розподілить роботу між командою. '
+                            'Пряме повідомлення конкретному колезі — тонке '
+                            'керування: роби так лише якщо добре розумієш, '
+                            'що й кому делегуєш.',
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1660,15 +1794,8 @@ class _ChatBubble extends ConsumerWidget {
                 spacing: 6,
                 runSpacing: 6,
                 children: message.imageBase64s.map((b64) {
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      base64Decode(b64),
-                      width: 180,
-                      height: 130,
-                      fit: BoxFit.cover,
-                    ),
-                  );
+                  final bytes = base64Decode(b64);
+                  return _ChatImageThumb(bytes: bytes);
                 }).toList(),
               ),
             ),
@@ -2031,94 +2158,6 @@ class _GarlandPainter extends CustomPainter {
   bool shouldRepaint(_GarlandPainter oldDelegate) => true;
 }
 
-class _ThinkingBubble extends StatelessWidget {
-  final AgentStatus status;
-  final String? toolDescription;
-  final String? subtitle;
-
-  const _ThinkingBubble({
-    required this.status,
-    this.toolDescription,
-    this.subtitle,
-  });
-
-  String get _label {
-    final tool = toolDescription;
-    if (tool != null && tool.isNotEmpty && status == AgentStatus.running) {
-      return tool;
-    }
-    return switch (status) {
-      AgentStatus.thinking => 'Thinking',
-      AgentStatus.typing => 'Typing',
-      AgentStatus.reading => 'Reading',
-      AgentStatus.running => 'Working',
-      AgentStatus.waiting => 'Waiting',
-      AgentStatus.idle => 'Idle',
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Flexible(
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1F27),
-                borderRadius: BorderRadius.circular(12)
-                    .copyWith(bottomLeft: const Radius.circular(4)),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.06),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          _label,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 13,
-                            fontStyle: FontStyle.italic,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _TypingDots(),
-                    ],
-                  ),
-                  if (subtitle != null && subtitle!.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        subtitle!,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.4),
-                          fontSize: 11,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// Pulsing amber dot shown in the chat header when the selected agent is busy.
 class _AgentBusyDot extends StatefulWidget {
   @override
@@ -2158,6 +2197,32 @@ class _AgentBusyDotState extends State<_AgentBusyDot>
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: const Color(0xFFFFA000).withValues(alpha: _opacity.value),
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatImageThumb extends StatelessWidget {
+  final Uint8List bytes;
+
+  const _ChatImageThumb({required this.bytes});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => showImagePreviewDialog(context, bytes),
+          child: Image.memory(
+            bytes,
+            width: 180,
+            height: 130,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+          ),
         ),
       ),
     );

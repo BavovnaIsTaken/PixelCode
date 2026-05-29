@@ -42,4 +42,11 @@ void main() {
       }));
     });
   });
+
+  group('Печатка category label', () {
+    test('sendButtonStyle exposes "Печатка" — the premium collection label',
+        () {
+      expect(CosmeticType.sendButtonStyle.label, 'Печатка');
+    });
+  });
 }
