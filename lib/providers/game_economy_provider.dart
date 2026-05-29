@@ -408,14 +408,18 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   /// Fire a specific instance by instanceId. Refunds 50% of the role's hire cost.
-  void fireAgent(String instanceId) {
+  ///
+  /// Returns `true` if the agent was fired, `false` if the call was blocked
+  /// (unknown id, or attempt to fire the last singleton manager). The caller
+  /// uses the return value to surface a toast on the singleton-block case.
+  bool fireAgent(String instanceId) {
     final agent = state.agents[instanceId];
-    if (agent == null) return;
+    if (agent == null) return false;
 
     final role = roleCatalogFor(agent.roleType);
     // Keep at least one manager around so the team can still coordinate.
     if (role != null && role.singleton && state.roleCount(agent.roleType) <= 1) {
-      return;
+      return false;
     }
 
     final updated = Map<String, AgentGameData>.from(state.agents)
@@ -427,6 +431,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
       grymni: state.grymni + refund,
       agents: updated,
     ));
+    return true;
   }
 
   /// Mark an agent's workstation as assigned once the canvas detects that
@@ -719,6 +724,45 @@ class GameEconomyNotifier extends Notifier<GameState> {
     return state.grymni >= next.upgradeCost;
   }
 
+  /// True when the player can switch to [target] — a parallel-option office
+  /// (off the linear upgrade chain). Returns false if [target] is already
+  /// the current level, is WIP, is not actually a parallel option, or the
+  /// player cannot afford its cost.
+  bool canSwitchToOffice(OfficeLevel target) {
+    if (!target.isParallelOption) return false;
+    if (target == state.officeLevel) return false;
+    if (target.isWipComingSoon) return false;
+    return state.grymni >= target.upgradeCost;
+  }
+
+  /// Switch to a parallel-option office. Same side effects as upgradeOffice
+  /// (deduct cost, reset expansions, drop out-of-bounds rooms/furniture).
+  void switchToOffice(OfficeLevel target) {
+    if (!canSwitchToOffice(target)) return;
+    final cost = target.upgradeCost;
+    final nextCols = target.baseCols;
+    final nextRows = target.baseRows;
+    final keptRooms = state.placedRooms
+        .where((r) =>
+            r.col >= 1 &&
+            r.row >= 1 &&
+            r.col + r.type.widthTiles <= nextCols - 1 &&
+            r.row + r.type.heightTiles <= nextRows - 1)
+        .toList();
+    final keptFurniture = state.placedFurniture
+        .where((p) => p.col < nextCols - 1 && p.row < nextRows - 1)
+        .toList();
+
+    _updateStateAndSync(state.copyWith(
+      grymni: state.grymni - cost,
+      totalSpent: state.totalSpent + cost,
+      officeLevel: target,
+      officeExpansions: 0,
+      placedRooms: keptRooms,
+      placedFurniture: keptFurniture,
+    ));
+  }
+
   void upgradeOffice() {
     if (!canUpgradeOffice()) return;
     final next = state.officeLevel.nextLevel!;
@@ -845,6 +889,17 @@ class GameEconomyNotifier extends Notifier<GameState> {
     final equipped = Map<int, String>.from(state.equippedCosmetics);
     equipped.remove(type.index);
     _updateStateAndSync(state.copyWith(equippedCosmetics: equipped));
+  }
+
+  /// Returns true if [stampId] hasn't been "cast" yet (first send after equip).
+  /// Used by the send-button to decide whether to fire the one-shot sparkle.
+  bool isStampVirgin(String stampId) => !state.castStamps.contains(stampId);
+
+  /// Mark [stampId] as cast so the first-cast sparkle won't fire again.
+  void markStampCast(String stampId) {
+    if (state.castStamps.contains(stampId)) return;
+    final next = Set<String>.from(state.castStamps)..add(stampId);
+    _updateStateAndSync(state.copyWith(castStamps: next));
   }
 
   // ─── Themes ────────────────────────────────────────────────────────────

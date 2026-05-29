@@ -6,7 +6,7 @@ AgentListing _baseListing() => AgentListing(
       agentId: 'A1',
       name: 'Andriy',
       role: 'coder',
-      priceGrim: 1500,
+      priceGrymni: 1500,
       qualityScore: 82.5,
       averageRating: 4.5,
       reviewCount: 12,
@@ -26,7 +26,7 @@ void main() {
       expect(l.agentId, 'A1');
       expect(l.name, 'Andriy');
       expect(l.role, 'coder');
-      expect(l.priceGrim, 1500);
+      expect(l.priceGrymni, 1500);
       expect(l.qualityScore, 82.5);
       expect(l.averageRating, 4.5);
       expect(l.reviewCount, 12);
@@ -44,7 +44,7 @@ void main() {
         agentId: 'A1',
         name: 'A',
         role: 'tester',
-        priceGrim: 500,
+        priceGrymni: 500,
         qualityScore: 50.0,
         averageRating: 3.0,
         reviewCount: 0,
@@ -67,7 +67,7 @@ void main() {
       expect(clone.agentId, l.agentId);
       expect(clone.name, l.name);
       expect(clone.role, l.role);
-      expect(clone.priceGrim, l.priceGrim);
+      expect(clone.priceGrymni, l.priceGrymni);
       expect(clone.qualityScore, l.qualityScore);
       expect(clone.averageRating, l.averageRating);
       expect(clone.reviewCount, l.reviewCount);
@@ -83,12 +83,12 @@ void main() {
     test('overrides only the fields provided', () {
       final l = _baseListing();
       final updated = l.copyWith(
-        priceGrim: 2000,
+        priceGrymni: 2000,
         averageRating: 4.9,
         purchaseCount: 8,
       );
 
-      expect(updated.priceGrim, 2000);
+      expect(updated.priceGrymni, 2000);
       expect(updated.averageRating, 4.9);
       expect(updated.purchaseCount, 8);
       // Untouched
@@ -115,7 +115,7 @@ void main() {
         agentId: 'A2',
         name: 'Olya',
         role: 'tester',
-        priceGrim: 999,
+        priceGrymni: 999,
         qualityScore: 60.0,
         averageRating: 3.5,
         reviewCount: 100,
@@ -131,7 +131,7 @@ void main() {
       expect(updated.agentId, 'A2');
       expect(updated.name, 'Olya');
       expect(updated.role, 'tester');
-      expect(updated.priceGrim, 999);
+      expect(updated.priceGrymni, 999);
       expect(updated.qualityScore, 60.0);
       expect(updated.averageRating, 3.5);
       expect(updated.reviewCount, 100);

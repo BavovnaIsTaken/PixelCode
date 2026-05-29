@@ -76,9 +76,16 @@ class _PixelCodeAppState extends ConsumerState<PixelCodeApp> {
     // are folded into the local economy even when the user is not looking
     // at the board panel.
     ref.read(taskOutcomeReflectorProvider);
+    // Lifecycle-driven disconnect/reconnect is mobile-only. On desktop
+    // (macOS in particular), `onHide`/`onResume` also fire when the user
+    // switches windows — cycling the socket there causes the hub's
+    // `connectionStatus`-gated UI to flicker (notch view-toggle disappears,
+    // `_viewIndex` gets clamped back to Office) every time the app regains
+    // focus.
+    final isMobile = Platform.isIOS || Platform.isAndroid;
     _lifecycleListener = AppLifecycleListener(
-      onHide: _onAppBackground,
-      onResume: _onAppForeground,
+      onHide: isMobile ? _onAppBackground : null,
+      onResume: isMobile ? _onAppForeground : null,
       onExitRequested: () async {
         await _wsService.dispose();
         return AppExitResponse.exit;

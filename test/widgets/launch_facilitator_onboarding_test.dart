@@ -161,6 +161,9 @@ void main() {
         ref: ref,
         projectPath: '/tmp/proj',
         isWsConnected: () => true,
+        // Fresh-mode picker is the path that exercises pickStyle + pickIntake;
+        // existing-mode would bypass them. Test wants the full intake flow.
+        pickProjectMode: () async => ProjectMode.fresh,
         loadStyles: () async => [_style()],
         loadExisting: (_) async => null,
         pickStyle: (styles) async => styles.first,
@@ -196,6 +199,7 @@ void main() {
         ref: ref,
         projectPath: '/tmp/proj',
         isWsConnected: () => true,
+        pickProjectMode: () async => ProjectMode.fresh,
         loadStyles: () async => [_style()],
         loadExisting: (_) async => null,
         pickStyle: (styles) async => styles.first,

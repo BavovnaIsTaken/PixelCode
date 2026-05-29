@@ -126,6 +126,45 @@ void main() {
     expect(round.floorSkinId, 'carpet_pack');
   });
 
+  // ─── Empty-roster guard ────────────────────────────────────────────────
+
+  test('load re-seeds the roster if a saved state has zero agents', () async {
+    // A v6 save with an empty agents map — possible after a buggy migration,
+    // corrupted server sync, or manual JSON edit. The guard reseeds the
+    // singleton manager/coder so chat & dispatch loops still have a team.
+    final json =
+        '{"schemaVersion":${GameState.currentSchemaVersion},"grymni":888,'
+        '"agents":{}}';
+    SharedPreferences.setMockInitialValues({'pixelcode_game_state': json});
+    final prefs = await SharedPreferences.getInstance();
+    final loaded = GamePersistenceService.load(prefs);
+
+    // Non-agent fields are preserved (this is NOT a hard wipe).
+    expect(loaded.grymni, 888);
+
+    // Roster is reseeded — at minimum a manager must be present so the
+    // selectedAgentProvider can resolve.
+    expect(loaded.agents, isNotEmpty);
+    final hasManager =
+        loaded.agents.values.any((a) => a.roleType == 'manager');
+    expect(hasManager, isTrue, reason: 'Manager must be reseeded.');
+  });
+
+  test('load preserves agents when the saved roster is non-empty', () async {
+    // Negative case: the empty-roster guard must NOT clobber a valid roster.
+    final json =
+        '{"schemaVersion":${GameState.currentSchemaVersion},"grymni":111,'
+        '"agents":{"coder#1":{"instanceId":"coder#1","roleType":"coder",'
+        '"nickname":"Solo","hardware":0}}}';
+    SharedPreferences.setMockInitialValues({'pixelcode_game_state': json});
+    final prefs = await SharedPreferences.getInstance();
+    final loaded = GamePersistenceService.load(prefs);
+
+    expect(loaded.grymni, 111);
+    expect(loaded.agents.keys, equals({'coder#1'}));
+    expect(loaded.agents['coder#1']!.nickname, 'Solo');
+  });
+
   test('PlacedCorridor round-trips through JSON', () {
     final original = PlacedCorridor(
       id: 'c1',

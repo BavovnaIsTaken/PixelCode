@@ -87,7 +87,7 @@ class _ListingDetailState extends State<ListingDetail> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    '${widget.listing.priceGrim} ₲',
+                    '${widget.listing.priceGrymni} ₲',
                     style: const TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,

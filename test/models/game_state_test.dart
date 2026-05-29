@@ -112,6 +112,15 @@ void main() {
         expect(OfficeLevel.modernOffice.nextLevel, OfficeLevel.techHub);
         expect(OfficeLevel.techHub.nextLevel, OfficeLevel.campus);
         expect(OfficeLevel.campus.nextLevel, isNull);
+        expect(OfficeLevel.galley.nextLevel, isNull);
+      });
+
+      test('galley is a parallel option (off the linear chain)', () {
+        expect(OfficeLevel.galley.isParallelOption, isTrue);
+        for (final level in OfficeLevel.values) {
+          if (level == OfficeLevel.galley) continue;
+          expect(level.isParallelOption, isFalse, reason: '$level');
+        }
       });
 
       test('upgrade resets expansions counter', () {

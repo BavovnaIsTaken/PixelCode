@@ -79,7 +79,7 @@ class MockMarketplaceService implements MarketplaceService {
     final totalSales =
         sellerListings.fold<int>(0, (sum, l) => sum + l.purchaseCount);
     final totalRevenue = sellerListings.fold<int>(0, (sum, l) {
-      final sellerShare = (l.priceGrim * 0.8).floor();
+      final sellerShare = (l.priceGrymni * 0.8).floor();
       return sum + (sellerShare * l.purchaseCount);
     });
     final avgRating = sellerListings.isNotEmpty

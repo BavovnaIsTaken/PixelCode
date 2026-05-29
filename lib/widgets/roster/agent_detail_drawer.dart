@@ -5,26 +5,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/providers/game_economy_provider.dart';
+import 'package:pixelcode/widgets/hub/app_bottom_sheet.dart';
 import 'package:pixelcode/widgets/personalization/personalization_panel.dart';
 import 'package:pixelcode/widgets/roster/agent_overview_tab.dart';
 
 void showAgentDetailDrawer(BuildContext context, AgentGameData agent) {
-  showModalBottomSheet<void>(
+  showAppBottomSheet<void>(
     context: context,
-    isScrollControlled: true,
-    backgroundColor: const Color(0xFF1A1A1F),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (_) => DraggableScrollableSheet(
-      initialChildSize: 0.75,
-      minChildSize: 0.4,
-      maxChildSize: 0.95,
-      expand: false,
-      builder: (context, scrollController) => AgentDetailDrawer(
-        agent: agent,
-        scrollController: scrollController,
-      ),
+    initialSize: 0.75,
+    minSize: 0.4,
+    maxSize: 0.95,
+    // No internal drag handle — the AgentDetailDrawer header already has its
+    // own and we don't want two stacked indicators.
+    showDragHandle: false,
+    builder: (context, scrollController) => AgentDetailDrawer(
+      agent: agent,
+      scrollController: scrollController,
     ),
   );
 }

@@ -27,9 +27,17 @@ AgentRunSnapshot _run(
       startedAt: '2026-05-17T10:00:00Z',
     );
 
+class _FixedSelectedAgent extends SelectedAgentNotifier {
+  _FixedSelectedAgent(this._value);
+  final String _value;
+  @override
+  String build() => _value;
+}
+
 Widget _harness({required String selectedAgent}) => ProviderScope(
       overrides: [
-        selectedAgentProvider.overrideWith((ref) => selectedAgent),
+        selectedAgentProvider
+            .overrideWith(() => _FixedSelectedAgent(selectedAgent)),
       ],
       child: const MaterialApp(
         home: Scaffold(body: InterruptedRunsBanner()),

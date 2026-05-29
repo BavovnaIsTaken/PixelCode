@@ -35,6 +35,12 @@ enum OfficeLevel {
   modernOffice,
   techHub,
   campus,
+  // NOTE: appended at the end to keep JSON .index serialization stable for
+  // existing saves. Galley is conceptually a parallel alternative office
+  // location, not a strict tier — wired into the linear chain (campus →
+  // galley) as a pragmatic MVP until the office system is refactored to a
+  // catalog model (separate purchase, independent of upgrade chain).
+  galley,
 }
 
 extension OfficeLevelExt on OfficeLevel {
@@ -44,6 +50,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 'Модерн офіс',
         OfficeLevel.techHub => 'Тех-хаб',
         OfficeLevel.campus => 'Кампус',
+        OfficeLevel.galley => 'Галера',
       };
 
   String get description => switch (this) {
@@ -57,6 +64,8 @@ extension OfficeLevelExt on OfficeLevel {
           'Тех-хаб з неоном і топовим залізом. Старт 10×7, розширення до 16×13 клітинок — є де розгулятися.',
         OfficeLevel.campus =>
           'Розкішний кампус. Старт 12×10, розширення до 20×16 клітинок — плануй від першої до останньої клітинки.',
+        OfficeLevel.galley =>
+          'Антична бойова галера у відкритому морі. Довгий просторий корпус, просмолене дерево палуби, бронзовий ніс, ліхтарі під нічним небом. Старт 21×44 — велика палуба для всієї команди.',
       };
 
   String get emoji => switch (this) {
@@ -65,6 +74,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => '🏗️',
         OfficeLevel.techHub => '⚡',
         OfficeLevel.campus => '🏛️',
+        OfficeLevel.galley => '⛵',
       };
 
   int get maxAgents => switch (this) {
@@ -73,6 +83,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 12,
         OfficeLevel.techHub => 25,
         OfficeLevel.campus => 100,
+        OfficeLevel.galley => 20,
       };
 
   double get speedModifier => switch (this) {
@@ -81,6 +92,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 1.1,
         OfficeLevel.techHub => 1.25,
         OfficeLevel.campus => 1.5,
+        OfficeLevel.galley => 1.25,
       };
 
   int get upgradeCost => switch (this) {
@@ -89,6 +101,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 8000,
         OfficeLevel.techHub => 50000,
         OfficeLevel.campus => 500000,
+        OfficeLevel.galley => 80000,
       };
 
   /// Base grid dimensions at purchase time (before any expansions bought).
@@ -100,6 +113,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 11,
         OfficeLevel.techHub => 12,
         OfficeLevel.campus => 14,
+        OfficeLevel.galley => 21,
       };
 
   int get baseRows => switch (this) {
@@ -108,6 +122,7 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => 7,
         OfficeLevel.techHub => 9,
         OfficeLevel.campus => 12,
+        OfficeLevel.galley => 44,
       };
 
   /// Ordered expansion steps for this tier. Each step either adds a column
@@ -179,6 +194,16 @@ extension OfficeLevelExt on OfficeLevel {
             OfficeExpansion(deltaRows: 1, cost: 850000),
             OfficeExpansion(deltaCols: 1, cost: 980000),
             OfficeExpansion(deltaRows: 1, cost: 1120000),
+          ],
+        OfficeLevel.galley => const [
+            // base 21×44 inner 19×42=798. Galley grows further by length —
+            // expansions stretch the ship rather than fatten it.
+            OfficeExpansion(deltaRows: 2, cost: 18000),
+            OfficeExpansion(deltaRows: 2, cost: 22000),
+            OfficeExpansion(deltaRows: 2, cost: 28000),
+            OfficeExpansion(deltaCols: 1, cost: 36000),
+            OfficeExpansion(deltaRows: 2, cost: 45000),
+            OfficeExpansion(deltaRows: 2, cost: 55000),
           ],
       };
 
@@ -270,7 +295,14 @@ extension OfficeLevelExt on OfficeLevel {
         OfficeLevel.modernOffice => OfficeLevel.techHub,
         OfficeLevel.techHub => OfficeLevel.campus,
         OfficeLevel.campus => null,
+        OfficeLevel.galley => null,
       };
+
+  /// True for offices that are NOT part of the linear upgrade chain — they
+  /// can be purchased as parallel locations (separate place to work)
+  /// regardless of the current tier. Such offices are listed in the shop
+  /// with their own "buy" action instead of the linear nextLevel flow.
+  bool get isParallelOption => this == OfficeLevel.galley;
 }
 
 /// Result of `OfficeLevel.computeExpansionPlan`. When [extraSteps] is 0 the
@@ -1145,7 +1177,7 @@ extension CosmeticTypeExt on CosmeticType {
         CosmeticType.nicknameDecor => 'Декор нікнейму',
         CosmeticType.avatarFrame => 'Рамки аватара',
         CosmeticType.titleBadge => 'Титули',
-        CosmeticType.sendButtonStyle => 'Кнопка «Надіслати»',
+        CosmeticType.sendButtonStyle => 'Печатка',
       };
 
   String get icon => switch (this) {
@@ -1153,7 +1185,7 @@ extension CosmeticTypeExt on CosmeticType {
         CosmeticType.nicknameDecor => '✏️',
         CosmeticType.avatarFrame => '🖼️',
         CosmeticType.titleBadge => '🏷️',
-        CosmeticType.sendButtonStyle => '📮',
+        CosmeticType.sendButtonStyle => '◈',
       };
 }
 
@@ -1461,6 +1493,45 @@ const furnitureCatalog = <FurnitureItem>[
     cost: 1000,
     description: 'Компактний диванчик для швидкого відпочинку між спринтами.',
     widthTiles: 2,
+  ),
+
+  // ── Корабельний вантаж (Галера) ──
+  FurnitureItem(
+    id: 'ship_barrel',
+    type: FurnitureType.storage,
+    name: 'Дубова бочка',
+    cost: 120,
+    description: 'Просмолена бочка для прісної води або вина. Класика палуби.',
+  ),
+  FurnitureItem(
+    id: 'ship_barrel_stack',
+    type: FurnitureType.storage,
+    name: 'Дві бочки',
+    cost: 220,
+    description: 'Дві бочки одна на одній. Подвійний запас.',
+  ),
+  FurnitureItem(
+    id: 'ship_crate',
+    type: FurnitureType.storage,
+    name: 'Корабельний ящик',
+    cost: 180,
+    description: 'Дерев’яний ящик із залізними окуттями. Безпечно тримає вантаж.',
+  ),
+  FurnitureItem(
+    id: 'ship_amphora',
+    type: FurnitureType.decoration,
+    name: 'Амфора',
+    cost: 90,
+    description: 'Теракотова амфора з оливковою олією. Античний шик на палубі.',
+    blocksPath: false,
+  ),
+  FurnitureItem(
+    id: 'ship_rope_coil',
+    type: FurnitureType.decoration,
+    name: 'Бухта мотузки',
+    cost: 60,
+    description: 'Туго звита мотузка такелажу. Можна спіткнутись, але атмосферно.',
+    blocksPath: false,
   ),
 ];
 
@@ -2305,6 +2376,12 @@ class GameState {
   /// Currently equipped cosmetics: type index → cosmetic ID.
   final Map<int, String> equippedCosmetics;
 
+  /// IDs of send-button stamps that have already been "cast" — used at least
+  /// once in chat after being equipped. Drives the one-shot first-cast
+  /// sparkle effect: a freshly-equipped premium stamp shows its sparkle
+  /// on the very first message send, then never again.
+  final Set<String> castStamps;
+
   /// Theme ownership, active theme, and per-theme customisations.
   final ThemeState themeState;
 
@@ -2366,6 +2443,7 @@ class GameState {
     this.nicknameChangesUsed = 0,
     this.ownedCosmetics = const {},
     this.equippedCosmetics = const {},
+    this.castStamps = const {},
     this.themeState = const ThemeState(),
     this.furnitureInventory = const {},
     this.placedFurniture = const [],
@@ -2444,6 +2522,7 @@ class GameState {
     int? nicknameChangesUsed,
     Set<String>? ownedCosmetics,
     Map<int, String>? equippedCosmetics,
+    Set<String>? castStamps,
     ThemeState? themeState,
     Map<String, int>? furnitureInventory,
     List<FurniturePlacement>? placedFurniture,
@@ -2466,6 +2545,7 @@ class GameState {
         nicknameChangesUsed: nicknameChangesUsed ?? this.nicknameChangesUsed,
         ownedCosmetics: ownedCosmetics ?? this.ownedCosmetics,
         equippedCosmetics: equippedCosmetics ?? this.equippedCosmetics,
+        castStamps: castStamps ?? this.castStamps,
         themeState: themeState ?? this.themeState,
         furnitureInventory: furnitureInventory ?? this.furnitureInventory,
         placedFurniture: placedFurniture ?? this.placedFurniture,
@@ -2498,6 +2578,7 @@ class GameState {
           for (final e in equippedCosmetics.entries)
             e.key.toString(): e.value,
         },
+        if (castStamps.isNotEmpty) 'castStamps': castStamps.toList(),
         'themeState': themeState.toJson(),
         'furnitureInventory': furnitureInventory,
         'placedFurniture': [
@@ -2583,6 +2664,10 @@ class GameState {
               in (json['equippedCosmetics'] as Map<String, dynamic>? ?? {})
                   .entries)
             int.parse(e.key): e.value as String,
+        },
+        castStamps: {
+          for (final id in (json['castStamps'] as List<dynamic>?) ?? [])
+            id as String,
         },
         themeState: json['themeState'] != null
             ? ThemeState.fromJson(json['themeState'] as Map<String, dynamic>)

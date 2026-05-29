@@ -19,6 +19,7 @@ import '../../providers/game_economy_provider.dart';
 import '../../providers/task_board_provider.dart';
 import '../../providers/task_progress_provider.dart';
 import '../../utils/kanban_labels.dart';
+import '../common/image_preview_dialog.dart';
 import 'task_board_helpers.dart';
 
 // ─── Sticky note colors ─────────────────────────────────────────────────────
@@ -1210,19 +1211,10 @@ class _AttachmentsSectionState extends ConsumerState<_AttachmentsSection> {
 
   void _preview(TaskAttachment attachment) {
     if (!attachment.isImage) return;
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.85),
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.all(16),
-        child: GestureDetector(
-          onTap: () => Navigator.of(ctx).pop(),
-          child: InteractiveViewer(
-            child: Image.memory(base64Decode(attachment.dataBase64)),
-          ),
-        ),
-      ),
+    showImagePreviewDialog(
+      context,
+      base64Decode(attachment.dataBase64),
+      name: attachment.name,
     );
   }
 

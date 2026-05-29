@@ -30,6 +30,7 @@ migrate_working_dir/
 
 # Claude Code: track shared agent definitions, ignore per-machine local config.
 .claude/settings.local.json
+.claude/*.lock
 
 # Flutter/Dart/Pub related
 **/doc/api/

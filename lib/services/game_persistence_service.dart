@@ -50,10 +50,19 @@ class GamePersistenceService {
         prefs.setString(_key, migrated.encode());
         return migrated;
       }
-      return GameState.fromJson(json);
+      return _ensureSeededRoster(GameState.fromJson(json));
     } catch (_) {
       return GameState.initial();
     }
+  }
+
+  /// Safety net for corrupted saves: a parsed state with an empty agents map
+  /// would leave the user without a team — and without a manager the chat /
+  /// dispatch loop has nothing to fall back to. Reseed the singleton roles
+  /// from `GameState.initial()` while preserving everything else.
+  static GameState _ensureSeededRoster(GameState parsed) {
+    if (parsed.agents.isNotEmpty) return parsed;
+    return parsed.copyWith(agents: GameState.initial().agents);
   }
 
   static Future<void> save(SharedPreferences prefs, GameState state) async {

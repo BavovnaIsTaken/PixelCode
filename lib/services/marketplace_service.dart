@@ -51,7 +51,7 @@ abstract class MarketplaceService {
 class SellerStats {
   final String sellerId;
   final int totalSales;
-  final int totalRevenue; // in Grim
+  final int totalRevenue; // in Grymni
   final double averageRating;
 
   SellerStats({

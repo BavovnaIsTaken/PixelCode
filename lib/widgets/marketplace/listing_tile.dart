@@ -89,7 +89,7 @@ class ListingTile extends StatelessWidget {
                     children: [
                       const Icon(Icons.attach_money, size: 14),
                       Text(
-                        '${listing.priceGrim}',
+                        '${listing.priceGrymni}',
                         style: const TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w600,

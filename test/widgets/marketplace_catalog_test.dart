@@ -158,7 +158,7 @@ void main() {
       final mockListing = mockAgentListing(
         listingId: 'listing-1',
         name: 'CodeMaster',
-        priceGrim: 500,
+        priceGrymni: 500,
       );
 
       String? selectedId;
@@ -188,7 +188,7 @@ void main() {
         listingId: 'listing-1',
         name: 'CodeMaster',
         role: 'coder',
-        priceGrim: 500,
+        priceGrymni: 500,
         averageRating: 4.8,
         reviewCount: 25,
       );

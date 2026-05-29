@@ -6,7 +6,6 @@ import 'package:pixelcode/models/agent_level.dart';
 import 'package:pixelcode/models/agent_message.dart' show AgentProviderType;
 import 'package:pixelcode/models/app_theme.dart';
 import 'package:pixelcode/models/game_economy.dart';
-import 'package:pixelcode/providers/agent_provider.dart' show selectedAgentProvider;
 import 'package:pixelcode/providers/game_economy_provider.dart';
 import 'package:pixelcode/providers/settings_provider.dart';
 
@@ -19,7 +18,6 @@ Future<ProviderContainer> _makeContainer({int grymni = 100000}) async {
   final c = ProviderContainer(
     overrides: [
       sharedPrefsProvider.overrideWithValue(prefs),
-      selectedAgentProvider.overrideWith((ref) => 'manager#1'),
     ],
   );
   addTearDown(c.dispose);
@@ -154,12 +152,13 @@ void main() {
   // ─── fireAgent ───────────────────────────────────────────────────────────
 
   group('fireAgent', () {
-    test('removes agent from state', () async {
+    test('removes agent from state and returns true', () async {
       final c = await _makeContainer();
       c.read(gameEconomyProvider.notifier).hireAgent('tester');
       final id = c.read(gameEconomyProvider).hiredAgentIds
           .firstWhere((id) => id.startsWith('tester'));
-      c.read(gameEconomyProvider.notifier).fireAgent(id);
+      final fired = c.read(gameEconomyProvider.notifier).fireAgent(id);
+      expect(fired, isTrue);
       expect(c.read(gameEconomyProvider).agents[id], isNull);
     });
 
@@ -174,48 +173,22 @@ void main() {
       expect(c.read(gameEconomyProvider).grymni, before + 150);
     });
 
-    test('cannot fire the only manager (singleton guard)', () async {
+    test('returns false and is a no-op when firing the only manager', () async {
       final c = await _makeContainer();
       final before = c.read(gameEconomyProvider).agents.length;
-      c.read(gameEconomyProvider.notifier).fireAgent('manager#1');
+      final fired =
+          c.read(gameEconomyProvider.notifier).fireAgent('manager#1');
+      expect(fired, isFalse);
       expect(c.read(gameEconomyProvider).agents.length, before);
     });
 
-    test('no-op for unknown instanceId', () async {
+    test('returns false for unknown instanceId', () async {
       final c = await _makeContainer();
       final before = c.read(gameEconomyProvider).agents.length;
-      c.read(gameEconomyProvider.notifier).fireAgent('ghost#99');
+      final fired =
+          c.read(gameEconomyProvider.notifier).fireAgent('ghost#99');
+      expect(fired, isFalse);
       expect(c.read(gameEconomyProvider).agents.length, before);
-    });
-
-    // Selection-redirect is the widget's responsibility (not fireAgent's).
-    // These tests document the contract: fireAgent is a pure economy op.
-
-    test('does not modify selectedAgentProvider when fired agent was selected', () async {
-      final c = await _makeContainer();
-      c.read(gameEconomyProvider.notifier).hireAgent('tester');
-      final id = c.read(gameEconomyProvider).hiredAgentIds
-          .firstWhere((id) => id.startsWith('tester'));
-      c.read(selectedAgentProvider.notifier).state = id;
-      c.read(gameEconomyProvider.notifier).fireAgent(id);
-      // fireAgent no longer resets selection — that is the widget's job.
-      expect(c.read(selectedAgentProvider), id);
-    });
-
-    test('widget-layer redirect: instancesOfRole(manager) is non-empty after firing a non-manager', () async {
-      // Simulates what RosterTab.onFire does after calling fireAgent on a
-      // selected non-manager: widget reads instancesOfRole('manager') to pick
-      // the fallback selection — that list must be non-empty.
-      final c = await _makeContainer();
-      c.read(gameEconomyProvider.notifier).hireAgent('tester');
-      final id = c.read(gameEconomyProvider).hiredAgentIds
-          .firstWhere((id) => id.startsWith('tester'));
-      c.read(selectedAgentProvider.notifier).state = id;
-      c.read(gameEconomyProvider.notifier).fireAgent(id);
-      // After fire, managers list is still intact — widget can redirect there.
-      final managers = c.read(gameEconomyProvider).instancesOfRole('manager');
-      expect(managers, isNotEmpty);
-      expect(managers.first.instanceId, 'manager#1');
     });
   });
 
@@ -436,6 +409,53 @@ void main() {
       notifier.equipCosmetic('skin_casual');
       notifier.unequipCosmetic(CosmeticType.skin);
       expect(c.read(gameEconomyProvider).equippedCosmetics, isEmpty);
+    });
+  });
+
+  // ─── Stamp first-cast tracking ───────────────────────────────────────────
+
+  group('castStamps (Печатка first-cast)', () {
+    test('isStampVirgin returns true before first cast', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+      expect(notifier.isStampVirgin('send_neon_pulse'), isTrue);
+    });
+
+    test('markStampCast persists the stamp ID into castStamps', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.markStampCast('send_gold_rocket');
+      expect(c.read(gameEconomyProvider).castStamps,
+          contains('send_gold_rocket'));
+      expect(notifier.isStampVirgin('send_gold_rocket'), isFalse);
+    });
+
+    test('markStampCast is idempotent — second call does not duplicate',
+        () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.markStampCast('send_pixel_arcade');
+      notifier.markStampCast('send_pixel_arcade');
+      expect(c.read(gameEconomyProvider).castStamps.length, 1);
+    });
+
+    test('castStamps survives JSON round-trip', () async {
+      final c = await _makeContainer();
+      final notifier = c.read(gameEconomyProvider.notifier);
+      notifier.markStampCast('send_liquid_glass');
+      notifier.markStampCast('send_cloud_drift');
+
+      final json = c.read(gameEconomyProvider).toJson();
+      final restored = GameState.fromJson(json);
+      expect(restored.castStamps,
+          containsAll(<String>{'send_liquid_glass', 'send_cloud_drift'}));
+    });
+
+    test('empty castStamps is omitted from JSON for backward compat',
+        () async {
+      final c = await _makeContainer();
+      final json = c.read(gameEconomyProvider).toJson();
+      expect(json.containsKey('castStamps'), isFalse);
     });
   });
 

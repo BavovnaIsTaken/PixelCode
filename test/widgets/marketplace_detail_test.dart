@@ -13,7 +13,7 @@ void main() {
         listingId: 'listing-1',
         name: 'CodeMaster',
         role: 'coder',
-        priceGrim: 500,
+        priceGrymni: 500,
         qualityScore: 85.0,
         averageRating: 4.8,
         reviewCount: 25,
@@ -143,7 +143,7 @@ void main() {
         (tester) async {
       final mockListing = mockAgentListing(
         name: 'CodeMaster',
-        priceGrim: 500,
+        priceGrymni: 500,
       );
 
       await tester.pumpWidget(
@@ -184,7 +184,7 @@ void main() {
         (tester) async {
       final mockListing = mockAgentListing(
         name: 'CodeMaster',
-        priceGrim: 500,
+        priceGrymni: 500,
       );
 
       PurchaseResult? result;
@@ -229,7 +229,7 @@ void main() {
         (tester) async {
       final mockListing = mockAgentListing(
         name: 'CodeMaster',
-        priceGrim: 500,
+        priceGrymni: 500,
       );
 
       await tester.pumpWidget(
@@ -263,7 +263,7 @@ void main() {
     // ─── Test 4.4: Cancel purchase ───
     testWidgets('cancel button closes dialog without purchase',
         (tester) async {
-      final mockListing = mockAgentListing(priceGrim: 500);
+      final mockListing = mockAgentListing(priceGrymni: 500);
       bool purchased = false;
 
       await tester.pumpWidget(

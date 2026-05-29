@@ -5,7 +5,7 @@ import 'package:pixelcode/services/marketplace_service.dart';
 /// Dialog for confirming and completing agent purchases.
 class PurchaseDialog extends StatefulWidget {
   final AgentListing listing;
-  final int userBalance; // in Grim
+  final int userBalance; // in Grymni
   final Function(PurchaseResult) onPurchaseResult;
 
   const PurchaseDialog({
@@ -24,7 +24,7 @@ class _PurchaseDialogState extends State<PurchaseDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final price = widget.listing.priceGrim;
+    final price = widget.listing.priceGrymni;
     final platformCommission = (price * 0.20).floor();
     final sellerPayout = price - platformCommission;
     final hasEnoughFunds = widget.userBalance >= price;

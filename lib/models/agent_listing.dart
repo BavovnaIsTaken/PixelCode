@@ -4,7 +4,7 @@ class AgentListing {
   final String agentId;
   final String name;
   final String role; // 'coder', 'tester', 'devops', 'architect'
-  final int priceGrim;
+  final int priceGrymni;
   final double qualityScore; // 0-100
   final double averageRating; // 1-5
   final int reviewCount;
@@ -20,7 +20,7 @@ class AgentListing {
     required this.agentId,
     required this.name,
     required this.role,
-    required this.priceGrim,
+    required this.priceGrymni,
     required this.qualityScore,
     required this.averageRating,
     required this.reviewCount,
@@ -38,7 +38,7 @@ class AgentListing {
     String? agentId,
     String? name,
     String? role,
-    int? priceGrim,
+    int? priceGrymni,
     double? qualityScore,
     double? averageRating,
     int? reviewCount,
@@ -54,7 +54,7 @@ class AgentListing {
       agentId: agentId ?? this.agentId,
       name: name ?? this.name,
       role: role ?? this.role,
-      priceGrim: priceGrim ?? this.priceGrim,
+      priceGrymni: priceGrymni ?? this.priceGrymni,
       qualityScore: qualityScore ?? this.qualityScore,
       averageRating: averageRating ?? this.averageRating,
       reviewCount: reviewCount ?? this.reviewCount,

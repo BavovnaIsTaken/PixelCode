@@ -84,7 +84,7 @@ class SellerListingsView extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${listing.priceGrim} ₲',
+                          '${listing.priceGrymni} ₲',
                           style: TextStyle(
                             fontSize: 14,
                             color: Colors.grey.shade700,

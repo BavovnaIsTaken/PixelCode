@@ -66,8 +66,8 @@ class RecordingWsService extends AgentWsService {
   // ─── Recorded board API ─────────────────────────────────────────────────
 
   @override
-  void boardGetState() {
-    calls.add(RecordedCall('boardGetState', const {}));
+  void boardGetState({int? since}) {
+    calls.add(RecordedCall('boardGetState', {'since': since}));
   }
 
   @override
