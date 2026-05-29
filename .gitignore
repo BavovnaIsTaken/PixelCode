@@ -43,6 +43,9 @@ migrate_working_dir/
 /coverage/
 /server/coverage/
 
+# Vendored plugin build caches (path-overridden packages/)
+packages/*/android/.gradle/
+
 # Symbolication related
 app.*.symbols
 

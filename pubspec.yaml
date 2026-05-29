@@ -41,6 +41,10 @@ dependencies:
   super_drag_and_drop: ^0.9.1
   liquid_glass_renderer: ^0.2.0-dev.4
 
+dependency_overrides:
+  irondash_engine_context:
+    path: packages/irondash_engine_context
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
