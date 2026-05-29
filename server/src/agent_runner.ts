@@ -24,6 +24,8 @@ import {
 import { formatTraitsForPrompt, type TraitStore } from "./trait_memory.js";
 import { CircuitBreaker } from "./circuit_breaker.js";
 import { UsageLogger, newRunId } from "./usage_log.js";
+import { IncidentLogger, newIncidentId, isNoOpRun } from "./incident_log.js";
+import { runWithHardTimeout } from "./race_with_timeout.js";
 import type { AgentRunStore } from "./agent_run.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -78,6 +80,19 @@ export interface DispatchParams {
    * UsageLogger split doesn't need a runner refactor.
    */
   usageLogger?: UsageLogger;
+  /**
+   * Optional incident logger (C.2.5) — records dispatch-lifecycle
+   * anomalies (no_op_run on this path). Same DI rationale as usageLogger.
+   * Absent in older tests; the runner no-ops the incident path when null.
+   */
+  incidentLogger?: IncidentLogger;
+  /**
+   * Hard timeout in ms for the for-await loop (C.2.5 Promise.race
+   * mechanism). Default 3 minutes — same wall-clock as the previous
+   * AbortController-only timeout. Tests override to validate the
+   * timeout-propagates-even-when-SDK-stalls invariant.
+   */
+  hardTimeoutMs?: number;
   /**
    * Optional persistent run store — records the dispatch lifecycle
    * (running → completed / failed / interrupted / cancelled) so the UI
@@ -208,7 +223,7 @@ export class AgentRunner {
     params: DispatchParams,
     abortController: AbortController,
   ): Promise<void> {
-    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions, techLeadDigest, usageLogger, agentRunStore, role } = params;
+    const { agentId, task, projectCwd, gameState, projectMemory, traitStore, bypassPermissions, techLeadDigest, usageLogger, incidentLogger, agentRunStore, role } = params;
 
     let _timedOut = false;
     let _breakerTripped = false;
@@ -271,74 +286,93 @@ export class AgentRunner {
       let costUsd = 0;
       let durationMs = 0;
 
-      // Abort after 3 minutes — a stuck sub-agent holds a MAX_CONCURRENT slot
-      // and starves other dispatches.
-      const _timeoutId = setTimeout(() => {
-        _timedOut = true;
-        abortController.abort();
-      }, 3 * 60_000);
+      // C.2.5 — hard timeout via Promise.race. The previous AbortController-only
+      // timeout did NOT propagate when the SDK was blocked on a pending
+      // multimodal HTTP fetch (e.g. `Read` on a PNG triggering a vision API
+      // call that hangs). Without a Promise that *we own* resolving, the
+      // for-await loop sat forever, the inner `finally` never fired, the
+      // outer `.finally()` in `dispatch()` never freed the MAX_CONCURRENT
+      // slot, and the system silently degraded to MAX_CONCURRENT-1 capacity
+      // until restart. runWithHardTimeout guarantees runAgent resolves
+      // within HARD_TIMEOUT_MS regardless of SDK state.
+      const HARD_TIMEOUT_MS = params.hardTimeoutMs ?? 3 * 60_000;
 
       // C.2.4 circuit breaker — same safety policy as the main manager
       // query: cap cost ($5) + tool calls (30) per sub-agent run.
       const breaker = new CircuitBreaker(model);
       _breaker = breaker;
 
+      const _forAwaitWork = async () => {
+        for await (const message of q) {
+          // Forward all messages for real-time UI updates
+          params.onMessage(message, agentId, dispatchId);
+
+          // Collect result
+          if (message.type === "assistant") {
+            const asst = message as SDKAssistantMessage;
+            // Only collect text from top-level messages (no parent)
+            if (!asst.parent_tool_use_id) {
+              let _msgText = "";
+              for (const block of asst.message.content) {
+                if (block.type === "text") {
+                  _msgText += (block as { type: "text"; text: string }).text;
+                }
+                // C.2 — surface tool_use into the persistent run record.
+                if (block.type === "tool_use" && agentRunStore) {
+                  agentRunStore.appendToolCall(runId, {
+                    name: block.name,
+                    id: block.id,
+                    at: new Date().toISOString(),
+                  });
+                }
+              }
+              if (_msgText) {
+                resultText += _msgText;
+                _runPartial += _msgText;
+                agentRunStore?.update(runId, { partialOutput: _runPartial });
+              }
+            }
+            // Breaker observation — same logic as runQuery in server.ts.
+            const trip = breaker.observeAssistantMessage(
+              asst.message.usage as unknown as
+                | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+                | null
+                | undefined,
+              asst.message.content,
+            );
+            if (trip) {
+              _breakerTripped = true;
+              _breakerSnapshot = breaker.snapshot();
+              abortController.abort();
+            }
+          }
+
+          if (message.type === "result") {
+            const res = message as SDKResultMessage;
+            costUsd = res.total_cost_usd ?? 0;
+            durationMs = res.duration_ms ?? 0;
+            _numTurns = res.num_turns ?? 0;
+            const resText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
+            if (resText && !resultText) {
+              resultText = resText;
+            }
+          }
+        }
+      };
+
       try {
-      for await (const message of q) {
-        // Forward all messages for real-time UI updates
-        params.onMessage(message, agentId, dispatchId);
-
-        // Collect result
-        if (message.type === "assistant") {
-          const asst = message as SDKAssistantMessage;
-          // Only collect text from top-level messages (no parent)
-          if (!asst.parent_tool_use_id) {
-            let _msgText = "";
-            for (const block of asst.message.content) {
-              if (block.type === "text") {
-                _msgText += (block as { type: "text"; text: string }).text;
-              }
-              // C.2 — surface tool_use into the persistent run record.
-              if (block.type === "tool_use" && agentRunStore) {
-                agentRunStore.appendToolCall(runId, {
-                  name: block.name,
-                  id: block.id,
-                  at: new Date().toISOString(),
-                });
-              }
-            }
-            if (_msgText) {
-              resultText += _msgText;
-              _runPartial += _msgText;
-              agentRunStore?.update(runId, { partialOutput: _runPartial });
-            }
-          }
-          // Breaker observation — same logic as runQuery in server.ts.
-          const trip = breaker.observeAssistantMessage(
-            asst.message.usage as unknown as
-              | { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
-              | null
-              | undefined,
-            asst.message.content,
-          );
-          if (trip) {
-            _breakerTripped = true;
-            _breakerSnapshot = breaker.snapshot();
+      await runWithHardTimeout(_forAwaitWork, HARD_TIMEOUT_MS, {
+        onTimeout: () => {
+          _timedOut = true;
+          try {
             abortController.abort();
+          } catch {
+            // SDK abort() can throw on some paths; we'll surface via
+            // the catch block's _timedOut branch regardless.
           }
-        }
-
-        if (message.type === "result") {
-          const res = message as SDKResultMessage;
-          costUsd = res.total_cost_usd ?? 0;
-          durationMs = res.duration_ms ?? 0;
-          _numTurns = res.num_turns ?? 0;
-          const resText = "result" in res ? (res as unknown as Record<string, string>).result ?? "" : "";
-          if (resText && !resultText) {
-            resultText = resText;
-          }
-        }
-      }
+        },
+        message: `Sub-agent ${agentId} hard timeout (${HARD_TIMEOUT_MS / 1000}s) — for-await did not yield`,
+      });
 
       if (usageLogger) {
         const snap = breaker.snapshot();
@@ -358,6 +392,31 @@ export class AgentRunner {
           startedAt,
           completedAt: new Date().toISOString(),
         });
+      }
+      // C.2.5 — no-op detection. A sub-agent that finishes a "real" task
+      // (i.e. not interrupted, not breaker-tripped) with zero tool calls
+      // produced no concrete artifact. Either the dispatched task was
+      // trivially text-only (legit) or the agent silently hallucinated
+      // doing work (the cascading-hallucination risk). Either way, the
+      // rate over time is informative — record and move on.
+      if (incidentLogger) {
+        const snap = breaker.snapshot();
+        if (isNoOpRun(snap.toolCalls)) {
+          incidentLogger.record({
+            incidentId: newIncidentId("no_op_run"),
+            kind: "no_op_run",
+            runId,
+            role: role ?? agentId,
+            taskType: "dispatch",
+            agentId,
+            occurredAt: new Date().toISOString(),
+            details: {
+              resultTextLength: resultText.length,
+              durationMs,
+              numTurns: _numTurns,
+            },
+          });
+        }
       }
       if (agentRunStore) {
         const snap = breaker.snapshot();
@@ -385,7 +444,9 @@ export class AgentRunner {
         boardTaskId: params.boardTaskId,
       });
       } finally {
-        clearTimeout(_timeoutId);
+        // runWithHardTimeout owns its own timer cleanup; nothing to do here.
+        // Kept as `finally` for the structural symmetry around the inner
+        // try — if more cleanup lands later, this is its home.
       }
     } catch (err) {
       // Abort with neither timeout nor breaker = explicit user cancel.
@@ -398,8 +459,16 @@ export class AgentRunner {
         });
         return;
       }
+      // _breakerSnapshot is assigned inside the for-await IIFE; TS'
+      // control-flow analysis can't trace that assignment through the
+      // async closure boundary and ends up narrowing the type to `never`
+      // here. Re-snapshot from `_breaker` (assigned in the outer scope) —
+      // CircuitBreaker holds the trip state internally so the snapshot
+      // is identical, and the type stays `CircuitBreaker | null`.
+      const _trippedMsg =
+        _breaker?.snapshot().tripped?.message ?? "circuit breaker tripped";
       const errMsg = _breakerTripped
-        ? `Sub-agent ${agentId} stopped: ${_breakerSnapshot?.tripped?.message ?? "circuit breaker tripped"}`
+        ? `Sub-agent ${agentId} stopped: ${_trippedMsg}`
         : _timedOut
           ? `Sub-agent ${agentId} timed out after 3 minutes`
           : err instanceof Error ? err.message : String(err);
