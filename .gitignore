@@ -45,6 +45,8 @@ migrate_working_dir/
 
 # Vendored plugin build caches (path-overridden packages/)
 packages/*/android/.gradle/
+# Library packages don't commit pubspec.lock — the app's root lock governs the build.
+packages/*/pubspec.lock
 
 # Symbolication related
 app.*.symbols
