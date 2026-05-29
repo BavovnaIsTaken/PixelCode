@@ -30,10 +30,12 @@ import '../../providers/active_facilitator_style_provider.dart';
 import '../../providers/agent_provider.dart';
 import '../../screens/facilitator/facilitator_intake_screen.dart';
 import '../../screens/facilitator/facilitator_picker_screen.dart';
+import '../../screens/facilitator/project_mode_screen.dart';
 import '../../services/facilitator_onboarding.dart';
 import '../../services/facilitator_output_persistence_service.dart';
 import '../../services/facilitator_session_service.dart';
 import '../../services/facilitator_style_loader.dart';
+import '../../services/project_scanner.dart';
 
 Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
   required BuildContext context,
@@ -41,10 +43,12 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
   required String projectPath,
   // ── Optional overrides (test seams) ──────────────────────────────────────
   bool Function()? isWsConnected,
+  PickProjectModeFn? pickProjectMode,
   LoadStylesFn? loadStyles,
   LoadExistingOutputFn? loadExisting,
   PickStyleFn? pickStyle,
   PickIntakeFn? pickIntake,
+  ScanProjectFn? scanProject,
   RunSessionFn? runSession,
 }) async {
   void log(String msg) => debugPrint('[Facilitator] $msg');
@@ -72,6 +76,14 @@ Future<FacilitatorOnboardingResult> launchFacilitatorOnboarding({
   final session = FacilitatorSessionService.bindToWsService(ws);
 
   final controller = FacilitatorOnboardingController(
+    pickProjectMode: pickProjectMode ??
+        () => navigator.push<ProjectMode>(
+              MaterialPageRoute(
+                builder: (_) => const ProjectModeScreen(),
+                fullscreenDialog: true,
+              ),
+            ),
+    scanProject: scanProject ?? (path) => ProjectScanner.scan(path),
     loadStyles: loadStyles ??
         () async {
           log('loading default styles…');

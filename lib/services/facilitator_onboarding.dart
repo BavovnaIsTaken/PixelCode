@@ -16,6 +16,17 @@ import '../models/facilitator_output.dart';
 import '../models/facilitator_style.dart';
 import '../screens/facilitator/facilitator_intake_screen.dart';
 import 'facilitator_session_service.dart';
+import 'project_scanner.dart';
+
+// ─── Project mode ─────────────────────────────────────────────────────────────
+
+enum ProjectMode {
+  /// User has existing code — agent auto-scans README/git/structure.
+  existing,
+
+  /// Brand-new project — user picks a facilitator style and fills intake.
+  fresh,
+}
 
 // ─── Result types ────────────────────────────────────────────────────────────
 
@@ -48,6 +59,7 @@ class FacilitatorOnboardingDisconnected extends FacilitatorOnboardingResult {
 
 // ─── Injection seams ─────────────────────────────────────────────────────────
 
+typedef PickProjectModeFn = Future<ProjectMode?> Function();
 typedef LoadStylesFn = Future<List<FacilitatorStyle>> Function();
 typedef LoadExistingOutputFn = Future<FacilitatorOutput?> Function(
   String projectPath,
@@ -57,6 +69,9 @@ typedef PickStyleFn = Future<FacilitatorStyle?> Function(
 );
 typedef PickIntakeFn = Future<IntakeSubmission?> Function(
   FacilitatorStyle style,
+);
+typedef ScanProjectFn = Future<ScannedProjectContext> Function(
+  String projectPath,
 );
 typedef RunSessionFn = Future<FacilitatorSessionResult> Function({
   required String projectPath,
@@ -68,34 +83,58 @@ typedef RunSessionFn = Future<FacilitatorSessionResult> Function({
 // ─── Controller ──────────────────────────────────────────────────────────────
 
 class FacilitatorOnboardingController {
+  final PickProjectModeFn _pickProjectMode;
   final LoadStylesFn _loadStyles;
   final LoadExistingOutputFn _loadExisting;
   final PickStyleFn _pickStyle;
   final PickIntakeFn _pickIntake;
+  final ScanProjectFn _scanProject;
   final RunSessionFn _runSession;
 
   const FacilitatorOnboardingController({
+    required PickProjectModeFn pickProjectMode,
     required LoadStylesFn loadStyles,
     required LoadExistingOutputFn loadExisting,
     required PickStyleFn pickStyle,
     required PickIntakeFn pickIntake,
+    required ScanProjectFn scanProject,
     required RunSessionFn runSession,
-  })  : _loadStyles = loadStyles,
+  })  : _pickProjectMode = pickProjectMode,
+        _loadStyles = loadStyles,
         _loadExisting = loadExisting,
         _pickStyle = pickStyle,
         _pickIntake = pickIntake,
+        _scanProject = scanProject,
         _runSession = runSession;
 
   /// Runs onboarding only if the project has no saved facilitator output.
-  /// Returns one of the three result types so the caller can show the
-  /// appropriate snackbar/toast.
+  ///
+  /// For [ProjectMode.existing] the agent auto-scans the project (README,
+  /// git log, directory structure) and seeds the board without an intake
+  /// form. For [ProjectMode.fresh] the user picks a style and fills in the
+  /// intake questions as before.
   Future<FacilitatorOnboardingResult> runIfNeeded(String projectPath) async {
     final existing = await _loadExisting(projectPath);
     if (existing != null) return const FacilitatorOnboardingSkipped();
 
+    final mode = await _pickProjectMode();
+    if (mode == null) return const FacilitatorOnboardingCancelled();
+
     final styles = await _loadStyles();
     if (styles.isEmpty) return const FacilitatorOnboardingCancelled();
 
+    if (mode == ProjectMode.existing) {
+      final context = await _scanProject(projectPath);
+      final session = await _runSession(
+        projectPath: projectPath,
+        style: styles.first,
+        projectDescription: context.toDescription(),
+        answers: context.toAnswers(),
+      );
+      return FacilitatorOnboardingCompleted(session);
+    }
+
+    // ProjectMode.fresh — original picker → intake flow.
     final style = await _pickStyle(styles);
     if (style == null) return const FacilitatorOnboardingCancelled();
 

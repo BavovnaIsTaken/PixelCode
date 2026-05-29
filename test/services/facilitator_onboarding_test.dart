@@ -6,6 +6,7 @@ import 'package:pixelcode/models/quest_line.dart';
 import 'package:pixelcode/screens/facilitator/facilitator_intake_screen.dart';
 import 'package:pixelcode/services/facilitator_onboarding.dart';
 import 'package:pixelcode/services/facilitator_session_service.dart';
+import 'package:pixelcode/services/project_scanner.dart';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -43,23 +44,44 @@ FacilitatorOutput _output() => MissionBriefing(
       createdAt: DateTime.utc(2026, 4, 26),
     );
 
+ScannedProjectContext _scannedContext({
+  String readme = 'A project.',
+  String gitLog = 'abc1234 init',
+  String directoryStructure = 'lib/\ntest/',
+  String pubspecInfo = 'name: test_project',
+}) =>
+    ScannedProjectContext(
+      readme: readme,
+      gitLog: gitLog,
+      directoryStructure: directoryStructure,
+      pubspecInfo: pubspecInfo,
+    );
+
 class _Spy {
+  int pickProjectModeCalls = 0;
   int loadStylesCalls = 0;
   int loadExistingCalls = 0;
   int pickStyleCalls = 0;
   int pickIntakeCalls = 0;
+  int scanProjectCalls = 0;
   int runSessionCalls = 0;
 }
 
 FacilitatorOnboardingController _make({
   required _Spy spy,
   FacilitatorOutput? existing,
+  ProjectMode projectMode = ProjectMode.fresh,
   List<FacilitatorStyle> styles = const [],
   FacilitatorStyle? pickedStyle,
   IntakeSubmission? pickedIntake,
+  ScannedProjectContext? scannedContext,
   FacilitatorSessionResult? sessionResult,
 }) {
   return FacilitatorOnboardingController(
+    pickProjectMode: () async {
+      spy.pickProjectModeCalls += 1;
+      return projectMode;
+    },
     loadExisting: (_) async {
       spy.loadExistingCalls += 1;
       return existing;
@@ -75,6 +97,10 @@ FacilitatorOnboardingController _make({
     pickIntake: (_) async {
       spy.pickIntakeCalls += 1;
       return pickedIntake;
+    },
+    scanProject: (_) async {
+      spy.scanProjectCalls += 1;
+      return scannedContext ?? _scannedContext();
     },
     runSession: ({
       required projectPath,
@@ -156,10 +182,12 @@ void main() {
     Map<String, String>? capturedAnswers;
     String? capturedPath;
     final c = FacilitatorOnboardingController(
+      pickProjectMode: () async => ProjectMode.fresh,
       loadExisting: (_) async => null,
       loadStyles: () async => [style],
       pickStyle: (_) async => style,
       pickIntake: (_) async => intake,
+      scanProject: (_) async => _scannedContext(),
       runSession: ({
         required projectPath,
         required style,
@@ -211,5 +239,83 @@ void main() {
       'server exploded',
     );
     expect(spy.runSessionCalls, 1);
+  });
+
+  test('runIfNeeded — cancelled when pickProjectMode returns null', () async {
+    final spy = _Spy();
+    // _make does not support null mode directly; build inline to test null.
+    final c = FacilitatorOnboardingController(
+      pickProjectMode: () async => null,
+      loadExisting: (_) async {
+        spy.loadExistingCalls += 1;
+        return null;
+      },
+      loadStyles: () async {
+        spy.loadStylesCalls += 1;
+        return [_style()];
+      },
+      pickStyle: (_) async => _style(),
+      pickIntake: (_) async => null,
+      scanProject: (_) async => _scannedContext(),
+      runSession: ({
+        required projectPath,
+        required style,
+        required projectDescription,
+        required answers,
+      }) async =>
+          FacilitatorSeedSuccess(
+            styleId: style.id,
+            output: _output(),
+            kanbanTaskCount: 0,
+          ),
+    );
+
+    final result = await c.runIfNeeded('/tmp/proj');
+    expect(result, isA<FacilitatorOnboardingCancelled>());
+    expect(spy.loadExistingCalls, 1);
+    expect(spy.loadStylesCalls, 0);
+  });
+
+  test('runIfNeeded — existing mode skips picker+intake, uses scanned context',
+      () async {
+    final style = _style();
+    final ctx = _scannedContext(
+      readme: 'My app',
+      gitLog: 'abc init',
+      pubspecInfo: 'name: my_app',
+    );
+    String? capturedDesc;
+    Map<String, String>? capturedAnswers;
+    String? capturedStyleId;
+
+    final c = FacilitatorOnboardingController(
+      pickProjectMode: () async => ProjectMode.existing,
+      loadExisting: (_) async => null,
+      loadStyles: () async => [style],
+      pickStyle: (_) async => throw StateError('must not be called'),
+      pickIntake: (_) async => throw StateError('must not be called'),
+      scanProject: (_) async => ctx,
+      runSession: ({
+        required projectPath,
+        required style,
+        required projectDescription,
+        required answers,
+      }) async {
+        capturedStyleId = style.id;
+        capturedDesc = projectDescription;
+        capturedAnswers = answers;
+        return FacilitatorSeedSuccess(
+          styleId: style.id,
+          output: _output(),
+          kanbanTaskCount: 2,
+        );
+      },
+    );
+
+    final result = await c.runIfNeeded('/tmp/proj');
+    expect(result, isA<FacilitatorOnboardingCompleted>());
+    expect(capturedStyleId, 'game_master');
+    expect(capturedDesc, ctx.toDescription());
+    expect(capturedAnswers, ctx.toAnswers());
   });
 }
