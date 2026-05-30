@@ -87,7 +87,7 @@ Future<T?> showAppBottomSheet<T>({
                         width: 40,
                         height: 4,
                         decoration: BoxDecoration(
-                          color: tc.divider,
+                          color: tc.textMedium,
                           borderRadius: BorderRadius.circular(2),
                         ),
                       ),

@@ -205,7 +205,6 @@ Future<void> showActivityOverlay(BuildContext context) {
     minSize: 0.3,
     maxSize: 0.92,
     maxWidth: 900,
-    showCloseButton: true,
     builder: (ctx, scrollController) =>
         ActivityOverlayBody(scrollController: scrollController),
   );
