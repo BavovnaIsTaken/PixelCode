@@ -104,23 +104,23 @@ const _campus = RoomTheme(
   vignetteAlpha: 0.25,            // bright, airy
 );
 
-// ─── Tier 4-alt: Галера — OfficeLevel.galley ────────────────────────────────
+// ─── Tier 4-alt: Галера офісна (яскрава) — OfficeLevel.galley ────────────────────────────────
 
 const _galley = RoomTheme(
   id: 'galley',
-  name: 'Галера',
-  nameEn: 'War Galley',
+  name: 'Галера офісна',
+  nameEn: 'Bright Office Deck',
   tier: 4,
-  wallBase: Color(0xFF1A1208),    // tarred oak hull, near-black warm brown
-  wallTop: Color(0xFF2E1E0A),     // top planksheer caught by lantern light
-  wallInner: Color(0xFF0E0A04),   // inner hull, deepest shadow
-  floorDark: Color(0xFF1C1408),   // deck seam between planks
-  floorLight: Color(0xFF2A1E0E),  // weathered oak plank surface
-  floorGrid: Color(0xFF221A0C),   // plank groove, mid-tone warm brown
-  deskSurface: Color(0xFF382810), // desk a touch richer than the deck
-  deskEdge: Color(0xFF221A08),    // dark trim
-  accentColor: Color(0xFFCD7F32), // bronze — antique metallic warm
-  vignetteAlpha: 0.30,            // open night sky, lighter than techHub
+  wallBase: Color(0xFFE8E8E8),    // 1. Light clean walls — bright grey-white
+  wallTop: Color(0xFFF5F5F5),     // lighter wall highlight — almost white
+  wallInner: Color(0xFFD8D8D8),   // inner shadow — softer light grey
+  floorDark: Color(0xFFD4C8A8),   // 2. Warm beige floor planks
+  floorLight: Color(0xFFE5D9B3),  // lighter plank — weathered oak contrast
+  floorGrid: Color(0xFFC0B494),   // 7. darker grid/seams — shadow tones
+  deskSurface: Color(0xFF8B6F47), // 4. Natural wood brown desks
+  deskEdge: Color(0xFF4A4A4A),    // 3. Dark grey trim — office modern
+  accentColor: Color(0xFF0A8FD1), // 5. Bright cyan-blue — modern energy
+  vignetteAlpha: 0.15,            // bright airy office (low vignette)
 );
 
 // ─── Lookup ─────────────────────────────────────────────────────────────────

@@ -1577,6 +1577,8 @@ enum RoomType {
   openSpace,
   // ── Appended in B.1 Stage 3b polish round (2026-05-11) ──
   teamFloor,
+  // ── Galley captain's cabin (2026-05-30) ──
+  captainsCabin,
 }
 
 extension RoomTypeExt on RoomType {
@@ -1608,6 +1610,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 'Кінозал',
         RoomType.pool => 'Басейн',
         RoomType.miniGolf => 'Міні-гольф',
+        RoomType.captainsCabin => 'Капітанська будка',
       };
 
   String get description => switch (this) {
@@ -1629,6 +1632,8 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 'Зона. Кіно-перегляди підвищують командний дух.',
         RoomType.pool => 'Зона. Найкращий spot відпочинку між спринтами.',
         RoomType.miniGolf => 'Зона. Невеликі змагання між колегами.',
+        RoomType.captainsCabin =>
+          'Кабінет капітана галери. Навігаційний центр команди з картами, компасом і штурвалом.',
       };
 
   String get icon => switch (this) {
@@ -1643,6 +1648,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => '🎬',
         RoomType.pool => '🏊',
         RoomType.miniGolf => '⛳',
+        RoomType.captainsCabin => '⚓',
       };
 
   int get widthTiles => switch (this) {
@@ -1657,6 +1663,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 5,
         RoomType.pool => 5,
         RoomType.miniGolf => 5,
+        RoomType.captainsCabin => 3,
       };
 
   int get heightTiles => switch (this) {
@@ -1671,6 +1678,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 3,
         RoomType.pool => 4,
         RoomType.miniGolf => 3,
+        RoomType.captainsCabin => 3,
       };
 
   int get cost => switch (this) {
@@ -1685,6 +1693,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 3500,
         RoomType.pool => 5000,
         RoomType.miniGolf => 4000,
+        RoomType.captainsCabin => 2200,
       };
 
   int get maxPerOffice => switch (this) {
@@ -1699,6 +1708,7 @@ extension RoomTypeExt on RoomType {
         RoomType.cinema => 1,
         RoomType.pool => 1,
         RoomType.miniGolf => 1,
+        RoomType.captainsCabin => 1,
       };
 
   /// True for high-tier feature Zones (1-per-office signature pieces) gated

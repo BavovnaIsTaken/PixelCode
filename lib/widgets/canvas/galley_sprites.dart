@@ -5,43 +5,54 @@ library;
 
 import 'package:flutter/material.dart';
 
-// ─── Palette ─────────────────────────────────────────────────────────────────
+// ─── Palette — Яскрава офісна палуба ─────────────────────────────────────────
+// 7-color bright scheme: walls, floor, doors, furniture, accent, details, shadow
 
-// Wood
-const _oakDark = Color(0xFF1E1408);
-const _oakMid = Color(0xFF3D2B14);
-const _oakSeam = Color(0xFF2A1E0C);
+// 1. Walls — light grey-white
+const _wallLight = Color(0xFFE8E8E8);
 
-// Iron
-const _ironDark = Color(0xFF1A1C1E);
-const _ironBand = Color(0xFF2E3135);
-const _ironRust = Color(0xFF4A2A1A);
+// 2. Floor — warm beige oak
+const _floorDark = Color(0xFFD4C8A8);
+const _floorSeam = Color(0xFFC0B494);
 
-// Bronze
-const _bronzeRim = Color(0xFF5C4A2A);
-const _bronzePatina = Color(0xFF3A5C4A);
-const _bronzeHi = Color(0xFF8B6A3A);
+// 3. Doors & trim — dark grey (modern office)
+const _doorDark = Color(0xFF4A4A4A);
 
-// Linen
-const _linenBase = Color(0xFFB8A882);
-const _linenShadow = Color(0xFF6E5C3A);
+// 4. Furniture — natural wood brown
+const _furnBrown = Color(0xFF8B6F47);
+const _furnBrownDark = Color(0xFF6B4F2A);
 
-// Rope
-const _ropeBeige = Color(0xFF7A6848);
+// 5. Accent — bright cyan-blue (modern energy) + secondary orange
+const _accentCyan = Color(0xFF0A8FD1);
+const _accentCyanBright = Color(0xFF1FA8E8);
+const _accentOrange = Color(0xFFFF8C42);
 
-// Terracotta / red
-const _terracotta = Color(0xFF7A3820);
-const _accentRed = Color(0xFF8B1A1A);
+// 6. Metal details — polished steel
+const _metalDark = Color(0xFF3A3A3A);
+const _metalMid = Color(0xFF5A5A5A);
+const _metalHi = Color(0xFF7A7A7A);
 
-// Amber glow
-const _amberGlow = Color(0xFFC8841A);
-
-// Sea (night)
-const _seaDeep = Color(0xFF0D1B2A);
-const _seaMid = Color(0xFF1A3A52);
-const _seaCrest = Color(0xFF2A6070);
-const _foamWhite = Color(0xFFC8DDE8);
-const _reflectGold = Color(0xFF3A3018);
+// Legacy mappings for backward compatibility in drawing code
+const _oakDark = _furnBrownDark;
+const _oakMid = _furnBrown;
+const _oakSeam = _floorSeam;
+const _ironDark = _metalDark;
+const _ironBand = _metalMid;
+const _ironRust = _accentOrange;
+const _bronzeRim = _metalMid;
+const _bronzePatina = _accentCyan;
+const _bronzeHi = _metalHi;
+const _linenBase = _wallLight;
+const _linenShadow = _doorDark;
+const _ropeBeige = _floorDark;
+const _terracotta = _accentOrange;
+const _accentRed = _accentCyan;
+const _amberGlow = _accentCyanBright;
+const _seaDeep = _accentCyan;
+const _seaMid = _accentCyanBright;
+const _seaCrest = _accentCyan;
+const _foamWhite = _wallLight;
+const _reflectGold = _floorDark;
 
 // ─── Sea ─────────────────────────────────────────────────────────────────────
 
@@ -948,6 +959,61 @@ void drawGalleyOarThroughHull({
         : pivotX + bladeLen - 4;
     p.color = _foamWhite.withValues(alpha: 0.55);
     canvas.drawRect(Rect.fromLTWH(splashX, pivotY + tip - 1, 4, 1), p);
+  }
+}
+
+// ─── Flag ─────────────────────────────────────────────────────────────────────
+
+// ─── Hatchway (trap door to hold) ────────────────────────────────────────────
+
+/// Draws a trap-door hatchway at the centre of the deck, leading down to the hold.
+/// Animated between open (slightly offset) and closed (flush) states with a slow 2-frame cycle.
+void drawHatchway({
+  required Canvas canvas,
+  required double x,
+  required double y,
+  required int tick,
+}) {
+  final p = Paint()..style = PaintingStyle.fill;
+  final frame = (tick ~/ 45) % 2;
+
+  // Hatch ring — iron-bound square frame
+  p.color = _ironBand;
+  canvas.drawRect(Rect.fromLTWH(x, y, 20, 20), p);
+  p.color = _ironDark;
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 2, 16, 16), p);
+
+  // Hatch door — slight animation (open = +1px offset, closed = 0px)
+  final doorOffsetY = frame == 0 ? 0.0 : 1.0;
+
+  // Wood door panels — oak with horizontal seams
+  p.color = _oakMid;
+  canvas.drawRect(Rect.fromLTWH(x + 3, y + 3 + doorOffsetY, 7, 14), p);
+  canvas.drawRect(Rect.fromLTWH(x + 10, y + 3 + doorOffsetY, 7, 14), p);
+
+  // Darker oak shadow on right edge of panels
+  p.color = _oakDark;
+  canvas.drawRect(Rect.fromLTWH(x + 9, y + 3 + doorOffsetY, 1, 14), p);
+
+  // Horizontal seam across middle
+  p.color = _oakSeam;
+  canvas.drawRect(Rect.fromLTWH(x + 3, y + 9 + doorOffsetY, 14, 1), p);
+
+  // Iron ring handles (two)
+  p.color = _ironBand;
+  canvas.drawRect(Rect.fromLTWH(x + 4, y + 7 + doorOffsetY, 2, 2), p);
+  canvas.drawRect(Rect.fromLTWH(x + 14, y + 7 + doorOffsetY, 2, 2), p);
+
+  // Iron bolts around rim
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 2, 1, 1), p);
+  canvas.drawRect(Rect.fromLTWH(x + 17, y + 2, 1, 1), p);
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 17, 1, 1), p);
+  canvas.drawRect(Rect.fromLTWH(x + 17, y + 17, 1, 1), p);
+
+  // Shadow beneath the hatch when "open" (frame == 1)
+  if (frame == 1) {
+    p.color = _ironDark.withValues(alpha: 0.3);
+    canvas.drawRect(Rect.fromLTWH(x + 2, y + 19, 16, 2), p);
   }
 }
 

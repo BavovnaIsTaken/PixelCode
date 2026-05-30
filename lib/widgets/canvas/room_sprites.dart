@@ -64,6 +64,8 @@ void drawRoom(
       _drawPool(canvas, x, y, tick);
     case RoomType.miniGolf:
       _drawMiniGolf(canvas, x, y);
+    case RoomType.captainsCabin:
+      _drawCaptainsCabin(canvas, x, y, tick);
   }
 }
 
@@ -466,6 +468,70 @@ void _drawMiniGolf(Canvas canvas, double x, double y) {
   // Ball
   p.color = const Color(0xFFF0F0F0);
   canvas.drawRect(Rect.fromLTWH(x + 8, y + kTileSize + 4, 2, 2), p);
+}
+
+// ─── Captain's Cabin (3×3) ──────────────────────────────────────────────────
+
+void _drawCaptainsCabin(Canvas canvas, double x, double y, int tick) {
+  final p = Paint()..style = PaintingStyle.fill;
+
+  // Wood-paneled floor
+  p.color = const Color(0xFF4A3A1A).withValues(alpha: 0.5);
+  canvas.drawRect(
+      Rect.fromLTWH(x + 1, y + 1, kTileSize * 3 - 2, kTileSize * 3 - 2), p);
+
+  // Navigation table with chart (center-left)
+  p.color = const Color(0xFF6B4F2A);
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 4, kTileSize + 8, kTileSize - 4), p);
+  // Chart detail — grid pattern
+  p.color = const Color(0xFF8B6A3A);
+  canvas.drawRect(Rect.fromLTWH(x + 3, y + 5, kTileSize - 2, kTileSize - 6), p);
+  // Blue maritime chart markings
+  p.color = const Color(0xFF2A6A9A).withValues(alpha: 0.7);
+  for (int i = 0; i < 3; i++) {
+    canvas.drawRect(Rect.fromLTWH(x + 5 + i * 4, y + 6, 2, 6), p);
+  }
+
+  // Captain's chair (right side, leather brown)
+  p.color = const Color(0xFF4A2A1A);
+  canvas.drawRect(Rect.fromLTWH(x + kTileSize + 10, y + kTileSize, 8, 10), p);
+  p.color = const Color(0xFF6A3A2A);
+  canvas.drawRect(Rect.fromLTWH(x + kTileSize + 11, y + kTileSize + 1, 6, 3), p);
+  // Chair arm
+  p.color = const Color(0xFF4A2A1A);
+  canvas.drawRect(Rect.fromLTWH(x + kTileSize + 20, y + kTileSize, 2, 7), p);
+
+  // Compass (top-right corner)
+  final compassX = x + kTileSize * 2 + 8;
+  final compassY = y + 4;
+  p.color = const Color(0xFFBBA856);
+  canvas.drawRect(Rect.fromLTWH(compassX, compassY, 8, 8), p);
+  // Compass needle (animated slight rotation)
+  final needleRotation = (tick % 360) / 60.0;
+  p.color = const Color(0xFF8B1A1A);
+  canvas.drawRect(Rect.fromLTWH(compassX + 3, compassY + 2, 2, 3), p);
+  p.color = const Color(0xFFFFFFFF);
+  canvas.drawRect(Rect.fromLTWH(compassX + 3, compassY + 5, 2, 1), p);
+
+  // Navigation map (bottom right)
+  p.color = const Color(0xFF1A4A6A);
+  canvas.drawRect(Rect.fromLTWH(x + kTileSize + 6, y + kTileSize + 14, 8, 6), p);
+  // Map grid
+  p.color = const Color(0xFF3A7A9A);
+  for (int i = 0; i < 2; i++) {
+    canvas.drawRect(Rect.fromLTWH(x + kTileSize + 7 + i * 3, y + kTileSize + 15, 1, 4), p);
+  }
+
+  // Lantern on wall (left side, glowing)
+  final lanternX = x + 2;
+  final lanternY = y + 6;
+  p.color = const Color(0xFF8B6A3A);
+  canvas.drawRect(Rect.fromLTWH(lanternX, lanternY, 4, 6), p);
+  final lanternGlow = (tick ~/ 20) % 2 == 0;
+  p.color = lanternGlow
+      ? const Color(0xFFC8841A).withValues(alpha: 0.8)
+      : const Color(0xFF6A4418).withValues(alpha: 0.5);
+  canvas.drawRect(Rect.fromLTWH(lanternX + 1, lanternY + 1, 2, 4), p);
 }
 
 // ─── Border with doors ─────────────────────────────────────────────────────
