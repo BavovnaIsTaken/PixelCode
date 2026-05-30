@@ -82,10 +82,15 @@ final officeSimulationProvider = Provider<OfficeSimulationService>((ref) {
       workplaceStatusMap,
     );
     if (newlyAssigned.isNotEmpty) {
-      final notifier = ref.read(gameEconomyProvider.notifier);
-      for (final id in newlyAssigned) {
-        notifier.assignWorkplace(id);
-      }
+      // Defer the mutation: ref.listen(..., fireImmediately: true) calls
+      // this synchronously during provider creation, and Riverpod forbids
+      // mutating another provider mid-init.
+      Future.microtask(() {
+        final notifier = ref.read(gameEconomyProvider.notifier);
+        for (final id in newlyAssigned) {
+          notifier.assignWorkplace(id);
+        }
+      });
     }
   }
 
