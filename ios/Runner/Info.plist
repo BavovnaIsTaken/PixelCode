@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pixel Code</string>
+	<string>PixelCode</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,7 +32,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Pixel Code шукає сервер у локальній мережі для підключення</string>
+	<string>PixelCode шукає сервер у локальній мережі для підключення</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_pixelcode._tcp</string>
