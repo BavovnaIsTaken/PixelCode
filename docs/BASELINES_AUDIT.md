@@ -19,6 +19,7 @@
 | Analyzer | [server/src/usage_baseline.ts](../server/src/usage_baseline.ts) (pure, no I/O) |
 | WS endpoint | `get_usage_baselines` → `usage_baselines` |
 | Daily-control UI | Settings → "Використання" tab |
+| Export | Кнопка «Експорт» у тій самій вкладці → markdown у clipboard (для daily-log / chat-paste) |
 
 `MIN_CONFIDENT_SAMPLES = 10` — нижче того bucket рендериться (видно growth), але
 не використовується для warning-ів і не позначається `confident`. Якщо хочеш

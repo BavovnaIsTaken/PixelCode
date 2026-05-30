@@ -11,10 +11,12 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/agent_message.dart';
 import '../../providers/usage_baselines_provider.dart';
+import 'usage_baselines_export.dart';
 
 class UsageBaselinesTab extends ConsumerStatefulWidget {
   const UsageBaselinesTab({super.key});
@@ -113,6 +115,14 @@ class _Header extends StatelessWidget {
             ],
           ),
         ),
+        if (report != null) ...[
+          OutlinedButton.icon(
+            onPressed: () => _copyExportToClipboard(context, report),
+            icon: const Icon(Icons.copy_all_outlined, size: 16),
+            label: const Text('Експорт'),
+          ),
+          const SizedBox(width: 8),
+        ],
         Consumer(builder: (context, ref, _) {
           return OutlinedButton.icon(
             onPressed: state.loading
@@ -130,6 +140,22 @@ class _Header extends StatelessWidget {
         }),
       ],
     );
+  }
+
+  Future<void> _copyExportToClipboard(
+    BuildContext context,
+    UsageBaselinesMessage report,
+  ) async {
+    final md = formatBaselinesMarkdown(report);
+    await Clipboard.setData(ClipboardData(text: md));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Скопійовано у clipboard (markdown)'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 }
 
