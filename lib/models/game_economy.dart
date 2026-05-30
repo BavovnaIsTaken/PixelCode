@@ -1588,7 +1588,8 @@ extension RoomTypeExt on RoomType {
         RoomType.meetingRoom ||
         RoomType.serverRoom ||
         RoomType.openSpace ||
-        RoomType.teamFloor =>
+        RoomType.teamFloor ||
+        RoomType.captainsCabin =>
           RoomCategory.room,
         RoomType.lounge ||
         RoomType.gym ||

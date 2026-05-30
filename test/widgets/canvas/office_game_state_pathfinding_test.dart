@@ -17,15 +17,12 @@ void main() {
   group('OfficeGameState.pathfinding', () {
     // ─── Helper Functions ───────────────────────────────────────────
 
-    /// Create a simple tile map: all floor tiles with walls at edges.
-    /// [wallRows] and [wallCols] define boundary walls; interior is walkable.
-    List<List<TileType>> _createTileMap({
+    List<List<TileType>> createTileMap({
       required int cols,
       required int rows,
     }) {
       return List.generate(rows, (r) {
         return List.generate(cols, (c) {
-          // Perimeter walls
           if (r == 0 || r == rows - 1 || c == 0 || c == cols - 1) {
             return TileType.wall;
           }
@@ -34,9 +31,18 @@ void main() {
       });
     }
 
-    /// Test helper: run _findPath directly via instance state.
-    /// Since _findPath is private, we use a fresh OfficeGameState
-    /// with a custom tile map and blocked set.
+    bool isWalkableHelper(
+      int col, int row,
+      List<List<TileType>> tileMap,
+      Set<String> blocked,
+    ) {
+      if (row < 0 || row >= tileMap.length) return false;
+      if (col < 0 || col >= tileMap[0].length) return false;
+      if (tileMap[row][col] == TileType.wall) return false;
+      if (blocked.contains('$col,$row')) return false;
+      return true;
+    }
+
     List<TilePos> runFindPath({
       required List<List<TileType>> tileMap,
       required int startCol,
@@ -45,10 +51,8 @@ void main() {
       required int endRow,
       Set<String> blocked = const {},
     }) {
-      // Re-implement _findPath inline for testing
-      // (or inject it via the game state)
       if (startCol == endCol && startRow == endRow) return [];
-      if (!_isWalkableHelper(endCol, endRow, tileMap, blocked)) return [];
+      if (!isWalkableHelper(endCol, endRow, tileMap, blocked)) return [];
 
       final startKey = '$startCol,$startRow';
       final endKey = '$endCol,$endRow';
@@ -76,7 +80,7 @@ void main() {
           final nr = curr.row + d.$2;
           final nk = '$nc,$nr';
           if (visited.contains(nk)) continue;
-          if (!_isWalkableHelper(nc, nr, tileMap, blocked)) continue;
+          if (!isWalkableHelper(nc, nr, tileMap, blocked)) continue;
           visited.add(nk);
           parent[nk] = currKey;
           queue.add(TilePos(nc, nr));
@@ -86,22 +90,10 @@ void main() {
       return [];
     }
 
-    bool _isWalkableHelper(
-      int col, int row,
-      List<List<TileType>> tileMap,
-      Set<String> blocked,
-    ) {
-      if (row < 0 || row >= tileMap.length) return false;
-      if (col < 0 || col >= tileMap[0].length) return false;
-      if (tileMap[row][col] == TileType.wall) return false;
-      if (blocked.contains('$col,$row')) return false;
-      return true;
-    }
-
     // ─── Tests: Normal Pathfinding ──────────────────────────────────
 
     test('finds straight path horizontally', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 1,
@@ -117,7 +109,7 @@ void main() {
     });
 
     test('finds straight path vertically', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 5,
@@ -133,7 +125,7 @@ void main() {
     });
 
     test('finds diagonal path (L-shaped)', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 2,
@@ -150,7 +142,7 @@ void main() {
     });
 
     test('path avoids walls correctly', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Block a vertical corridor: column 5, rows 2-6
       final blocked = <String>{
         for (int r = 2; r <= 6; r++) '5,$r',
@@ -177,7 +169,7 @@ void main() {
     });
 
     test('shortest path with multiple routes', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Open field: BFS should find an optimal path
       final path = runFindPath(
         tileMap: map,
@@ -195,7 +187,7 @@ void main() {
     // ─── Tests: Blocked Tiles ───────────────────────────────────────
 
     test('blocks desk stations correctly', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Block a desk at (5, 5)
       final blocked = <String>{'5,5'};
 
@@ -215,7 +207,7 @@ void main() {
     });
 
     test('navigates multi-tile obstacle', () {
-      final map = _createTileMap(cols: 12, rows: 10);
+      final map = createTileMap(cols: 12, rows: 10);
       // Block a 2×2 room at (4, 4)-(5, 5)
       final blocked = <String>{
         '4,4', '5,4',
@@ -242,7 +234,7 @@ void main() {
     // ─── Tests: Edge Cases ──────────────────────────────────────────
 
     test('returns empty path when start equals end', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 5,
@@ -255,7 +247,7 @@ void main() {
     });
 
     test('returns empty path when destination is unreachable', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Block all tiles around destination (7, 7) except itself
       final blocked = <String>{
         '6,7', '8,7', '7,6', '7,8',
@@ -275,7 +267,7 @@ void main() {
     });
 
     test('returns empty path when destination is a wall', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Try to pathfind to a wall tile (0, 0)
       final path = runFindPath(
         tileMap: map,
@@ -289,7 +281,7 @@ void main() {
     });
 
     test('returns empty path when destination is blocked', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final blocked = <String>{'7,7'};
 
       final path = runFindPath(
@@ -305,7 +297,7 @@ void main() {
     });
 
     test('handles out-of-bounds destination', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 5,
@@ -318,7 +310,7 @@ void main() {
     });
 
     test('handles out-of-bounds start (assumes walkable)', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Start should be validated by caller, but test boundaries
       final path = runFindPath(
         tileMap: map,
@@ -332,7 +324,7 @@ void main() {
     });
 
     test('navigates tight corridor', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       // Create a 1-tile-wide horizontal corridor by blocking left & right
       final blocked = <String>{
         for (int r = 3; r <= 7; r++) ...[
@@ -407,7 +399,7 @@ void main() {
     // ─── Tests: Pathfinding Correctness ─────────────────────────────
 
     test('path is continuous (each step adjacent)', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final path = runFindPath(
         tileMap: map,
         startCol: 1,
@@ -432,7 +424,7 @@ void main() {
     });
 
     test('path uses only walkable tiles', () {
-      final map = _createTileMap(cols: 10, rows: 10);
+      final map = createTileMap(cols: 10, rows: 10);
       final blocked = <String>{'5,2', '5,3', '5,4', '5,5', '5,6'};
 
       final path = runFindPath(

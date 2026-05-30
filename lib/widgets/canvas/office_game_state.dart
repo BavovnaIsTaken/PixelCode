@@ -862,6 +862,16 @@ class OfficeGameState {
           }
         }
         break;
+      case RoomType.captainsCabin:
+        // 3×3: navigation table, chair, compass, map, lantern fill the
+        // footprint — block everything except the front-row entry tile.
+        for (int r = 0; r < room.type.heightTiles; r++) {
+          for (int c = 0; c < room.type.widthTiles; c++) {
+            if (r == room.type.heightTiles - 1 && c == 0) continue;
+            yield TilePos(room.col + c, room.row + r);
+          }
+        }
+        break;
     }
   }
 

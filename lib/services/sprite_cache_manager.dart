@@ -9,7 +9,7 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
+import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -180,15 +180,14 @@ class FileHashValidator {
 
   /// Cascade invalidation: find dependent files
   Set<String> getCascadeDependencies(String changedFile) {
-    // Hard-coded dependency graph for PixelCode
-    const dependencies = {
+    const dependencies = <String, Set<String>>{
       'character_sprites.dart': {'character_skins.dart', 'character_accessories.dart'},
       'character_skins.dart': {'character_accessories.dart'},
-      'furniture_sprites.dart': {},
-      'galley_sprites.dart': {},
-      'arkanoid_sprites.dart': {},
+      'furniture_sprites.dart': <String>{},
+      'galley_sprites.dart': <String>{},
+      'arkanoid_sprites.dart': <String>{},
     };
-    return dependencies[changedFile] ?? {};
+    return dependencies[changedFile] ?? <String>{};
   }
 }
 
