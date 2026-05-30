@@ -61,8 +61,8 @@ def draw_duck(draw: ImageDraw.ImageDraw) -> None:
         14: range(10, 23),
         15: range(9, 24),
         16: range(9, 25),
-        17: range(9, 26),
-        18: range(9, 26),
+        17: range(9, 25),
+        18: range(9, 25),
         19: range(10, 25),
         20: range(11, 24),
         21: range(13, 22),
@@ -70,10 +70,6 @@ def draw_duck(draw: ImageDraw.ImageDraw) -> None:
     for y, xs in body_rows.items():
         for x in xs:
             draw.point((x, y), fill=DUCK)
-
-    # Tail upturn — small back-left bump above body line.
-    draw.point((8, 13), fill=DUCK)
-    draw.point((9, 12), fill=DUCK)
 
     # Highlights — top-left of head and body.
     for x, y in [(10, 8), (11, 8), (10, 9),

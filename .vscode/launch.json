@@ -24,13 +24,13 @@
             "deviceId": "00008140-00090C412268801C"
         },
         {
-            "name": "────── 🚀 PixelDock ──────",
+            "name": "────── 🦆 PixelDock ──────",
             "request": "launch",
             "type": "dart",
             "preLaunchTask": "none"
         },
         {
-            "name": "🚀 MacOS",
+            "name": "🦆 MacOS",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
@@ -38,7 +38,7 @@
             "deviceId": "macos"
         },
         {
-            "name": "🚀 iOS (Wireless)",
+            "name": "🦆 iOS (Wireless)",
             "request": "launch",
             "type": "dart",
             "cwd": "server_admin",
