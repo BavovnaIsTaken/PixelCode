@@ -1048,10 +1048,15 @@ class OfficeGameState {
   /// Apply remote character positions received from another device.
   /// Only moves idle/wandering characters — active (typing) characters
   /// are driven by agent_status and left untouched.
+  /// THREAD-SAFE: Looks up characters in the map for each entry rather than
+  /// iterating characters directly, so concurrent modifications by syncAgents
+  /// during game loop don't cause ConcurrentModificationException.
   void applyRemotePositions(
     Map<String, ({int col, int row, String state, String dir, bool onSkateboard})>
         remote,
   ) {
+    // Process remote positions without holding a lock across the iteration.
+    // Each character lookup is atomic, so new/removed characters are safe.
     for (final entry in remote.entries) {
       final ch = characters[entry.key];
       if (ch == null || !ch.isHired || ch.isActive || ch.isChatting) continue;
@@ -1081,8 +1086,13 @@ class OfficeGameState {
   /// Sync agent states from the provider into game characters.
   ///
   /// [agentStates] is keyed by instanceId — one-to-one with our character map.
+  /// THREAD-SAFE: Uses List.from() to snapshot characters before iteration,
+  /// preventing ConcurrentModificationException if WebSocket callbacks
+  /// (applyRemotePositions) modify the characters map during sync.
   void syncAgents(Map<String, AgentState> agentStates) {
-    for (final ch in characters.values) {
+    // Snapshot the characters map to avoid race conditions with WebSocket callbacks
+    final characterList = List.from(characters.values);
+    for (final ch in characterList) {
       final agentState = agentStates[ch.instanceId];
       if (agentState == null) continue;
 
@@ -1209,8 +1219,13 @@ class OfficeGameState {
   }
 
   /// Main game loop update. Call every frame with delta time (seconds).
+  /// THREAD-SAFE: Uses List.from() to snapshot characters before iteration,
+  /// preventing ConcurrentModificationException if WebSocket callbacks
+  /// (applyRemotePositions) or provider sync calls modify the characters map.
   void update(double dt) {
-    for (final ch in characters.values) {
+    // Snapshot the characters map to avoid race conditions with async callbacks
+    final characterList = List.from(characters.values);
+    for (final ch in characterList) {
       if (!ch.isHired) continue;
       _updateCharacter(ch, dt);
     }
@@ -1798,8 +1813,11 @@ class OfficeGameState {
       }
       return;
     }
-    // Trigger brewing when a character walks adjacent to the machine
-    for (final ch in characters.values) {
+    // Trigger brewing when a character walks adjacent to the machine.
+    // THREAD-SAFE: Uses List.from() to snapshot before iteration,
+    // preventing ConcurrentModificationException if map changes during loop.
+    final characterList = List.from(characters.values);
+    for (final ch in characterList) {
       if (!ch.isHired || ch.state != CharState.walk) continue;
       final dc = (ch.tileCol - kCoffeeMachineCol).abs();
       final dr = (ch.tileRow - kCoffeeMachineRow).abs();

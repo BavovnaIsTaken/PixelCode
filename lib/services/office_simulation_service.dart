@@ -27,6 +27,11 @@ class OfficeSimulationService {
   Duration _lastElapsed = Duration.zero;
   bool _disposed = false;
 
+  /// Guard for synchronizing WebSocket callbacks (async) with game loop ticks.
+  /// Prevents ConcurrentModificationException when applyRemotePositions runs
+  /// concurrently with gameState.update() reading characters.
+  bool _isUpdating = false;
+
   OfficeSimulationService({
     OfficeGameState? gameState,
     bool autoStart = true,
@@ -42,10 +47,15 @@ class OfficeSimulationService {
   void debugStep(Duration elapsed) => _onTick(elapsed);
 
   void _onTick(Duration elapsed) {
-    final dt = (elapsed - _lastElapsed).inMicroseconds / 1000000.0;
-    _lastElapsed = elapsed;
-    gameState.update(dt.clamp(0.0, 0.1));
-    frame.value++;
+    _isUpdating = true;
+    try {
+      final dt = (elapsed - _lastElapsed).inMicroseconds / 1000000.0;
+      _lastElapsed = elapsed;
+      gameState.update(dt.clamp(0.0, 0.1));
+      frame.value++;
+    } finally {
+      _isUpdating = false;
+    }
   }
 
   // ── Mode transitions ──────────────────────────────────────────────────
@@ -62,8 +72,21 @@ class OfficeSimulationService {
 
   // ── Provider-driven sync passthroughs ─────────────────────────────────
 
-  void syncAgents(Map<String, AgentState> agents) =>
+  /// Sync agent states from provider into game characters.
+  /// THREAD-SAFE: Defers the sync until the game loop tick is complete,
+  /// preventing race conditions between syncAgents and gameState.update().
+  void syncAgents(Map<String, AgentState> agents) {
+    // If game loop is currently running, wait for it to finish before syncing.
+    // This prevents ConcurrentModificationException when provider update (async)
+    // tries to modify characters map during a game loop iteration.
+    if (_isUpdating) {
+      Future.delayed(const Duration(milliseconds: 1), () {
+        if (!_disposed) gameState.syncAgents(agents);
+      });
+    } else {
       gameState.syncAgents(agents);
+    }
+  }
 
   List<String> syncHired(
     List<String> hiredIds, [
@@ -87,12 +110,25 @@ class OfficeSimulationService {
   Map<String, Map<String, dynamic>> serializePositions() =>
       gameState.serializePositions();
 
+  /// Apply remote positions from WebSocket callback (async context).
+  /// THREAD-SAFE: Defers the update until the game loop tick is complete,
+  /// preventing race conditions between applyRemotePositions and gameState.update().
   void applyRemotePositions(
     Map<String,
             ({int col, int row, String state, String dir, bool onSkateboard})>
         remote,
-  ) =>
+  ) {
+    // If game loop is currently running, wait for it to finish before applying.
+    // This prevents ConcurrentModificationException when WebSocket callback
+    // (async) tries to modify characters map during a game loop iteration.
+    if (_isUpdating) {
+      Future.delayed(const Duration(milliseconds: 1), () {
+        if (!_disposed) gameState.applyRemotePositions(remote);
+      });
+    } else {
       gameState.applyRemotePositions(remote);
+    }
+  }
 
   void dispose() {
     if (_disposed) return;
