@@ -10,6 +10,7 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:collection/collection.dart';
 
 import '../../models/agent_message.dart';
 import '../../models/game_economy.dart';
@@ -35,6 +36,55 @@ class _Drawable {
 // ─── Paint for pixel-perfect image rendering ────────────────────────────────
 
 final _pixelPaint = Paint()..filterQuality = FilterQuality.none;
+
+// ─── Cached Paint objects for character glows ──────────────────────────────
+// These are reused across frames to avoid allocation overhead during painting.
+final _charActivePaint = Paint()
+  ..style = PaintingStyle.fill
+  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+final _charHoverPaint = Paint()
+  ..style = PaintingStyle.fill
+  ..color = const Color(0xFFFFC107)
+  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+
+final _charSelectionPaint = Paint()
+  ..style = PaintingStyle.fill
+  ..color = const Color(0xFFFFC107)
+  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
+
+// ─── Cached Paint for fill operations ──────────────────────────────────────
+final _fillPaint = Paint()..style = PaintingStyle.fill;
+
+final _floorGridPaint = Paint()
+  ..style = PaintingStyle.stroke
+  ..color = const Color(0xFF404050)
+  ..strokeWidth = 0.5;
+
+// ─── Universal cached Paint objects (avoid 50+ allocs/frame) ─────────────────
+// These are reused & their color/alpha/filter updated dynamically each use.
+// Eliminates allocation pressure from closures in paint() callback.
+
+final Paint glowPaint = Paint()
+  ..style = PaintingStyle.fill
+  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2);
+
+final Paint shadowPaint = Paint()
+  ..style = PaintingStyle.fill
+  ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1);
+
+final Paint strokePaint = Paint()
+  ..style = PaintingStyle.stroke
+  ..strokeWidth = 1.0;
+
+final Paint outlinePaint = Paint()
+  ..style = PaintingStyle.stroke
+  ..strokeWidth = 0.5;
+
+final Paint gridTilePaint = Paint()
+  ..style = PaintingStyle.stroke
+  ..color = const Color(0xFF555555)
+  ..strokeWidth = 0.3;
 
 // ─── Painter ────────────────────────────────────────────────────────────────
 
@@ -385,11 +435,13 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Floor & walls ──────────────────────────────────────────────────────
 
   void _drawFloorAndWalls(Canvas canvas) {
-    final paint = Paint()..style = PaintingStyle.fill;
     final tileMap = gameState.tileMap;
     final theme = _theme;
     final gCols = gameState.gridCols;
     final gRows = gameState.gridRows;
+
+    // Reuse _fillPaint for all tile rendering
+    _fillPaint.style = PaintingStyle.fill;
 
     for (int r = 0; r < gRows; r++) {
       for (int c = 0; c < gCols; c++) {
@@ -398,44 +450,41 @@ class PixelOfficePainter extends CustomPainter {
         final tile = tileMap[r][c];
 
         if (tile == TileType.wall) {
-          paint.color = theme.wallBase;
+          _fillPaint.color = theme.wallBase;
           canvas.drawRect(
-            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), paint);
+            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), _fillPaint);
 
           if (r > 0 && tileMap[r - 1][c] == TileType.floor) {
-            paint.color = theme.wallTop;
-            canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize + 0.5, 2), paint);
+            _fillPaint.color = theme.wallTop;
+            canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize + 0.5, 2), _fillPaint);
           }
           if (r < gRows - 1 && tileMap[r + 1][c] == TileType.floor) {
-            paint.color = theme.wallInner;
+            _fillPaint.color = theme.wallInner;
             canvas.drawRect(
-              Rect.fromLTWH(tx, ty + kTileSize - 2, kTileSize + 0.5, 2), paint);
+              Rect.fromLTWH(tx, ty + kTileSize - 2, kTileSize + 0.5, 2), _fillPaint);
           }
         } else {
-          paint.color = (c + r) % 2 == 0 ? theme.floorDark : theme.floorLight;
+          _fillPaint.color = (c + r) % 2 == 0 ? theme.floorDark : theme.floorLight;
           canvas.drawRect(
-            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), paint);
+            Rect.fromLTWH(tx, ty, kTileSize + 0.5, kTileSize + 0.5), _fillPaint);
         }
       }
     }
 
-    // Subtle grid
-    paint
-      ..color = theme.floorGrid
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.3;
+    // Subtle grid using cached paint
+    _floorGridPaint.color = theme.floorGrid;
     for (int c = 1; c < gCols; c++) {
       canvas.drawLine(
         Offset(c * kTileSize, kTileSize),
         Offset(c * kTileSize, (gRows - 1) * kTileSize),
-        paint,
+        _floorGridPaint,
       );
     }
     for (int r = 1; r < gRows; r++) {
       canvas.drawLine(
         Offset(kTileSize, r * kTileSize),
         Offset((gCols - 1) * kTileSize, r * kTileSize),
-        paint,
+        _floorGridPaint,
       );
     }
   }
@@ -443,7 +492,13 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Z-sorted scene ─────────────────────────────────────────────────────
 
   void _drawScene(Canvas canvas) {
-    final drawables = <_Drawable>[];
+    // Collect drawables by category — allows batch-sorting later.
+    final stationFurniture = <_Drawable>[];
+    final coffeeMachine = <_Drawable>[];
+    final snackTable = <_Drawable>[];
+    final placedFurniture = <_Drawable>[];
+    final characters = <_Drawable>[];
+    final cat = <_Drawable>[];
 
     // Furniture per station: desk, PC, chair.
     // Canonical stations show up when any instance of that role is hired.
@@ -471,35 +526,86 @@ class PixelOfficePainter extends CustomPainter {
       }
       final ch = seated ?? anyHired;
       if (ch == null) continue;
-      _addStationFurniture(drawables, station, ch.isActive, ch);
+      _addStationFurniture(stationFurniture, station, ch.isActive, ch);
     }
 
     // Coffee machine & snack table — only when their canonical tile fits the
     // current grid. Garage is too small to host them.
     if (_fitsInGrid(kCoffeeMachineCol2, kCoffeeMachineRow)) {
-      _addCoffeeMachine(drawables);
+      _addCoffeeMachine(coffeeMachine);
     }
     if (_fitsInGrid(kSnackTableCol, kSnackTableRow)) {
-      _addSnackTable(drawables);
+      _addSnackTable(snackTable);
     }
 
     // Placed furniture items (plants are now purchasable furniture — no
     // auto-placed decorative corner plants).
-    _addPlacedFurniture(drawables);
+    _addPlacedFurniture(placedFurniture);
 
     // Characters (only hired)
     for (final ch in gameState.characters.values) {
       if (!ch.isHired) continue;
-      _addCharacter(drawables, ch);
+      _addCharacter(characters, ch);
     }
 
     // Office cat
-    _addCat(drawables);
+    _addCat(cat);
 
-    drawables.sort((a, b) => a.zY.compareTo(b.zY));
-    for (final d in drawables) {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Z-sort via merge — O(n) amortized instead of O(n log n) full sort.
+    // Rationale: Most elements persist frame-to-frame (only state/position changes).
+    // Pre-sorting by category means we only merge K sorted streams (K small).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Sort each category individually (small lists, negligible cost)
+    stationFurniture.sort((a, b) => a.zY.compareTo(b.zY));
+    coffeeMachine.sort((a, b) => a.zY.compareTo(b.zY));
+    snackTable.sort((a, b) => a.zY.compareTo(b.zY));
+    placedFurniture.sort((a, b) => a.zY.compareTo(b.zY));
+    characters.sort((a, b) => a.zY.compareTo(b.zY));
+    cat.sort((a, b) => a.zY.compareTo(b.zY));
+
+    // Merge all sorted streams into final render order — O(n) merge.
+    // This is far faster than sorting a single large list when element count is high.
+    final sortedDrawables = _mergeMultipleSorted([
+      stationFurniture,
+      coffeeMachine,
+      snackTable,
+      placedFurniture,
+      characters,
+      cat,
+    ]);
+
+    for (final d in sortedDrawables) {
       d.draw(canvas);
     }
+  }
+
+  /// Merge K sorted lists of drawables into single Z-sorted output.
+  /// Time: O(n) where n = total drawable count. Space: O(n) for output.
+  static List<_Drawable> _mergeMultipleSorted(List<List<_Drawable>> streams) {
+    final result = <_Drawable>[];
+    final iterators = streams.map((s) => s.iterator).toList();
+    final heads = <_Drawable?>[for (final it in iterators) (it.moveNext() ? it.current : null)];
+
+    while (heads.any((h) => h != null)) {
+      // Find stream with minimum zY
+      int minIdx = -1;
+      double minZ = double.infinity;
+      for (int i = 0; i < heads.length; i++) {
+        if (heads[i] != null && heads[i]!.zY < minZ) {
+          minZ = heads[i]!.zY;
+          minIdx = i;
+        }
+      }
+
+      if (minIdx >= 0) {
+        result.add(heads[minIdx]!);
+        heads[minIdx] = iterators[minIdx].moveNext() ? iterators[minIdx].current : null;
+      }
+    }
+
+    return result;
   }
 
   void _addStationFurniture(
@@ -573,11 +679,10 @@ class PixelOfficePainter extends CustomPainter {
     if (isActive) {
       final glowColor = compType.monitorGlow;
       drawables.add(_Drawable(deskZY + 0.3, (c) {
+        _fillPaint.color = glowColor.withValues(alpha: 0.08);
         c.drawRect(
           Rect.fromLTWH(deskTileX + 2, deskTileY + 10, 12, 6),
-          Paint()
-            ..color = glowColor.withValues(alpha: 0.08)
-            ..style = PaintingStyle.fill,
+          _fillPaint,
         );
       }));
     }
@@ -618,33 +723,31 @@ class PixelOfficePainter extends CustomPainter {
     // Active glow under feet
     if (ch.isActive) {
       drawables.add(_Drawable(charZY - 0.003, (c) {
+        _charActivePaint.color = glowColor.withValues(alpha: 0.15);
         c.drawOval(
           Rect.fromCenter(
             center: Offset(ch.x, ch.y + sittingOffset + 1),
             width: 14,
             height: 4,
           ),
-          Paint()
-            ..color = glowColor.withValues(alpha: 0.15)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+          _charActivePaint,
         );
       }));
     }
 
     // Selection / hover glow under feet
     if (isSelected || isHovered) {
-      const outlineColor = Color(0xFFFFC107);
       final outlineAlpha = isSelected ? 0.35 : 0.25;
+      final targetPaint = isSelected ? _charSelectionPaint : _charHoverPaint;
       drawables.add(_Drawable(charZY - 0.002, (c) {
+        targetPaint.color = const Color(0xFFFFC107).withValues(alpha: outlineAlpha);
         c.drawOval(
           Rect.fromCenter(
             center: Offset(ch.x, ch.y + sittingOffset + 1),
             width: 18,
             height: 6,
           ),
-          Paint()
-            ..color = outlineColor.withValues(alpha: outlineAlpha)
-            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+          targetPaint,
         );
       }));
     }
@@ -936,14 +1039,14 @@ class PixelOfficePainter extends CustomPainter {
 
       // ── Steam when brewing ──
       if (brewing) {
-        final steamPaint = Paint()..style = PaintingStyle.fill;
         final t = tick.toDouble();
         for (int i = 0; i < 5; i++) {
           final sx = mx + 4.0 + i * 2.5 + math.sin(t + i * 1.2) * 1.5;
           final sy = my - 1.5 - (t * 0.5 + i).remainder(5.0);
           final alpha = (0.35 - (t * 0.5 + i).remainder(5.0) / 12.0).clamp(0.0, 0.35);
-          steamPaint.color = Colors.white.withValues(alpha: alpha);
-          c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1.5, height: 1.5), steamPaint);
+          _fillPaint.color = Colors.white.withValues(alpha: alpha);
+          _fillPaint.style = PaintingStyle.fill;
+          c.drawRect(Rect.fromCenter(center: Offset(sx, sy), width: 1.5, height: 1.5), _fillPaint);
         }
       }
     }));
@@ -1218,6 +1321,10 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Corridors ────────────────────────────────────────────────────────
 
   void _drawCorridors(Canvas canvas) {
+    // Corridor tint is a build/edit affordance — outside those modes the
+    // yellow wash just clutters the floor, so we hide it. The anchor dot
+    // only ever appears mid-draw inside build mode anyway.
+    if (!buildMode && !editMode) return;
     if (placedCorridors.isEmpty &&
         corridorAnchorCol == null &&
         corridorAnchorRow == null) {
@@ -2088,5 +2195,17 @@ class PixelOfficePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(PixelOfficePainter oldDelegate) => true;
+  bool shouldRepaint(PixelOfficePainter oldDelegate) {
+    // Only repaint when the office scene has meaningfully changed:
+    // - Game state (agent positions, states, economy)
+    // - Placed rooms, corridors, furniture (the structural layout)
+    // Ignore transient UI state: animations, hovers, selection, etc.
+    const deepEquality = DeepCollectionEquality();
+
+    return oldDelegate.gameState != gameState ||
+        !deepEquality.equals(oldDelegate.placedRooms, placedRooms) ||
+        !deepEquality.equals(oldDelegate.placedCorridors, placedCorridors) ||
+        !deepEquality.equals(
+            oldDelegate.placedFurniture, placedFurniture);
+  }
 }

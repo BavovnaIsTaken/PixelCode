@@ -13,6 +13,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 
+import '../../services/sprite_cache_manager.dart';
 import 'office_game_state.dart';
 
 // Sprite frame dimensions (pixels in the PNG).
@@ -20,13 +21,27 @@ const kSpriteW = 16;
 const kSpriteH = 32;
 const _charCount = 6;
 
+// Sprite caching is now handled by SpriteCacheManager
+
 /// Manages all loaded character sprite sheets + furniture images.
+/// Uses SpriteCacheManager for intelligent frame caching with TTL and tiering.
 class SpriteManager {
   final List<ui.Image> _chars = [];
   final Map<String, ui.Image> _furniture = {};
+  late final SpriteCacheManager _frameCache;
   bool _loaded = false;
 
+  SpriteManager() {
+    _frameCache = SpriteCacheManager();
+  }
+
   bool get isLoaded => _loaded;
+
+  /// Get cache stats for debugging.
+  Map<String, dynamic> get frameCacheStats => {
+    'metrics': _frameCache.getMetrics().toString(),
+    'hitRate': _frameCache.getMetrics().hitRate,
+  };
 
   Future<void> load() async {
     // Characters
@@ -64,6 +79,68 @@ class SpriteManager {
 
   /// Furniture image by name.
   ui.Image? furniture(String name) => _furniture[name];
+
+  /// Get a character sprite frame (with TTL + tiered LRU caching).
+  /// Returns extracted frame from sheet, cached for performance.
+  Future<ui.Image?> charFrame(int charIdx, int frameCol, int dirRow) async {
+    if (!_loaded || charIdx >= _chars.length) return null;
+
+    final cacheKey = 'character_sprites:${charIdx}_${frameCol}_${dirRow}';
+
+    // Try cache first
+    final cached = _frameCache.get(cacheKey);
+    if (cached != null) {
+      return cached;
+    }
+
+    // Extract and cache
+    try {
+      final sheet = _chars[charIdx];
+      final srcRect = charFrameRect(frameCol, dirRow);
+
+      // Clone the frame region into a new image using canvas recording
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder,
+          ui.Rect.fromLTWH(0, 0, kSpriteW.toDouble(), kSpriteH.toDouble()));
+
+      canvas.drawImageRect(
+        sheet,
+        srcRect,
+        ui.Rect.fromLTWH(0, 0, kSpriteW.toDouble(), kSpriteH.toDouble()),
+        ui.Paint(),
+      );
+
+      final picture = recorder.endRecording();
+      final extracted = await picture.toImage(kSpriteW, kSpriteH);
+
+      // Store in cache with character priority (weight 0.9)
+      await _frameCache.put(
+        cacheKey,
+        extracted,
+        spriteType: SpriteType.character,
+        sourceFile: 'character_sprites.dart',
+        fileHash: _computeSimpleHash(charIdx, frameCol, dirRow),
+      );
+      return extracted;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Clear the frame cache (useful on memory pressure).
+  void clearFrameCache() {
+    _frameCache.clear();
+  }
+
+  /// Dispose cache manager resources.
+  void dispose() {
+    _frameCache.dispose();
+  }
+
+  /// Simple hash for frame identity (for hot reload detection).
+  static String _computeSimpleHash(int charIdx, int frameCol, int dirRow) {
+    return 'char_frame_${charIdx}_${frameCol}_${dirRow}';
+  }
 }
 
 // ─── Frame helpers ──────────────────────────────────────────────────────────

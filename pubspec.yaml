@@ -40,6 +40,7 @@ dependencies:
   url_launcher: ^6.3.2
   super_drag_and_drop: ^0.9.1
   liquid_glass_renderer: ^0.2.0-dev.4
+  watcher: ^1.1.0
 
 dependency_overrides:
   irondash_engine_context:
