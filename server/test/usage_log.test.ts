@@ -29,6 +29,13 @@ function inMemoryFs(initial?: Record<string, string>) {
       exists: (path: string) => files.has(path),
       ensureDir: () => {},
       warn: (msg: string) => warned.push(msg),
+      fileSize: (path: string) => (files.get(path) ?? "").length,
+      rotateFile: (from: string, to: string) => {
+        const v = files.get(from);
+        if (v === undefined) throw new Error(`ENOENT: ${from}`);
+        files.set(to, v);
+        files.delete(from);
+      },
     },
   };
 }
@@ -163,5 +170,56 @@ describe("UsageLogger path layout + runId", () => {
     assert.notEqual(a, b);
     assert.ok(a.startsWith("chat_"));
     assert.ok(c.startsWith("dispatch_"));
+  });
+});
+
+describe("UsageLogger rotation", () => {
+  test("rotates the live file to .1 when it exceeds maxFileBytes", () => {
+    const file = "/tmp/x/usage_log.jsonl";
+    const fs = inMemoryFs();
+    const log = new UsageLogger(file, { ...fs.deps, maxFileBytes: 200 });
+
+    // First record: file empty → no rotation.
+    log.record(mkEntry({ runId: "r1" }));
+    assert.ok(!fs.files.has(`${file}.1`));
+
+    // Grow the live file past the cap, then force a size check by
+    // recording past the check interval (50 records).
+    for (let i = 2; i <= 51; i++) log.record(mkEntry({ runId: `r${i}` }));
+    log.record(mkEntry({ runId: "r52" }));
+
+    assert.ok(fs.files.has(`${file}.1`), "archive created");
+    // Live file restarted — contains only post-rotation records.
+    const liveLines = (fs.files.get(file) ?? "").split("\n").filter((l) => l.trim());
+    assert.ok(liveLines.length < 52);
+    assert.ok(fs.warned.some((w) => /rotated/.test(w)));
+  });
+
+  test("readAllEntries merges archive then live file in order", () => {
+    const file = "/tmp/x/usage_log.jsonl";
+    const fs = inMemoryFs({
+      [`${file}.1`]: JSON.stringify(mkEntry({ runId: "old" })) + "\n",
+      [file]: JSON.stringify(mkEntry({ runId: "new" })) + "\n",
+    });
+    const log = new UsageLogger(file, fs.deps);
+    assert.deepEqual(
+      log.readAllEntries().map((e) => e.runId),
+      ["old", "new"],
+    );
+  });
+
+  test("rotation failure is swallowed and the record still lands", () => {
+    const file = "/tmp/x/usage_log.jsonl";
+    const fs = inMemoryFs({ [file]: "x".repeat(300) + "\n" });
+    const log = new UsageLogger(file, {
+      ...fs.deps,
+      maxFileBytes: 200,
+      rotateFile: () => {
+        throw new Error("EPERM");
+      },
+    });
+    log.record(mkEntry({ runId: "r1" }));
+    assert.ok(fs.warned.some((w) => /rotation failed: EPERM/.test(w)));
+    assert.ok((fs.files.get(file) ?? "").includes('"r1"'));
   });
 });

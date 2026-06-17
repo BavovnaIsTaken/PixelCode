@@ -24,6 +24,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  statSync,
 } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -67,7 +69,23 @@ export interface UsageLoggerDeps {
   exists?: (path: string) => boolean;
   ensureDir?: (dir: string) => void;
   warn?: (msg: string) => void;
+  /** Size of a file in bytes; 0 when missing. Used by rotation. */
+  fileSize?: (path: string) => number;
+  /** Move `from` over `to` (rotation: usage_log.jsonl → usage_log.jsonl.1). */
+  rotateFile?: (from: string, to: string) => void;
+  /** Rotate when the live file exceeds this many bytes. */
+  maxFileBytes?: number;
 }
+
+/**
+ * Rotation cap. One entry is ~400 bytes, so 5 MB ≈ 13k runs in the live
+ * file plus the same again in the `.1` archive — plenty for the C.2
+ * baseline analyzer while keeping total disk bounded at ~10 MB.
+ */
+const DEFAULT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
+/** Stat the file size only every N records — keeps the hot path cheap. */
+const SIZE_CHECK_EVERY = 50;
 
 export class UsageLogger {
   private readonly filePath: string;
@@ -76,6 +94,11 @@ export class UsageLogger {
   private readonly exists: (path: string) => boolean;
   private readonly ensureDir: (dir: string) => void;
   private readonly warn: (msg: string) => void;
+  private readonly fileSize: (path: string) => number;
+  private readonly rotateFile: (from: string, to: string) => void;
+  private readonly maxFileBytes: number;
+  /** Records since the last size check — first record always checks. */
+  private recordsSinceSizeCheck = 0;
 
   constructor(filePath: string, deps: UsageLoggerDeps = {}) {
     this.filePath = filePath;
@@ -87,10 +110,22 @@ export class UsageLogger {
     this.ensureDir =
       deps.ensureDir ?? ((d) => mkdirSync(d, { recursive: true }));
     this.warn = deps.warn ?? ((msg) => console.warn(`[usage_log] ${msg}`));
+    this.fileSize =
+      deps.fileSize ??
+      ((p) => {
+        try {
+          return statSync(p).size;
+        } catch {
+          return 0;
+        }
+      });
+    this.rotateFile = deps.rotateFile ?? renameSync;
+    this.maxFileBytes = deps.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
   }
 
   /** Append one entry. Disk failures are swallowed via `warn`. */
   record(entry: UsageLogEntry): UsageLogEntry {
+    this.maybeRotate();
     try {
       this.ensureDir(dirname(this.filePath));
       this.appendLine(this.filePath, JSON.stringify(entry));
@@ -101,33 +136,60 @@ export class UsageLogger {
   }
 
   /**
-   * Read every well-formed entry from disk. Returns `[]` on missing file
-   * or unreadable content; logs (but does not throw) on corrupt lines.
-   * Intended for the future analyzer / tests, not the hot path.
+   * Rotate the live file to `.1` (replacing the previous archive) when it
+   * outgrows `maxFileBytes`. Checked every `SIZE_CHECK_EVERY` records so
+   * the hot path doesn't stat on every append. Bounded total footprint:
+   * live file + one archive.
+   */
+  private maybeRotate(): void {
+    if (this.recordsSinceSizeCheck > 0) {
+      this.recordsSinceSizeCheck =
+        (this.recordsSinceSizeCheck + 1) % SIZE_CHECK_EVERY;
+      return;
+    }
+    this.recordsSinceSizeCheck = 1;
+    try {
+      if (this.fileSize(this.filePath) > this.maxFileBytes) {
+        this.rotateFile(this.filePath, `${this.filePath}.1`);
+        this.warn(`rotated ${this.filePath} (> ${this.maxFileBytes} bytes)`);
+      }
+    } catch (e) {
+      this.warn(`rotation failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Read every well-formed entry from disk — rotated archive (`.1`) first,
+   * then the live file, so the result stays chronological. Returns `[]` on
+   * missing files or unreadable content; logs (but does not throw) on
+   * corrupt lines. Intended for the future analyzer / tests, not the hot
+   * path.
    */
   readAllEntries(): UsageLogEntry[] {
-    if (!this.exists(this.filePath)) return [];
-    let raw: string;
-    try {
-      raw = this.readAll(this.filePath);
-    } catch (e) {
-      this.warn(`read failed: ${(e as Error).message}`);
-      return [];
-    }
     const entries: UsageLogEntry[] = [];
     let skipped = 0;
-    for (const line of raw.split("\n")) {
-      const t = line.trim();
-      if (!t) continue;
+    for (const path of [`${this.filePath}.1`, this.filePath]) {
+      if (!this.exists(path)) continue;
+      let raw: string;
       try {
-        const parsed = JSON.parse(t) as unknown;
-        if (isWellFormed(parsed)) {
-          entries.push(parsed);
-        } else {
+        raw = this.readAll(path);
+      } catch (e) {
+        this.warn(`read failed: ${(e as Error).message}`);
+        continue;
+      }
+      for (const line of raw.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const parsed = JSON.parse(t) as unknown;
+          if (isWellFormed(parsed)) {
+            entries.push(parsed);
+          } else {
+            skipped++;
+          }
+        } catch {
           skipped++;
         }
-      } catch {
-        skipped++;
       }
     }
     if (skipped > 0) {

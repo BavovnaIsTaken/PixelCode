@@ -29,6 +29,9 @@ function inMemoryFs(initial?: Record<string, string>) {
       },
       exists: (path: string) => files.has(path),
       ensureDir: () => {},
+      writeAll: (path: string, content: string) => {
+        files.set(path, content);
+      },
       warn: (msg: string) => warned.push(msg),
     },
   };
@@ -216,6 +219,87 @@ describe("AgentRunStore disk failure tolerance", () => {
     store.load();
     store.load();
     assert.equal(store.all().length, 1);
+  });
+});
+
+describe("AgentRunStore load-time compaction + retention", () => {
+  function runLine(runId: string, status = "completed"): string {
+    return JSON.stringify({
+      runId,
+      agentId: "coder#1",
+      taskType: "chat",
+      status,
+      startedAt: "t1",
+      toolCalls: [],
+    });
+  }
+
+  test("redundant transition rows are folded into one line per run", () => {
+    const file = "/tmp/x/agent_runs.jsonl";
+    // Run "a" went through 3 transitions, run "b" through 2.
+    const raw = [
+      runLine("a", "running"),
+      runLine("a", "running"),
+      runLine("b", "running"),
+      runLine("a", "completed"),
+      runLine("b", "failed"),
+    ].join("\n") + "\n";
+    const fs = inMemoryFs({ [file]: raw });
+    const store = new AgentRunStore(file, fs.deps);
+    store.load();
+
+    const lines = (fs.files.get(file) ?? "").split("\n").filter((l) => l.trim());
+    assert.equal(lines.length, 2);
+    assert.equal(store.get("a")?.status, "completed");
+    assert.equal(store.get("b")?.status, "failed");
+    // Compacted file replays to the identical state.
+    const replay = new AgentRunStore(file, inMemoryFs({ [file]: fs.files.get(file)! }).deps);
+    replay.load();
+    assert.deepEqual(replay.all(), store.all());
+  });
+
+  test("runs beyond maxRetainedRuns are evicted oldest-first", () => {
+    const file = "/tmp/x/agent_runs.jsonl";
+    const raw = ["a", "b", "c", "d", "e"].map((id) => runLine(id)).join("\n") + "\n";
+    const fs = inMemoryFs({ [file]: raw });
+    const store = new AgentRunStore(file, { ...fs.deps, maxRetainedRuns: 3 });
+    store.load();
+
+    assert.deepEqual(store.all().map((r) => r.runId), ["c", "d", "e"]);
+    const lines = (fs.files.get(file) ?? "").split("\n").filter((l) => l.trim());
+    assert.equal(lines.length, 3);
+    assert.ok(fs.warned.some((w) => /evicted 2 old run/.test(w)));
+  });
+
+  test("already-compact file is left untouched", () => {
+    const file = "/tmp/x/agent_runs.jsonl";
+    const raw = runLine("a") + "\n" + runLine("b") + "\n";
+    const fs = inMemoryFs({ [file]: raw });
+    let rewrites = 0;
+    const store = new AgentRunStore(file, {
+      ...fs.deps,
+      writeAll: () => {
+        rewrites++;
+      },
+    });
+    store.load();
+    assert.equal(rewrites, 0);
+    assert.equal(fs.files.get(file), raw);
+  });
+
+  test("compaction write failure is non-fatal — memory state intact", () => {
+    const file = "/tmp/x/agent_runs.jsonl";
+    const raw = runLine("a", "running") + "\n" + runLine("a", "completed") + "\n";
+    const fs = inMemoryFs({ [file]: raw });
+    const store = new AgentRunStore(file, {
+      ...fs.deps,
+      writeAll: () => {
+        throw new Error("disk full");
+      },
+    });
+    store.load();
+    assert.equal(store.get("a")?.status, "completed");
+    assert.ok(fs.warned.some((w) => /compaction failed: disk full/.test(w)));
   });
 });
 
