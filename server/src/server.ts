@@ -90,7 +90,8 @@ import { profileCache } from "./profile_cache.js";
 import { lessonExtractor } from "./lesson_extractor.js";
 import { runAllChecks, runSingleCheck, runFix, type HealthContext } from "./health.js";
 import type { HealthItemId } from "./protocol.js";
-import { loadConfig, type ServerConfig } from "./config.js";
+import { loadConfig, updateConfigFile, type ServerConfig } from "./config.js";
+import { checkProjectPath } from "./project_guard.js";
 import { handleAdminRequest, recordLog, type AdminContext } from "./admin.js";
 import { runBuildDoctor, publishBuildFix } from "./build_doctor.js";
 
@@ -1216,11 +1217,15 @@ async function reflectOnQuery(ws: WebSocket, targetAgentId: string): Promise<voi
   }
   const activitySummary = summaryLines.join("\n");
 
-  // Get existing rework stats
+  // Get existing rework + completion stats. Without the success side the
+  // prompt only ever highlights errors/rework, so reflection skews to
+  // weaknesses for agents whose wins land outside the activity window.
   const metrics = getMetrics(ws);
   const reworkAgents: string[] = [];
+  const completedAgents: string[] = [];
   for (const [agentId, m] of metrics) {
     if (m.reworkCount > 0) reworkAgents.push(`${agentId}(rework=${m.reworkCount})`);
+    if (m.tasksCompleted > 0) completedAgents.push(`${agentId}(completed=${m.tasksCompleted})`);
   }
 
   const reflectionPrompt = `Analyze this AI agent team work session and extract learning lessons.
@@ -1230,6 +1235,7 @@ ${activitySummary}
 
 ${hasErrors ? "⚠️ The session had errors." : "No errors during session."}
 ${reworkAgents.length > 0 ? `⚠️ Agents with rework: ${reworkAgents.join(", ")}` : "No rework needed."}
+${completedAgents.length > 0 ? `✅ Completed tasks so far: ${completedAgents.join(", ")}` : ""}
 
 Team agents: manager, tech-lead, coder, reviewer, tester, security, ui-ux-designer, llm-specialist
 
@@ -1360,7 +1366,7 @@ If nothing notable happened, reply with: []`;
  * The manager uses these instead of the built-in Agent tool.
  * Each tool returns immediately — sub-agents run in the background.
  */
-function createDispatchServer(ws: WebSocket) {
+function createDispatchServer(ws: WebSocket, projectCwd: string) {
   const dispatchTool = tool(
     "dispatch",
     "Dispatch a task to a specific team agent INSTANCE. The agent works independently — you do NOT wait for the result. Continue with other work immediately.",
@@ -1403,7 +1409,10 @@ function createDispatchServer(ws: WebSocket) {
         agentId,
         task: taskDesc,
         ws,
-        projectCwd: PROJECT_CWD,
+        // cwd of the query that created this MCP server — NOT the mutable
+        // global, so sub-agents always land in the same tree as the chat
+        // turn that dispatched them.
+        projectCwd,
         gameState,
         projectMemory,
         traitStore,
@@ -1544,6 +1553,7 @@ function createDispatchServer(ws: WebSocket) {
       };
       boardTasks.set(id, task);
       dbg("info", "board", `[MCP] Created task: ${task.title} (${id})`);
+      commitBoardChange();
       broadcastBoardState();
       return { content: [{ type: "text" as const, text: `Created task ${id} in ${task.column}: "${task.title}"` }] };
     },
@@ -1562,6 +1572,13 @@ function createDispatchServer(ws: WebSocket) {
       const oldColumn = task.column;
       task.column = args.column as TaskColumnKey;
       task.updatedAt = new Date().toISOString();
+      commitBoardChange();
+      // Mirror the client move path: transitions into done skip the write
+      // debounce (completions must survive SIGKILL) and feed the digest.
+      if (task.column === "done") boardWriter.flush();
+      if (task.column === "done" && oldColumn !== "done") {
+        recordTaskCompletionToDigest(task);
+      }
       broadcastBoardState();
       dbg("info", "board", `[MCP] Moved ${args.taskId}: ${oldColumn} → ${task.column}`);
       return { content: [{ type: "text" as const, text: `Moved ${args.taskId}: ${oldColumn} → ${task.column}` }] };
@@ -1586,6 +1603,7 @@ function createDispatchServer(ws: WebSocket) {
       if (args.priority !== undefined) task.priority = args.priority as TaskPriorityKey;
       if (args.color !== undefined) task.color = args.color as StickyColorKey;
       task.updatedAt = new Date().toISOString();
+      commitBoardChange();
       broadcastBoardState();
       return { content: [{ type: "text" as const, text: `Updated ${args.taskId}.` }] };
     },
@@ -1617,6 +1635,7 @@ function createDispatchServer(ws: WebSocket) {
         task.assignedAgents = task.assignedAgents.filter((a) => a !== args.agentId);
       }
       task.updatedAt = new Date().toISOString();
+      commitBoardChange();
       broadcastBoardState();
       return { content: [{ type: "text" as const, text: `${args.assign ? "Assigned" : "Unassigned"} ${args.agentId} on ${args.taskId}.${warning}` }] };
     },
@@ -1790,6 +1809,28 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
   trackComm(ws, result.agentId, "user");
   sendCommGraph(ws);
 
+  // A completed dispatch is the manager's delegation strength — the error
+  // counterpart (handleSubAgentError → reflection weakness) fires per failure,
+  // so the success side must be recorded per completion to stay symmetric.
+  const managerId = resolveRoleInstance(ws, "manager");
+  autoLearnLesson(ws, managerId, "strength", "delegation", "async-dispatch-effectiveness",
+    `Delegates tasks via async dispatch that complete successfully.`);
+  if (PERSONALIZATION_ENABLED) {
+    const dispatchLessons = lessonExtractor.extractLessons({
+      action: "dispatch",
+      result: "success",
+      taskCount: 1,
+    });
+    if (dispatchLessons.length > 0) {
+      profileCache
+        .loadUserProfile("default-user") // TODO(auth): real userId once available
+        .then((up) => lessonExtractor.applyLessons(managerId, dispatchLessons, up))
+        .catch((err) =>
+          dbg("warn", "personalization",
+            `dispatch-success lesson apply failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
+  }
+
   // Send the sub-agent result directly to the client
   send(ws, {
     type: "subagent_result",
@@ -1812,6 +1853,7 @@ function handleSubAgentComplete(ws: WebSocket, result: SubAgentResult): void {
     durationMs: result.durationMs,
     enqueuedAt: Date.now(),
     ws,
+    projectCwd: PROJECT_CWD,
   });
 
   sendQueueStatus(ws);
@@ -1838,6 +1880,22 @@ function handleSubAgentError(ws: WebSocket, agentId: string, dispatchId: string,
 
   send(ws, { type: "error", message: `[${agentId}] ${error}` });
 
+  // Notify the manager about the failure — without this the board card the
+  // manager moved to in_progress for this dispatch is never re-planned and
+  // sits there until the stalled-task watchdog reclaims it.
+  taskQueue.enqueue({
+    id: `failure_${dispatchId}`,
+    priority: "critical",
+    type: "subagent_result",
+    agentId,
+    dispatchId,
+    result: error,
+    failed: true,
+    enqueuedAt: Date.now(),
+    ws,
+    projectCwd: PROJECT_CWD,
+  });
+
   sendQueueStatus(ws);
 
   // Still try to process next queue item
@@ -1857,6 +1915,22 @@ async function processQueue(ws: WebSocket): Promise<void> {
   const task = taskQueue.dequeue();
   if (!task) return;
 
+  // Dispatch-time backstop: a task created for another project must never
+  // execute under the current one. set_project clears the queue, so this
+  // should be unreachable — but the cost of running an agent in the wrong
+  // tree (writes into the wrong repo) justifies the belt-and-braces check.
+  if (task.projectCwd !== PROJECT_CWD) {
+    dbg("warn", "queue", `Dropping stale task ${task.id}: queued for ${task.projectCwd}, server active is ${PROJECT_CWD}`);
+    send(task.ws, {
+      type: "project_mismatch",
+      requested: task.projectCwd,
+      active: PROJECT_CWD,
+    });
+    sendQueueStatus(ws);
+    if (!taskQueue.isEmpty) setImmediate(() => processQueue(ws));
+    return;
+  }
+
   managerBusy.set(ws, true);
 
   try {
@@ -1865,15 +1939,21 @@ async function processQueue(ws: WebSocket): Promise<void> {
     await withSessionLock(async () => {
       switch (task.type) {
         case "chat":
-          await runQuery(ws, task.userMessage!, task.targetAgentId!, task.images);
+          await runQuery(ws, task.userMessage!, task.targetAgentId!, task.images, {
+            cwd: task.projectCwd,
+          });
           break;
 
         case "subagent_result":
           // Feed the result back to the manager for acknowledgement
           await runQuery(
             ws,
-            `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nMove the matching board card to "done" and post ONE short status line to the user per the Communication policy (e.g. "Готово: {X}." — merge with the next-step line if more work is queued, like "Зробили {A}. Працюємо над {B}."). Do not narrate the board move itself.`,
+            task.failed
+              ? `[System notification] Agent "${task.agentId}" FAILED their task (dispatch ${task.dispatchId}).\n\nError:\n${(task.result ?? "").slice(0, 2000)}\n\nDecide what to do with the matching board card: if the error looks transient (timeout, network), you may re-dispatch the task ONCE to the same or another agent; otherwise move the card back to "backlog". Then post ONE short status line to the user per the Communication policy (e.g. "Не вийшло: {X} — повернув у беклог." or "Повторюємо {X}."). Do not narrate the board move itself.`
+              : `[System notification] Agent "${task.agentId}" completed their task (dispatch ${task.dispatchId}).\n\nResult summary:\n${(task.result ?? "").slice(0, 2000)}\n\nMove the matching board card to "done" and post ONE short status line to the user per the Communication policy (e.g. "Готово: {X}." — merge with the next-step line if more work is queued, like "Зробили {A}. Працюємо над {B}."). Do not narrate the board move itself.`,
             resolveRoleInstance(ws, "manager"),
+            undefined,
+            { preserveActivityBuffer: true, cwd: task.projectCwd },
           );
           break;
 
@@ -1882,6 +1962,8 @@ async function processQueue(ws: WebSocket): Promise<void> {
             ws,
             `[Board task] "${task.boardTaskTitle}": ${task.boardTaskDescription ?? "no description"}. Plan and dispatch this work, then post ONE short status line to the user per the Communication policy — if you split it, name the pieces (e.g. 'Розбив "${task.boardTaskTitle}" на: {A}, {B}. Беремо {A} першим.'); if you dispatch as-is, just say what you're starting on (e.g. 'Працюємо над ${task.boardTaskTitle}.'). Do not narrate the dispatch mechanics.`,
             resolveRoleInstance(ws, "manager"),
+            undefined,
+            { cwd: task.projectCwd },
           );
           break;
       }
@@ -1984,7 +2066,24 @@ function detectImageMimeType(base64: string): "image/jpeg" | "image/png" | "imag
   return "image/jpeg";
 }
 
-async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: string, images?: string[]): Promise<void> {
+async function runQuery(
+  ws: WebSocket,
+  userMessage: string,
+  targetAgentId: string,
+  images?: string[],
+  opts?: {
+    /** Keep the activity buffer from the previous window. Used by sub-agent
+     *  result acknowledgements: the "completed" event lands in the buffer
+     *  after the dispatching query's reflection already consumed it, so
+     *  clearing here would erase the success before any reflection sees it. */
+    preserveActivityBuffer?: boolean;
+    /** Project to run the query in. Queued tasks pass the cwd captured at
+     *  enqueue time so the query never silently picks up a PROJECT_CWD that
+     *  changed underneath it. Defaults to the active project. */
+    cwd?: string;
+  },
+): Promise<void> {
+  const queryCwd = opts?.cwd ?? PROJECT_CWD;
   let _queryTimedOut = false;
   // C.2.4 hoisted so the catch block can read trip state when the SDK
   // throws an AbortError after we tripped the breaker.
@@ -2024,7 +2123,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
     sendDebug(ws, "info", "session", `Query → ${targetAgentId}`);
 
     // Clear activity buffer for this query (reflection uses it afterwards)
-    getQueryActivities(ws).length = 0;
+    if (!opts?.preserveActivityBuffer) getQueryActivities(ws).length = 0;
 
     // Reset per-query flag so the result fallback can detect a silent finish
     clientSentAssistantMessage.set(ws, false);
@@ -2062,7 +2161,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
         agentId: targetAgentId,
         userId: "default-user", // TODO(auth): replace with real userId once user identity exists in protocol
         sessionId: currentSessionId ?? "fresh",
-        currentProject: PROJECT_CWD,
+        currentProject: queryCwd,
       }
     );
 
@@ -2103,7 +2202,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
 
     // Create Dispatch MCP server for delegating agents
     const mcpServers = canDelegate
-      ? { dispatch: createDispatchServer(ws) }
+      ? { dispatch: createDispatchServer(ws, queryCwd) }
       : undefined;
 
     const queryAbort = new AbortController();
@@ -2112,7 +2211,7 @@ async function runQuery(ws: WebSocket, userMessage: string, targetAgentId: strin
       model: targetModel,
       allowedTools,
       ...(mcpServers ? { mcpServers } : {}),
-      cwd: PROJECT_CWD,
+      cwd: queryCwd,
       includePartialMessages: true,
       permissionMode: "bypassPermissions" as const,
       // C.2.4 circuit breaker iteration cap. Was 50; lowered to 30 to match
@@ -2524,6 +2623,23 @@ let boardRevision = 0;
   } else if (r.source === "quarantined") {
     dbg("warn", "board", `Persisted board was unreadable; quarantined to ${r.quarantinedAs ?? "?"}`);
   }
+
+  // Boot sweep: the dispatch queue and sub-agents live in memory, so any
+  // card persisted in "in_progress" is orphaned after a restart — nothing
+  // will ever move it. Return such cards to backlog so the user (or the
+  // manager) can re-trigger them instead of staring at a stuck column.
+  let swept = 0;
+  for (const t of boardTasks.values()) {
+    if (t.column !== "in_progress") continue;
+    t.column = "backlog";
+    t.updatedAt = new Date().toISOString();
+    swept++;
+    dbg("warn", "board", `Boot sweep: task "${t.title}" (${t.id}) was in_progress before restart — returned to backlog`);
+  }
+  if (swept > 0) {
+    commitBoardChange();
+    boardWriter.flush();
+  }
 })();
 
 /** Bump revision and persist. Call exactly once per applied mutation. */
@@ -2573,6 +2689,43 @@ function broadcastBoardState(): void {
     }
   }
 }
+
+// ─── Stalled-task watchdog ──────────────────────────────────────────────────
+//
+// A card lands in "in_progress" and is moved out only when the manager LLM
+// decides to move it after a sub-agent notification. If that notification is
+// lost (query error, breaker trip, dropped enqueue) the card is stuck
+// forever. The watchdog reclaims cards that provably cannot make progress:
+// nothing queued, no sub-agents running, no SDK query in flight, and the
+// card untouched for STALLED_TASK_MS.
+
+const STALLED_TASK_MS = 10 * 60_000;
+const STALLED_SWEEP_EVERY_MS = 60_000;
+
+function sweepStalledTasks(): void {
+  if (!taskQueue.isEmpty) return; // queued work may still move the card
+  if (agentRunner.getRunning().length > 0) return; // sub-agents active
+  if (agentRunStore.running().length > 0) return; // manager/chat query active
+  const now = Date.now();
+  let reclaimed = 0;
+  for (const task of boardTasks.values()) {
+    if (task.column !== "in_progress") continue;
+    const updated = Date.parse(task.updatedAt);
+    if (Number.isFinite(updated) && now - updated < STALLED_TASK_MS) continue;
+    task.column = "backlog";
+    task.updatedAt = new Date().toISOString();
+    reclaimed++;
+    dbg("warn", "board", `Watchdog: task "${task.title}" (${task.id}) stalled in in_progress — returned to backlog`);
+  }
+  if (reclaimed > 0) {
+    commitBoardChange();
+    boardWriter.flush();
+    broadcastBoardState();
+  }
+}
+
+const stalledTaskTimer = setInterval(sweepStalledTasks, STALLED_SWEEP_EVERY_MS);
+stalledTaskTimer.unref(); // never keep the process alive just for the sweep
 
 function sendBoardState(ws: WebSocket, since?: number): void {
   if (typeof since === "number" && since === boardRevision) {
@@ -2673,6 +2826,7 @@ function handleBoardMessageInner(ws: WebSocket, msg: ClientMessage): void {
             userMessage: `Board task "${task.title}": ${task.description}. ${assignees} Please dispatch this work.`,
             enqueuedAt: Date.now(),
             ws,
+            projectCwd: PROJECT_CWD,
           });
           dbg("info", "board", `Auto-enqueued board task "${task.title}" for manager dispatch`);
           sendQueueStatus(ws);
@@ -4227,6 +4381,24 @@ wss.on("connection", (ws, request) => {
 
       switch (msg.type) {
         case "send_message": {
+          // ── Project guard ─────────────────────────────────────────────
+          // The client stamps the project it believes is active. If the
+          // server is in a different one (typically after a restart reset
+          // PROJECT_CWD, or another device switched projects), running the
+          // task would touch the wrong tree — reject before anything is
+          // recorded and let the client resync from `init.workingDirectory`.
+          const mismatch = checkProjectPath(msg.projectPath, PROJECT_CWD);
+          if (mismatch) {
+            send(ws, {
+              type: "project_mismatch",
+              requested: mismatch.requested,
+              active: mismatch.active,
+            });
+            dbg("warn", "project", `send_message rejected: client expects ${mismatch.requested}, server active is ${mismatch.active}`);
+            sendDebug(ws, "warn", "project", `Message rejected: project mismatch (client: ${mismatch.requested})`);
+            break;
+          }
+
           const targetAgent = msg.agentId || "manager";
           const images = msg.images;
           sendDebug(ws, "info", "ws", `User → ${targetAgent}: "${msg.content.slice(0, 60)}…"${images?.length ? ` [+${images.length} image(s)]` : ""}`);
@@ -4276,6 +4448,7 @@ wss.on("connection", (ws, request) => {
             images: images ?? undefined,
             enqueuedAt: Date.now(),
             ws,
+            projectCwd: PROJECT_CWD,
           });
           sendQueueStatus(ws);
           processQueue(ws); // non-blocking kick
@@ -4372,6 +4545,18 @@ wss.on("connection", (ws, request) => {
           const newPath = msg.path;
           dbg("info", "project", `Switching project to: ${newPath}`);
           PROJECT_CWD = newPath;
+          // Persist the switch so a server restart comes back in the same
+          // project. Without this the global resets to the config default
+          // (process.cwd() in dev) while clients keep showing the previously
+          // selected project — and tasks silently run in the wrong tree.
+          try {
+            updateConfigFile(__configSource.filePath, { projectCwd: newPath });
+            if (__configSource.envOverrides.projectCwd || __configSource.flagOverrides.projectCwd) {
+              dbg("warn", "project", "projectCwd saved to config file, but an env/CLI override is active — the override wins on next boot");
+            }
+          } catch (err) {
+            dbg("warn", "project", `Failed to persist projectCwd: ${err instanceof Error ? err.message : String(err)}`);
+          }
           // Reload trait memory and chat history for the new project
           traitStore = loadTraits(PROJECT_CWD);
           chatHistory.load(historyFilePath(PROJECT_CWD));
@@ -4788,6 +4973,9 @@ wss.on("connection", (ws, request) => {
         case "board_update_task":
         case "board_delete_task":
         case "board_assign_agent":
+        case "board_add_attachment":
+        case "board_remove_attachment":
+        case "board_seed_batch":
           handleBoardMessage(ws, msg);
           break;
 

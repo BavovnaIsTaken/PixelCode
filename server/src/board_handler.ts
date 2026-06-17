@@ -43,6 +43,10 @@ export interface BoardHandlerDeps {
   sendQueueStatus: (ws: WebSocket) => void;
   /** Kicks the dispatch loop after enqueue. Non-blocking. */
   processQueue: (ws: WebSocket) => void;
+  /** Active project path, read at enqueue time and stamped onto the queued
+   *  task (see `QueuedTask.projectCwd`). A getter (not a value) because the
+   *  active project is mutable server state that can change between calls. */
+  getProjectCwd: () => string;
   /** Structured logger (mirrors server.ts `dbg`). */
   dbg: (level: DebugLevel, category: string, message: string, data?: unknown) => void;
   /** Hard cap on per-attachment payload size (bytes). */
@@ -135,6 +139,7 @@ export function handleBoardMessage(
           userMessage: `Board task "${task.title}": ${task.description}. ${assignees} Please dispatch this work.`,
           enqueuedAt: Date.now(),
           ws,
+          projectCwd: deps.getProjectCwd(),
         });
         deps.dbg(
           "info",

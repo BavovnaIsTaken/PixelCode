@@ -123,6 +123,40 @@ void main() {
          'get_status'],
       );
     });
+
+    test('sendMessage stamps projectPath once a project is selected', () async {
+      final h = await _bootHarness();
+
+      h.svc.sendMessage('before selection');
+      h.svc.projectPath = '/projects/demo';
+      h.svc.sendMessage('after selection');
+      h.svc.getStatus(); // fence — guarantees both frames have landed
+
+      await h.waitFor('get_status');
+      final sent = h.frames
+          .where((f) => f['type'] == 'send_message')
+          .toList(growable: false);
+      expect(sent, hasLength(2));
+      expect(sent[0].containsKey('projectPath'), isFalse,
+          reason: 'no project known yet → field omitted (legacy behaviour)');
+      expect(sent[1]['projectPath'], '/projects/demo');
+    });
+
+    test('setProject records the path for subsequent sendMessage frames',
+        () async {
+      final h = await _bootHarness();
+
+      h.svc.setProject('/projects/worktree-a');
+      h.svc.sendMessage('hello');
+      h.svc.getStatus(); // fence
+
+      await h.waitFor('get_status');
+      final setFrame = h.frames.firstWhere((f) => f['type'] == 'set_project');
+      expect(setFrame['path'], '/projects/worktree-a');
+      final sendFrame =
+          h.frames.firstWhere((f) => f['type'] == 'send_message');
+      expect(sendFrame['projectPath'], '/projects/worktree-a');
+    });
   });
 
   group('board senders', () {

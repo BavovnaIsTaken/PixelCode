@@ -310,6 +310,28 @@ class ChatNotifier extends Notifier<List<ChatMessage>> {
           ),
         ]);
 
+      case ProjectMismatchMessage(:final requested, :final active):
+        // Server refused to run the message in the wrong project tree. The
+        // project selection resyncs via ProjectNotifier (init broadcasts);
+        // here we only tell the user their message was not executed.
+        final agentId = _activeStreamAgent ?? _selectedAgent;
+        _log(
+          'project mismatch: client=$requested server=$active — message not executed',
+          level: 'warn',
+        );
+        _setAgentMessages(agentId, [
+          ..._agentMessages(agentId),
+          ChatMessage(
+            role: ChatRole.assistant,
+            text: '⚠️ Повідомлення не виконано: сервер працює у проєкті '
+                '"$active", а вибрано "$requested". Проєкт синхронізовано — '
+                'надішліть повідомлення ще раз або перемкніть проєкт.',
+            agentId: agentId,
+          ),
+        ]);
+        _activeStreamAgent = null;
+        _scheduleSave();
+
       case ErrorMessage(:final message):
         final agentId = _activeStreamAgent ?? _selectedAgent;
         _log('server error on $agentId: $message', level: 'error');

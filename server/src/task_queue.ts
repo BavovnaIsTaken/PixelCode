@@ -34,6 +34,10 @@ export interface QueuedTask {
   dispatchId?: string;
   costUsd?: number;
   durationMs?: number;
+  /** True when the sub-agent errored / timed out instead of completing —
+   *  the manager gets a failure prompt (re-plan or return the card to
+   *  backlog) rather than the "move card to done" acknowledgement. */
+  failed?: boolean;
 
   // Board tasks
   boardTaskId?: string;
@@ -43,6 +47,11 @@ export interface QueuedTask {
   // Metadata
   enqueuedAt: number;
   ws: WebSocket;
+  /** Active project at enqueue time. The runner verifies it still matches
+   *  the server's active project at dispatch time and drops the task
+   *  otherwise — a queued task must never execute in a different tree than
+   *  the one it was created for. */
+  projectCwd: string;
 }
 
 // ─── TaskQueue ──────────────────────────────────────────────────────────────
@@ -88,9 +97,10 @@ export class TaskQueue {
     return before - this.items.length;
   }
 
-  /** Drop everything. Used on project switch — queued tasks reference the
-   *  prior PROJECT_CWD via the global the runner reads at dispatch time,
-   *  so executing them after a swap would run under the wrong project. */
+  /** Drop everything. Used on project switch — queued tasks were created
+   *  for the prior project (see `QueuedTask.projectCwd`), so they must not
+   *  execute after the swap. The runner's dispatch-time projectCwd check is
+   *  the backstop; clearing here gives the user immediate, visible feedback. */
   clear(): number {
     const n = this.items.length;
     this.items = [];

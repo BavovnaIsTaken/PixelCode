@@ -21,12 +21,18 @@ Map<String, dynamic> buildSendMessage(
   String content, {
   String agentId = 'manager',
   List<String>? images,
+  String? localId,
+  String? projectPath,
 }) {
   return {
     'type': 'send_message',
     'content': content,
     'agentId': agentId,
     if (images != null && images.isNotEmpty) 'images': images,
+    'localId': ?localId,
+    // Project the client believes is active — the server rejects the message
+    // with `project_mismatch` when it is running in a different one.
+    'projectPath': ?projectPath,
   };
 }
 

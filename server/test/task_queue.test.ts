@@ -22,6 +22,7 @@ function makeTask(
     userMessage: `task ${id}`,
     enqueuedAt: Date.now(),
     ws,
+    projectCwd: "/projects/demo",
   };
 }
 
@@ -286,6 +287,7 @@ test("snapshot includes id, type, priority, and agentId fields", () => {
     agentId: "coder#1",
     enqueuedAt: Date.now(),
     ws: mockWs,
+    projectCwd: "/projects/demo",
   };
   queue.enqueue(task);
 
@@ -338,6 +340,24 @@ test("critical inserted last still dequeues first", () => {
   queue.enqueue(makeTask("critical-1", "critical")); // inserted last
 
   assert.equal(queue.dequeue()?.id, "critical-1");
+});
+
+// ─── projectCwd stamping ─────────────────────────────────────────────────
+
+test("projectCwd survives the enqueue/dequeue round-trip", () => {
+  const queue = new TaskQueue();
+  queue.enqueue({
+    id: "t1",
+    priority: "normal",
+    type: "chat",
+    userMessage: "hi",
+    enqueuedAt: Date.now(),
+    ws: mockWs,
+    projectCwd: "/projects/worktree-a",
+  });
+
+  const dequeued = queue.dequeue();
+  assert.equal(dequeued?.projectCwd, "/projects/worktree-a");
 });
 
 // ─── clear (project-switch path) ───────────────────────────────────────────
