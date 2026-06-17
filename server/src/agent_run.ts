@@ -31,6 +31,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  writeFileSync,
 } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -154,10 +156,22 @@ export interface AgentRunStoreDeps {
   readAll?: (path: string) => string;
   exists?: (path: string) => boolean;
   ensureDir?: (dir: string) => void;
+  /** Atomic whole-file rewrite — used by load-time compaction. */
+  writeAll?: (path: string, content: string) => void;
   warn?: (msg: string) => void;
   /** Override the wall clock — tests pin to deterministic timestamps. */
   now?: () => Date;
+  /** Cap on runs kept in memory / on disk after compaction. */
+  maxRetainedRuns?: number;
 }
+
+/**
+ * Default retention cap. Every status transition appends a full snapshot
+ * row, so an uncompacted file grows ~10× faster than the run count; without
+ * a cap the boot replay is O(all transitions ever) and the in-memory map
+ * never shrinks. 500 runs is weeks of history for a single-user server.
+ */
+const DEFAULT_MAX_RETAINED_RUNS = 500;
 
 export class AgentRunStore {
   private readonly filePath: string;
@@ -165,8 +179,10 @@ export class AgentRunStore {
   private readonly readAll: (path: string) => string;
   private readonly exists: (path: string) => boolean;
   private readonly ensureDir: (dir: string) => void;
+  private readonly writeAll: (path: string, content: string) => void;
   private readonly warn: (msg: string) => void;
   private readonly now: () => Date;
+  private readonly maxRetainedRuns: number;
 
   /** runId → latest snapshot. Source of truth during a session. */
   private readonly inMem = new Map<string, AgentRun>();
@@ -184,8 +200,17 @@ export class AgentRunStore {
     this.exists = deps.exists ?? existsSync;
     this.ensureDir =
       deps.ensureDir ?? ((d) => mkdirSync(d, { recursive: true }));
+    this.writeAll =
+      deps.writeAll ??
+      ((p, content) => {
+        // Atomic tmp+rename so a crash mid-compaction keeps the old file.
+        const tmp = `${p}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        writeFileSync(tmp, content, "utf8");
+        renameSync(tmp, p);
+      });
     this.warn = deps.warn ?? ((msg) => console.warn(`[agent_run] ${msg}`));
     this.now = deps.now ?? (() => new Date());
+    this.maxRetainedRuns = deps.maxRetainedRuns ?? DEFAULT_MAX_RETAINED_RUNS;
   }
 
   /**
@@ -193,6 +218,11 @@ export class AgentRunStore {
    * only invoked once at server boot. Corrupt / wrong-shape lines are
    * skipped with a single aggregated warning so a stray partial write
    * doesn't break recovery.
+   *
+   * After replay the store is compacted: only the newest
+   * `maxRetainedRuns` runs are kept (memory AND disk), and the file is
+   * rewritten to one line per run when it carried redundant transition
+   * rows. Keeps boot replay O(runs), not O(every transition ever).
    */
   load(): void {
     if (!this.exists(this.filePath)) return;
@@ -204,9 +234,11 @@ export class AgentRunStore {
       return;
     }
     let skipped = 0;
+    let lineCount = 0;
     for (const line of raw.split("\n")) {
       const t = line.trim();
       if (!t) continue;
+      lineCount++;
       try {
         const parsed = JSON.parse(t) as unknown;
         if (isWellFormed(parsed)) {
@@ -220,6 +252,33 @@ export class AgentRunStore {
       }
     }
     if (skipped > 0) this.warn(`skipped ${skipped} corrupt line(s) on load`);
+
+    // Retention: evict the oldest runs beyond the cap.
+    if (this.order.length > this.maxRetainedRuns) {
+      const evicted = this.order.splice(0, this.order.length - this.maxRetainedRuns);
+      for (const id of evicted) this.inMem.delete(id);
+      this.warn(`evicted ${evicted.length} old run(s) beyond retention cap`);
+    }
+
+    // Compaction: rewrite only when the file carries more rows than the
+    // retained run count (redundant transitions, corrupt lines, or evicted
+    // runs). A clean already-compact file is left untouched.
+    if (lineCount > this.order.length) {
+      try {
+        const lines = this.order
+          .map((id) => this.inMem.get(id))
+          .filter((r): r is AgentRun => r !== undefined)
+          .map((r) => JSON.stringify(r));
+        this.ensureDir(dirname(this.filePath));
+        this.writeAll(
+          this.filePath,
+          lines.length > 0 ? lines.join("\n") + "\n" : "",
+        );
+      } catch (e) {
+        // Non-fatal: in-memory state is correct; the next boot retries.
+        this.warn(`compaction failed: ${(e as Error).message}`);
+      }
+    }
   }
 
   /**
