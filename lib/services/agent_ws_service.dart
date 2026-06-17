@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import '../models/agent_message.dart';
 import '../models/facilitator_style.dart';
 import '../utils/device_identity.dart';
+import 'agent_ws_messages.dart';
 import 'ws_outbox.dart';
 
 class AgentWsService {
@@ -76,6 +77,14 @@ class AgentWsService {
   /// already passed through the broadcast controller. Without this buffer
   /// the value stays `null` until a reconnect.
   InitMessage? lastInit;
+
+  /// Path of the project the user currently has selected, stamped onto every
+  /// `send_message` so the server can reject a message aimed at a project it
+  /// is not actually running in (e.g. after a server restart reset its
+  /// working directory while this client kept its saved selection).
+  /// Maintained by [setProject] and `ProjectNotifier`; `null` until the
+  /// project state is first known (the server then skips the check).
+  String? projectPath;
 
   Stream<ServerMessage> get messages => _messageController.stream;
 
@@ -264,13 +273,13 @@ class AgentWsService {
     List<String>? images,
     String? localId,
   }) {
-    _send({
-      'type': 'send_message',
-      'content': content,
-      'agentId': agentId,
-      if (images != null && images.isNotEmpty) 'images': images,
-      'localId': ?localId,
-    });
+    _send(buildSendMessage(
+      content,
+      agentId: agentId,
+      images: images,
+      localId: localId,
+      projectPath: projectPath,
+    ));
   }
 
   void newChat() {
@@ -412,6 +421,9 @@ class AgentWsService {
   // ─── Project management ───────────────────────────────────────────────────
 
   void setProject(String path) {
+    // Record the selection first so any message sent after the switch is
+    // stamped with the new project, even before the server confirms it.
+    projectPath = path;
     _send({'type': 'set_project', 'path': path});
   }
 

@@ -8,7 +8,7 @@
  * support is ever needed, key this by sessionId.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "fs";
 import { dirname } from "path";
 import { randomUUID } from "node:crypto";
 import type { ServerMessage } from "./protocol.js";
@@ -70,13 +70,19 @@ export class ChatHistory {
     return this._messages.length === 0;
   }
 
-  /** Persist current history to disk. No-op on failure (non-critical). */
+  /** Persist current history to disk. Logged no-op on failure (non-critical). */
   save(filePath: string): void {
     try {
       mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, JSON.stringify(this._messages), "utf8");
-    } catch {
+      // Atomic: write to a sibling .tmp then rename (same pattern as
+      // board_persistence). A crash mid-write leaves the previous file
+      // intact instead of truncated JSON that load() silently discards.
+      const tmp = `${filePath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeFileSync(tmp, JSON.stringify(this._messages), "utf8");
+      renameSync(tmp, filePath);
+    } catch (e) {
       // Non-critical — history will still work in-memory
+      console.warn(`[chat_history] save failed: ${(e as Error).message}`);
     }
   }
 

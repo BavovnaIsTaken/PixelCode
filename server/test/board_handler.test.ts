@@ -62,6 +62,7 @@ function makeHarness(opts: { now?: () => Date } = {}): Harness {
     processQueue: () => {
       processQueueCalls += 1;
     },
+    getProjectCwd: () => "/projects/demo",
     dbg: (level, _cat, msg) => logs.push({ level, msg }),
     now: opts.now,
   };
@@ -244,6 +245,7 @@ test("board_move_task → in_progress — enqueues manager dispatch", () => {
   assert.equal(queued.targetAgentId, "manager");
   assert.equal(queued.boardTaskId, id);
   assert.equal(queued.boardTaskTitle, "Wire login form");
+  assert.equal(queued.projectCwd, "/projects/demo");
   assert.match(queued.userMessage!, /No specific agents assigned/);
   assert.equal(h.queueStatusCalls, 1);
   assert.equal(h.processQueueCalls, 1);

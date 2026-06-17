@@ -16,19 +16,76 @@ import 'settings_provider.dart';
 // ─── Current project ────────────────────────────────────────────────────────
 
 class ProjectNotifier extends Notifier<Project?> {
+  StreamSubscription<ServerMessage>? _sub;
+
   @override
   Project? build() {
+    final ws = ref.watch(wsServiceProvider);
+    _sub?.cancel();
+    _sub = ws.messages.listen(_onServerMessage);
+    ref.onDispose(() => _sub?.cancel());
+
     final prefs = ref.read(sharedPrefsProvider);
     final path = ProjectPersistenceService.loadCurrentProjectPath(prefs);
+    Project restored;
     if (path == null) {
       // First launch — use the current working directory
-      final cwd = Directory.current.path;
-      return Project.fromPath(cwd);
+      restored = Project.fromPath(Directory.current.path);
+    } else {
+      // Restore saved project (find custom name from recent list)
+      final recent = ProjectPersistenceService.loadRecentProjects(prefs);
+      restored =
+          recent.where((p) => p.path == path).firstOrNull ?? Project.fromPath(path);
     }
-    // Restore saved project (find custom name from recent list)
+
+    // Stamp outgoing chat messages with the restored selection so the server
+    // can reject them if it is actually running in a different project.
+    ws.projectPath = restored.path;
+
+    // The server is the source of truth for the active project. If an init
+    // already arrived (buffered) and disagrees with the restored selection —
+    // e.g. the server restarted into its config default, or another device
+    // switched projects — follow the server instead of silently diverging.
+    final serverDir = ws.lastInit?.workingDirectory;
+    if (serverDir != null && serverDir != restored.path) {
+      Future.microtask(() => _followServer(serverDir));
+    }
+
+    return restored;
+  }
+
+  void _onServerMessage(ServerMessage msg) {
+    if (msg is InitMessage && msg.workingDirectory != null) {
+      _followServer(msg.workingDirectory!);
+    }
+  }
+
+  /// Adopt the server's active project when it differs from the local
+  /// selection. Updates UI state + persistence and re-stamps the ws service,
+  /// but deliberately does NOT send `set_project` back — auto-asserting the
+  /// local selection would make two devices with different saved projects
+  /// fight over the global, cancelling each other's in-flight agents.
+  void _followServer(String serverPath) {
+    final current = state;
+    if (current != null && current.path == serverPath) return;
+
+    final prefs = ref.read(sharedPrefsProvider);
     final recent = ProjectPersistenceService.loadRecentProjects(prefs);
-    final saved = recent.where((p) => p.path == path).firstOrNull;
-    return saved ?? Project.fromPath(path);
+    final project = recent.where((p) => p.path == serverPath).firstOrNull ??
+        Project.fromPath(serverPath);
+
+    state = project;
+    ref.read(wsServiceProvider).projectPath = serverPath;
+    unawaited(ProjectPersistenceService.addToRecent(prefs, project));
+    unawaited(
+        ProjectPersistenceService.saveCurrentProjectPath(prefs, serverPath));
+    ref.read(debugLogProvider.notifier).addLocal(
+          'project',
+          'Активний проєкт синхронізовано з сервером: $serverPath'
+          '${current != null ? ' (було: ${current.path})' : ''}',
+          level: 'warn',
+        );
+    ref.invalidate(recentProjectsProvider);
   }
 
   /// Switch to a different project. Generates a summary for the current one,

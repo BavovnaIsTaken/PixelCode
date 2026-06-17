@@ -122,6 +122,7 @@ sealed class ServerMessage {
       'comm_graph' => CommGraphMessage.fromJson(json),
       'debug_log' => DebugLogMessage.fromJson(json),
       'error' => ErrorMessage.fromJson(json),
+      'project_mismatch' => ProjectMismatchMessage.fromJson(json),
       'board_state' => BoardStateMessage.fromJson(json),
       'board_state_unchanged' => BoardStateUnchangedMessage.fromJson(json),
       'board_seed_batch_result' => BoardSeedBatchResultMessage.fromJson(json),
@@ -173,6 +174,21 @@ class InitMessage implements ServerMessage {
             .map((a) => AgentInfo.fromJson(a as Map<String, dynamic>))
             .toList(),
         workingDirectory: json['workingDirectory'] as String?,
+      );
+}
+
+/// The server refused to run a message/task because it referenced a project
+/// other than the server's active one (`requested` vs `active`). The work was
+/// NOT executed — the client should resync its project selection and let the
+/// user re-send or switch.
+class ProjectMismatchMessage implements ServerMessage {
+  final String requested;
+  final String active;
+  ProjectMismatchMessage({required this.requested, required this.active});
+  factory ProjectMismatchMessage.fromJson(Map<String, dynamic> json) =>
+      ProjectMismatchMessage(
+        requested: json['requested'] as String,
+        active: json['active'] as String,
       );
 }
 

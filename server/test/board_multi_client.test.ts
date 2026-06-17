@@ -68,6 +68,7 @@ function makeWorld(numClients: number): { world: World; sockets: FakeSocket[] } 
     taskQueue,
     sendQueueStatus: () => {},
     processQueue: () => {},
+    getProjectCwd: () => "/projects/demo",
     dbg: () => {},
   };
 

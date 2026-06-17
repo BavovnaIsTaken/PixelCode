@@ -44,6 +44,25 @@ void main() {
       expect(m.containsKey('images'), isFalse);
     });
 
+    test('buildSendMessage — localId and projectPath are included when set', () {
+      expect(
+        buildSendMessage('hi', localId: 'abc123', projectPath: '/projects/demo'),
+        {
+          'type': 'send_message',
+          'content': 'hi',
+          'agentId': 'manager',
+          'localId': 'abc123',
+          'projectPath': '/projects/demo',
+        },
+      );
+    });
+
+    test('buildSendMessage — null localId and projectPath are omitted', () {
+      final m = buildSendMessage('hi');
+      expect(m.containsKey('localId'), isFalse);
+      expect(m.containsKey('projectPath'), isFalse);
+    });
+
     test('singletons (newChat / clearSessions / interrupt / getStatus)', () {
       expect(buildNewChat(), {'type': 'new_chat'});
       expect(buildClearSessions(), {'type': 'clear_sessions'});

@@ -23,6 +23,15 @@ export type ClientMessage =
       localId?: string; // client-generated UUID, echoed in chat_history snapshot so client can match optimistic→canonical
       taskDifficulty?: number; // 1-5, optional; if set, server checks agent skill level
       forceSend?: boolean; // bypass skill-gate check
+      /**
+       * Absolute path of the project the client believes is active. When set
+       * and it differs from the server's active project, the server rejects
+       * the message with `project_mismatch` instead of running the task in
+       * the wrong tree (e.g. after a server restart reset PROJECT_CWD while
+       * the client UI kept its previously selected project). Optional for
+       * backward compatibility — legacy clients omit it and skip the check.
+       */
+      projectPath?: string;
     }
   | { type: "new_chat" }
   | { type: "resume_session"; sessionId: string }
@@ -509,6 +518,19 @@ export type ServerMessage =
   | {
       type: "error";
       message: string;
+    }
+  /**
+   * A client message (or queued task) referenced a project that is not the
+   * server's active one — the work was NOT executed. `requested` is what the
+   * client asked for, `active` is what the server is running in (both
+   * normalized absolute paths). On receipt the client should resync its
+   * project selection (the accompanying `init` broadcasts carry the
+   * authoritative `workingDirectory`) and let the user re-send or switch.
+   */
+  | {
+      type: "project_mismatch";
+      requested: string;
+      active: string;
     }
   // Task board
   | {
