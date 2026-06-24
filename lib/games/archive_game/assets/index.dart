@@ -35,12 +35,17 @@
 /// - [AudioPresets] — попередньо задані параметри
 /// - Extensions: `.archiveQuick()`, `.extractQuick()`, `.successQuick()`
 
+import 'package:flutter/material.dart';
+
 export 'file_icons.dart';
 export 'folder_archive.dart';
 export 'buttons.dart';
 export 'level_backgrounds.dart';
 export 'archive_animations.dart';
 export 'audio_effects.dart';
+
+// Re-export Color для зручності
+export 'package:flutter/material.dart' show Color;
 
 // Колорова палітра гри
 class ArchiveGameColors {
@@ -57,13 +62,7 @@ class ArchiveGameColors {
   static const Color darkText = Color(0xFF212121);
   static const Color lightBackground = Color(0xFFFAFAFA);
   static const Color borderColor = Color(0xFF757575);
-
-  // Фікс для ColorImport
-  static const Color _placeholder = Color(0xFFFFFFFF);
 }
-
-// Re-export Color для зручності
-export 'package:flutter/material.dart' show Color;
 
 // Константи для анімацій
 class ArchiveGameAnimations {

@@ -202,7 +202,7 @@ class AnimatedArchiveBoxPainter extends CustomPainter {
     // Молнія (ZIP) на коробці
     paint.color = Colors.yellow;
     final zipX = 24 + (openProgress * 3);
-    final zipStartY = 26;
+    final zipStartY = 26.0;
     for (int i = 0; i < 3; i++) {
       final y = zipStartY + (i * 8);
       canvas.drawLine(

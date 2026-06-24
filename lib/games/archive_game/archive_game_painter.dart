@@ -102,8 +102,8 @@ class ArchiveGamePainter extends CustomPainter {
     );
 
     // Top label
-    const labelPaint = TextPainter(
-      text: TextSpan(
+    final labelPaint = TextPainter(
+      text: const TextSpan(
         text: '📦 Archive Box',
         style: TextStyle(
           color: Colors.amber,

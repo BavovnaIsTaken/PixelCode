@@ -314,7 +314,7 @@ class _LevelCardState extends State<LevelCard>
       children: [
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 10,
             color: Colors.grey[700],
           ),
