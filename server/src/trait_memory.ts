@@ -17,7 +17,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { accountDir } from "./account_paths.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -96,18 +96,23 @@ export interface CandidateStore {
 }
 
 // ─── Storage paths ─────────────────────────────────────────────────────────
+//
+// Lessons follow the AGENT, so the trait store is scoped to the ACCOUNT, not
+// the project — the same team carries its learning across every project it
+// works on. The leading argument below used to be a project path; it is now an
+// account id. Resolution is shared with the rest of the account storage via
+// `accountDir`, so a one-time migration can seed it from legacy per-project data.
 
-function traitsDir(projectPath: string): string {
-  const key = projectPath.replace(/\//g, "-").replace(/^-/, "");
-  return join(homedir(), ".pixelcode", "projects", key);
+function traitsDir(accountId: string): string {
+  return accountDir(accountId);
 }
 
-function traitsFile(projectPath: string): string {
-  return join(traitsDir(projectPath), "traits.json");
+function traitsFile(accountId: string): string {
+  return join(traitsDir(accountId), "traits.json");
 }
 
-function candidatesFile(projectPath: string): string {
-  return join(traitsDir(projectPath), "trait_candidates.json");
+function candidatesFile(accountId: string): string {
+  return join(traitsDir(accountId), "trait_candidates.json");
 }
 
 // ─── Decay parameters ─────────────────────────────────────────────────────
@@ -210,8 +215,8 @@ export function pruneDecayedLessons(store: TraitStore, now: Date = new Date()): 
 
 // ─── Load / Save ───────────────────────────────────────────────────────────
 
-export function loadTraits(projectPath: string): TraitStore {
-  const file = traitsFile(projectPath);
+export function loadTraits(accountId: string): TraitStore {
+  const file = traitsFile(accountId);
   if (!existsSync(file)) {
     return { version: 1, agents: {} };
   }
@@ -244,13 +249,13 @@ export function loadTraits(projectPath: string): TraitStore {
   }
 }
 
-export function saveTraits(projectPath: string, store: TraitStore): void {
-  const dir = traitsDir(projectPath);
+export function saveTraits(accountId: string, store: TraitStore): void {
+  const dir = traitsDir(accountId);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   pruneDecayedLessons(store);
-  writeFileSync(traitsFile(projectPath), JSON.stringify(store, null, 2));
+  writeFileSync(traitsFile(accountId), JSON.stringify(store, null, 2));
 }
 
 // ─── Lesson CRUD ───────────────────────────────────────────────────────────
@@ -282,7 +287,7 @@ export function getLessonsForAgent(
  * candidate gate must pass an explicit source to opt into proper namespacing.
  */
 export function recordLesson(
-  projectPath: string,
+  accountId: string,
   store: TraitStore,
   input: {
     agentId: string;
@@ -315,7 +320,7 @@ export function recordLesson(
     }
     // Allow type migration if pattern changes (e.g. weakness becomes strength)
     existing.type = type;
-    saveTraits(projectPath, store);
+    saveTraits(accountId, store);
     return existing;
   }
 
@@ -343,13 +348,13 @@ export function recordLesson(
     lessons.length = MAX_LESSONS_PER_AGENT;
   }
 
-  saveTraits(projectPath, store);
+  saveTraits(accountId, store);
   return newLesson;
 }
 
 /** Remove a specific lesson by id. */
 export function removeLesson(
-  projectPath: string,
+  accountId: string,
   store: TraitStore,
   lessonId: string,
 ): boolean {
@@ -358,7 +363,7 @@ export function removeLesson(
     const idx = lessons.findIndex((l) => l.id === lessonId);
     if (idx >= 0) {
       lessons.splice(idx, 1);
-      saveTraits(projectPath, store);
+      saveTraits(accountId, store);
       return true;
     }
   }
@@ -434,14 +439,14 @@ export function isConsentEnabled(store: TraitStore, agentId: string): boolean {
 }
 
 export function setConsent(
-  projectPath: string,
+  accountId: string,
   store: TraitStore,
   agentId: string,
   enabled: boolean,
 ): void {
   if (!store.consent) store.consent = {};
   store.consent[agentId] = enabled;
-  saveTraits(projectPath, store);
+  saveTraits(accountId, store);
 }
 
 export function getAllConsent(store: TraitStore): Record<string, boolean> {
@@ -450,8 +455,8 @@ export function getAllConsent(store: TraitStore): Record<string, boolean> {
 
 // ─── Candidate pool (LLM reflection gate) ──────────────────────────────────
 
-export function loadCandidates(projectPath: string): CandidateStore {
-  const file = candidatesFile(projectPath);
+export function loadCandidates(accountId: string): CandidateStore {
+  const file = candidatesFile(accountId);
   if (!existsSync(file)) {
     return { version: 1, candidates: {} };
   }
@@ -470,13 +475,13 @@ export function loadCandidates(projectPath: string): CandidateStore {
   }
 }
 
-export function saveCandidates(projectPath: string, store: CandidateStore): void {
-  const dir = traitsDir(projectPath);
+export function saveCandidates(accountId: string, store: CandidateStore): void {
+  const dir = traitsDir(accountId);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   pruneStaleCandidates(store);
-  writeFileSync(candidatesFile(projectPath), JSON.stringify(store, null, 2));
+  writeFileSync(candidatesFile(accountId), JSON.stringify(store, null, 2));
 }
 
 /**
@@ -540,7 +545,7 @@ export type CandidateOutcome =
  *   if every call passes a unique id, the gate cannot accumulate.
  */
 export function recordLessonCandidate(
-  projectPath: string,
+  accountId: string,
   store: TraitStore,
   candidates: CandidateStore,
   input: {
@@ -570,7 +575,7 @@ export function recordLessonCandidate(
     (l) => l.tag === tag && (l.source ?? "unknown") === "llm",
   );
   if (existingReal) {
-    const lessonRecord = recordLesson(projectPath, store, { ...input, source });
+    const lessonRecord = recordLesson(accountId, store, { ...input, source });
     return { status: "promoted", lesson: lessonRecord, via: "real-trait-bypass" };
   }
 
@@ -585,7 +590,7 @@ export function recordLessonCandidate(
       // Same session re-extracted the same pattern — do not inflate.
       existing.lastSeen = nowIso;
       if (lesson.length > existing.lesson.length) existing.lesson = lesson;
-      saveCandidates(projectPath, candidates);
+      saveCandidates(accountId, candidates);
       return { status: "duplicate", candidate: existing };
     }
 
@@ -596,7 +601,7 @@ export function recordLessonCandidate(
     if (gapMs < MIN_PROMOTION_GAP_MS) {
       existing.lastSeen = nowIso;
       if (lesson.length > existing.lesson.length) existing.lesson = lesson;
-      saveCandidates(projectPath, candidates);
+      saveCandidates(accountId, candidates);
       return { status: "too-soon", candidate: existing, gapMs };
     }
 
@@ -613,8 +618,8 @@ export function recordLessonCandidate(
       const idx = bucket.indexOf(existing);
       bucket.splice(idx, 1);
       if (bucket.length === 0) delete candidates.candidates[agentId];
-      saveCandidates(projectPath, candidates);
-      const lessonRecord = recordLesson(projectPath, store, {
+      saveCandidates(accountId, candidates);
+      const lessonRecord = recordLesson(accountId, store, {
         agentId,
         type,
         category,
@@ -624,7 +629,7 @@ export function recordLessonCandidate(
       });
       return { status: "promoted", lesson: lessonRecord, via: "threshold" };
     }
-    saveCandidates(projectPath, candidates);
+    saveCandidates(accountId, candidates);
     return { status: "pending", candidate: existing };
   }
 
@@ -642,7 +647,7 @@ export function recordLessonCandidate(
     lastSeen: nowIso,
   };
   bucket.push(candidate);
-  saveCandidates(projectPath, candidates);
+  saveCandidates(accountId, candidates);
   return { status: "pending", candidate };
 }
 

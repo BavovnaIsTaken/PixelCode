@@ -220,11 +220,35 @@ void main() {
       expect(frame['fullState'], isNull);
       expect(frame.containsKey('stateUpdatedAt'), isTrue);
       expect(frame['stateUpdatedAt'], isNull);
+      expect(frame.containsKey('accountId'), isTrue);
+      expect(frame['accountId'], isNull);
       expect(frame.containsKey('deepseekApiKey'), isTrue);
       expect(frame['deepseekApiKey'], isNull);
       expect(frame.containsKey('kimiApiKey'), isTrue);
       expect(frame['kimiApiKey'], isNull);
       expect(h.types, ['set_game_state']);
+    });
+
+    test('setGameState forwards a provided accountId', () async {
+      final h = await _bootHarness();
+
+      h.svc.setGameState(instances: const {}, accountId: 'local');
+
+      final frame = await h.waitFor('set_game_state');
+      expect(frame['accountId'], 'local');
+    });
+  });
+
+  group('account senders', () {
+    test('setAccount routes to _send with the account id', () async {
+      final h = await _bootHarness();
+
+      h.svc.setAccount('local');
+
+      final frame = await h.waitFor('set_account');
+      expect(frame['type'], 'set_account');
+      expect(frame['accountId'], 'local');
+      expect(h.types, ['set_account']);
     });
   });
 

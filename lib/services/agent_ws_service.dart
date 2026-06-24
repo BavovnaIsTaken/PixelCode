@@ -427,6 +427,13 @@ class AgentWsService {
     _send({'type': 'set_project', 'path': path});
   }
 
+  /// Declare which portable team (account) this client operates as. Sent on
+  /// every (re)connect by `AccountNotifier`; the server scopes the team to the
+  /// account, independent of the active project.
+  void setAccount(String accountId) {
+    _send({'type': 'set_account', 'accountId': accountId});
+  }
+
   void setProjectContext(String memories) {
     _send({'type': 'set_project_context', 'memories': memories});
   }
@@ -446,6 +453,7 @@ class AgentWsService {
     required Map<String, Map<String, dynamic>> instances,
     String? fullState,
     int? stateUpdatedAt,
+    String? accountId,
     String? deepseekApiKey,
     String? kimiApiKey,
   }) {
@@ -454,6 +462,7 @@ class AgentWsService {
       'instances': instances,
       'fullState': fullState,
       'stateUpdatedAt': stateUpdatedAt,
+      'accountId': accountId,
       'deepseekApiKey': deepseekApiKey,
       'kimiApiKey': kimiApiKey,
     });

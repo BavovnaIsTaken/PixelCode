@@ -38,6 +38,16 @@
 
 **Поза scope (v2+ у спеку):** rarity-roll при наймі, P2P marketplace, LLM-procgen recruitment pool, mentoring/paid courses. Task-execution **time**-формула (`difficulty×12s × speed_modifier`) зі спека не лягає на поточну модель (нема real-time виконання задач за таймером) — переоцінити перед імплементацією.
 
+## Account / портативна команда — залишок
+
+Команда тепер прив'язана до **акаунта**, а не до проєкту (роутинг сховища за `accountId`, default-константа `"local"`) — перемикання проєктів зберігає той самий загін. Реалізовано: серверне account-scoped сховище game_state + traits ([server/src/account_paths.ts](../server/src/account_paths.ts), [server/src/account_migration.ts](../server/src/account_migration.ts)), `set_account` у протоколі, клієнтський `AccountProfile` ([lib/models/account_profile.dart](../lib/models/account_profile.dart) / [lib/providers/account_provider.dart](../lib/providers/account_provider.dart)). Нижче — свідомо відкладене.
+
+1. **Справжній крос-машинний sync.** Зараз «та сама команда на іншому компі» працює лише при підключенні до *того самого* сервера (localhost/Tailscale). Коли на кожній машині свій сервер — команда не переноситься (сховище `~/.pixelcode/accounts/{id}/` локальне для машини). Потрібно: портативне/хмарне сховище акаунта **або** export/import теки акаунта (узагальнити [lib/services/agent_export_service.dart](../lib/services/agent_export_service.dart) з per-agent до per-account). Це фундамент під «взяти команду на чужий проєкт і піти з нею».
+
+2. **Злиття traits з усіх legacy-проєктів при міграції.** Зараз [server/src/account_migration.ts](../server/src/account_migration.ts) бере game_state + traits лише з НАЙНОВІШОГО проєкту. Уроки з інших проєктів, де працювала команда, не зливаються (ризик дублів — тому відкладено). Потрібен dedup-merge по `(agentId, tag, source)`.
+
+3. **Справжній мультиакаунт.** Зараз один акаунт із константним id `"local"` (щоб не розщепити команду між пристроями — випадковий per-device id зламав би крос-девайс sync). Для кількох акаунтів: унікальні id, UI вибору/створення акаунта, і **сервер-авторитетне узгодження** (зараз `currentAccountId` — один глобал на single-tenant сервері; треба per-connection lookup у [server/src/server.ts](../server/src/server.ts)).
+
 ---
 
 Для детальних планів розвитку див. **ROADMAP.md**.

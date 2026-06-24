@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   recordLesson,
@@ -30,6 +30,7 @@ import {
   type AgentLesson,
   type LessonSource,
 } from "../src/trait_memory.ts";
+import { accountDir } from "../src/account_paths.ts";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -184,12 +185,7 @@ test("loadTraits then save converges disk to pruned state", () => {
     const now = new Date();
     const past = new Date(now.getTime() - 5 * DECAY_PERIOD_MS).toISOString();
 
-    const dir = join(
-      homedir(),
-      ".pixelcode",
-      "projects",
-      projectPath.replace(/\//g, "-").replace(/^-/, ""),
-    );
+    const dir = accountDir(projectPath);
     mkdirSync(dir, { recursive: true });
     writeFileSync(
       join(dir, "traits.json"),
@@ -606,13 +602,10 @@ test("recordLesson: same tag, same source increments freq (sanity)", () => {
 });
 
 test("loadTraits: backfills missing source field as 'unknown' on legacy data", () => {
-  const projectPath = mkdtempSync(join(tmpdir(), "legacy-source-test-"));
-  const dir = join(
-    homedir(),
-    ".pixelcode",
-    "projects",
-    projectPath.replace(/\//g, "-").replace(/^-/, ""),
-  );
+  // Traits are account-scoped now; write the legacy file where loadTraits will
+  // actually look (under accounts/, resolved by the shared account_paths helper).
+  const accountId = mkdtempSync(join(tmpdir(), "legacy-source-test-"));
+  const dir = accountDir(accountId);
   try {
     mkdirSync(dir, { recursive: true });
     // Write legacy schema — no `source` field.
@@ -636,11 +629,11 @@ test("loadTraits: backfills missing source field as 'unknown' on legacy data", (
       },
     };
     writeFileSync(join(dir, "traits.json"), JSON.stringify(legacyContent));
-    const store = loadTraits(projectPath);
+    const store = loadTraits(accountId);
     assert.equal(store.agents["coder#1"][0].source, "unknown");
   } finally {
     rmSync(dir, { recursive: true, force: true });
-    rmSync(projectPath, { recursive: true, force: true });
+    rmSync(accountId, { recursive: true, force: true });
   }
 });
 
@@ -901,12 +894,7 @@ test("pruneStaleCandidates: keeps multi-session candidates at-or-above their typ
 
 test("loadCandidates: prunes stale entries on disk read", () => {
   const projectPath = mkdtempSync(join(tmpdir(), "candidates-test-"));
-  const dir = join(
-    homedir(),
-    ".pixelcode",
-    "projects",
-    projectPath.replace(/\//g, "-").replace(/^-/, ""),
-  );
+  const dir = accountDir(projectPath);
   try {
     mkdirSync(dir, { recursive: true });
     const longAgo = new Date(Date.now() - CANDIDATE_TTL_MS - 1000).toISOString();

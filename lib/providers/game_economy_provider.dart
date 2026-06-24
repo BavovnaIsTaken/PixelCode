@@ -18,6 +18,7 @@ import '../widgets/personalization/custom_agent_spawn_form.dart';
 import '../services/game_persistence_service.dart';
 import '../services/task_outcome.dart';
 import 'ws_provider.dart';
+import 'account_provider.dart';
 import 'deepseek_auth_provider.dart';
 import 'kimi_auth_provider.dart';
 import 'energy_provider.dart';
@@ -43,6 +44,10 @@ class GameEconomyNotifier extends Notifier<GameState> {
 
     // Listen for task completions to award grymni
     final ws = ref.watch(wsServiceProvider);
+    // Bind this team to its account and keep the account identity alive for the
+    // session — it declares our account to the server on connect. The id is
+    // stable ("local"), so this watch never triggers a spurious reload.
+    ref.watch(accountIdProvider);
     _sub?.cancel();
     _sub = ws.messages.listen(_onMessage);
 
@@ -133,6 +138,7 @@ class GameEconomyNotifier extends Notifier<GameState> {
             instances: instances,
             fullState: gs.encode(),
             stateUpdatedAt: gs.updatedAt,
+            accountId: ref.read(accountIdProvider),
             deepseekApiKey: deepseekKey,
             kimiApiKey: kimiKey,
           );
