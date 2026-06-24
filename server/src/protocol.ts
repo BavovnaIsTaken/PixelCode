@@ -107,6 +107,11 @@ export type ClientMessage =
   | { type: "set_project"; path: string }
   | { type: "set_project_context"; memories: string }
   | { type: "generate_summary" }
+  // Account scope — which portable team this client is operating as. The team
+  // (roster, economy, traits) is stored per-account, independent of the active
+  // project. Absent / unknown id falls back to the default "local" account.
+  // Multi-account is not built yet; today every device sends the same constant.
+  | { type: "set_account"; accountId: string }
   // Game economy
   | {
       type: "set_game_state";
@@ -139,6 +144,7 @@ export type ClientMessage =
       >;
       fullState?: string; // JSON-encoded full GameState for cross-device sync
       stateUpdatedAt?: number; // epoch ms — last-write-wins guard, server rejects older
+      accountId?: string; // account this team belongs to; routes account-scoped persistence (default "local")
       deepseekApiKey?: string; // forwarded from client SharedPreferences, used by DeepSeek backend
       kimiApiKey?: string; // forwarded from client SharedPreferences, used by Kimi backend
     }

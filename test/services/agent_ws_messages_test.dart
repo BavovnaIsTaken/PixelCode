@@ -190,6 +190,11 @@ void main() {
           {'type': 'set_project', 'path': '/work/repo'});
     });
 
+    test('buildSetAccount', () {
+      expect(buildSetAccount('local'),
+          {'type': 'set_account', 'accountId': 'local'});
+    });
+
     test('buildSetProjectContext', () {
       expect(buildSetProjectContext('memories blob'),
           {'type': 'set_project_context', 'memories': 'memories blob'});
@@ -210,6 +215,7 @@ void main() {
       for (final k in [
         'fullState',
         'stateUpdatedAt',
+        'accountId',
         'deepseekApiKey',
         'kimiApiKey',
       ]) {
@@ -225,12 +231,14 @@ void main() {
         },
         fullState: '{}',
         stateUpdatedAt: 12345,
+        accountId: 'local',
         deepseekApiKey: 'sk-ds',
         kimiApiKey: 'sk-km',
       );
       expect(m['instances']['coder#1']['roleType'], 'coder');
       expect(m['fullState'], '{}');
       expect(m['stateUpdatedAt'], 12345);
+      expect(m['accountId'], 'local');
       expect(m['deepseekApiKey'], 'sk-ds');
       expect(m['kimiApiKey'], 'sk-km');
     });

@@ -41,6 +41,8 @@ import { BoardWriter, isValidBoardColumn, loadBoard, planSeedBatch } from "./boa
 import { MAX_AGENT_LOAD, pickAssignee, shouldAutoDispatch } from "./auto_dispatcher.js";
 import { advanceOnDispatchSuccess, findOrphanActiveCards } from "./board_transitions.js";
 import { classifyPersistedGameState, firedInstanceIds, validateGameState } from "./roster_validation.js";
+import { DEFAULT_ACCOUNT_ID, accountKey, accountGameStateFile } from "./account_paths.js";
+import { migrateLegacyAccountData } from "./account_migration.js";
 import { LocalGeminiRunner } from "./local_gemini_runner.js";
 import { DeepSeekBackend } from "./deepseek_backend.js";
 import { KimiBackend } from "./kimi_backend.js";
@@ -139,6 +141,14 @@ const __cli = parseCliFlags(process.argv);
 const __configSource = loadConfig({ configPath: __cli.configPath, flags: __cli.flags });
 const PORT = __configSource.effective.port;
 let PROJECT_CWD = __configSource.effective.projectCwd;
+/**
+ * The account whose team this server is currently serving. Single-tenant for
+ * now: one global, defaulting to the constant "local" account so every device
+ * that connects resolves to the same team. The team (game_state + traits) is
+ * keyed by THIS, not by PROJECT_CWD — switching projects never changes the
+ * roster. Multi-account widens this into a per-connection / per-account lookup.
+ */
+let currentAccountId = DEFAULT_ACCOUNT_ID;
 const __bootedAtMs = Date.now();
 
 // ─── Debug logging ──────────────────────────────────────────────────────────
@@ -763,14 +773,17 @@ let latestStateUpdatedAt: number = 0;
 /** Latest facilitator output for cross-device sync. */
 let latestFacilitatorOutput: { styleId: string; finalScore: unknown; outputFormat: string; outputJson: string } | null = null;
 
-/** Path where the authoritative game state is persisted across server restarts. */
-function gameStateFile(projectPath: string): string {
-  const key = projectPath.replace(/\//g, "-").replace(/^-/, "");
-  return join(homedir(), ".pixelcode", "projects", key, "game_state.json");
+/**
+ * Path where the authoritative game state (roster + economy + office) is
+ * persisted. Keyed by ACCOUNT, not project — the team is the user's and travels
+ * with them across every project. See account_paths.ts.
+ */
+function gameStateFile(): string {
+  return accountGameStateFile(currentAccountId);
 }
 
 function loadPersistedGameState(): void {
-  const file = gameStateFile(PROJECT_CWD);
+  const file = gameStateFile();
   if (!existsSync(file)) return;
   let rawText: string;
   try {
@@ -809,7 +822,7 @@ function loadPersistedGameState(): void {
 
 function persistGameState(): void {
   if (!latestFullGameState) return;
-  const file = gameStateFile(PROJECT_CWD);
+  const file = gameStateFile();
   const dir = file.substring(0, file.lastIndexOf("/"));
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -822,6 +835,19 @@ function persistGameState(): void {
   }
 }
 
+// One-time: lift an existing per-project team into the default account so the
+// upgrade doesn't strand the user's roster. Idempotent — a no-op once the
+// account's game_state exists.
+const __accountMigration = migrateLegacyAccountData(currentAccountId);
+if (__accountMigration.migrated) {
+  dbg(
+    "info",
+    "account",
+    `Migrated team into account "${currentAccountId}" from legacy project ` +
+      `${__accountMigration.fromProjectKey} ` +
+      `(traits=${__accountMigration.traits.migrated}, candidates=${__accountMigration.candidates.migrated})`,
+  );
+}
 loadPersistedGameState();
 
 function facilitatorOutputFile(projectPath: string): string {
@@ -1111,8 +1137,30 @@ function agentInfoForClient(ws: WebSocket): HiredAgentInfo[] {
 
 // ─── Trait memory ──────────────────────────────────────────────────────────
 
-let traitStore: TraitStore = loadTraits(PROJECT_CWD);
-let candidateStore: CandidateStore = loadCandidates(PROJECT_CWD);
+let traitStore: TraitStore = loadTraits(currentAccountId);
+let candidateStore: CandidateStore = loadCandidates(currentAccountId);
+
+/**
+ * Switch the active account: reload its account-scoped stores (game state +
+ * traits) so subsequent reads / writes / last-write-wins compare against the
+ * right baseline. Returns true only if the account actually changed.
+ *
+ * Single-tenant for now — `currentAccountId` is one global, and today every
+ * device sends the same default account, so this is effectively inert. It is
+ * the seam multi-account widens into a per-connection lookup.
+ */
+function switchAccount(accountId: string): boolean {
+  const next = accountKey(accountId);
+  if (next === currentAccountId) return false;
+  currentAccountId = next;
+  latestFullGameState = null;
+  latestStateUpdatedAt = 0;
+  loadPersistedGameState();
+  traitStore = loadTraits(currentAccountId);
+  candidateStore = loadCandidates(currentAccountId);
+  dbg("info", "account", `Active account → "${currentAccountId}"`);
+  return true;
+}
 
 function sendTraits(ws: WebSocket): void {
   send(ws, { type: "agent_traits", traits: getAllTraits(traitStore) });
@@ -1140,7 +1188,7 @@ function autoLearnLesson(
 ): void {
   if (!isConsentEnabled(traitStore, agentId)) return;
 
-  const result = recordLesson(PROJECT_CWD, traitStore, {
+  const result = recordLesson(currentAccountId, traitStore, {
     agentId, type, category, tag, lesson, source: "hook",
   });
   dbg("info", "traits", `${type === "weakness" ? "⚡" : "✦"} [${agentId}] ${tag} (freq=${result.frequency}): ${lesson}`);
@@ -1421,7 +1469,7 @@ async function reflectOnQuery(
       }
 
       const outcome = recordLessonCandidate(
-        PROJECT_CWD,
+        currentAccountId,
         traitStore,
         candidateStore,
         {
@@ -4938,21 +4986,17 @@ wss.on("connection", (ws, request) => {
           } catch (err) {
             dbg("warn", "project", `Failed to persist projectCwd: ${err instanceof Error ? err.message : String(err)}`);
           }
-          // Reload trait memory and chat history for the new project
-          traitStore = loadTraits(PROJECT_CWD);
-          candidateStore = loadCandidates(PROJECT_CWD);
+          // Reload per-PROJECT memory (chat history) for the new project. The
+          // team itself — roster (game_state) and learned traits — is
+          // ACCOUNT-scoped and deliberately NOT touched here: switching projects
+          // must keep the exact same team, with its levels, skills and lessons
+          // intact. (Pre-account-scope this block reloaded the per-project
+          // roster/traits, which is precisely what stranded the team.)
           chatHistory.load(historyFilePath(PROJECT_CWD));
-          dbg("info", "traits", `Traits loaded for ${newPath}: ${getAllTraits(traitStore).length} lessons, ${getAllCandidates(candidateStore).length} candidates`);
           // Load shared SDK session for the new project (per-project file).
           loadPersistedSession();
-          // Reload other per-project caches so peers don't read the OLD
-          // project's roster / facilitator output on the new project — and
-          // so the next persist doesn't clobber the new project's disk
-          // file with stale data from the previous one.
-          latestFullGameState = null;
-          latestStateUpdatedAt = 0;
+          // Facilitator output is per-project; reload only it.
           latestFacilitatorOutput = null;
-          loadPersistedGameState();
           loadPersistedFacilitatorOutput();
           // Cancel in-flight agents and drop queued tasks: they reference
           // the OLD PROJECT_CWD via the runner's read-at-dispatch-time
@@ -4987,7 +5031,8 @@ wss.on("connection", (ws, request) => {
             if (peer.readyState !== WebSocket.OPEN) continue;
             if (newMemory) clientProjectContext.set(peer, newMemory);
             else clientProjectContext.delete(peer);
-            clientGameState.delete(peer);
+            // clientGameState is ACCOUNT-scoped — do NOT clear it on a project
+            // switch. It is the same team operating in the new project.
             getCommLog(peer).length = 0;
             getMetrics(peer).clear();
             getActiveTasks(peer).clear();
@@ -5014,19 +5059,10 @@ wss.on("connection", (ws, request) => {
               workingDirectory: PROJECT_CWD,
             });
             sendTraits(peer);
-            // Push the new project's roster + facilitator output so peers
-            // don't keep the prior project's UI state until first reload.
-            if (latestFullGameState) {
-              send(peer, {
-                type: "game_state_sync",
-                fullState: latestFullGameState,
-                stateUpdatedAt: latestStateUpdatedAt,
-              } as any);
-              try {
-                const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
-                if (parsed.instances) clientGameState.set(peer, parsed as GameStateData);
-              } catch { /* malformed blob; let next set_game_state seed it */ }
-            }
+            // The roster is account-scoped and unchanged by a project switch,
+            // so we deliberately do NOT push game_state_sync here (that push is
+            // what used to overwrite the team with the new project's roster).
+            // Only the per-project facilitator output is refreshed.
             if (latestFacilitatorOutput) {
               send(peer, { type: "facilitator_output_sync", ...(latestFacilitatorOutput as object) } as any);
             }
@@ -5046,10 +5082,42 @@ wss.on("connection", (ws, request) => {
           break;
         }
 
+        // ─── Account scope ─────────────────────────────────────────────────
+
+        case "set_account": {
+          // Declares which portable team this client operates as. Inert today
+          // (every device sends the default account, so the connect handler has
+          // already synced the right team); the real work fires only once
+          // multi-account introduces distinct ids.
+          if (switchAccount(msg.accountId)) {
+            for (const peer of wss.clients) {
+              if (peer.readyState !== WebSocket.OPEN) continue;
+              if (latestFullGameState) {
+                send(peer, {
+                  type: "game_state_sync",
+                  fullState: latestFullGameState,
+                  stateUpdatedAt: latestStateUpdatedAt,
+                } as any);
+                try {
+                  const parsed = JSON.parse(latestFullGameState) as { instances?: Record<string, unknown> };
+                  if (parsed.instances) clientGameState.set(peer, parsed as GameStateData);
+                } catch { /* malformed blob; next set_game_state seeds it */ }
+              }
+              sendTraits(peer);
+            }
+          }
+          break;
+        }
+
         // ─── Game economy ──────────────────────────────────────────────────
 
         case "set_game_state": {
           const gs: GameStateData = { instances: msg.instances };
+
+          // Route this write to the account the client operates as, so the
+          // game-state file and last-write-wins baseline belong to the right
+          // team. No-op for the default account (today's only one).
+          if (msg.accountId) switchAccount(msg.accountId);
 
           // Stash any newly-arrived API keys before validating so an
           // instance whose key arrives in the same message is accepted.
@@ -5376,7 +5444,7 @@ wss.on("connection", (ws, request) => {
             send(ws, { type: "error", message: `Invalid lesson category: ${msg.category}` });
             break;
           }
-          const lesson = recordLesson(PROJECT_CWD, traitStore, {
+          const lesson = recordLesson(currentAccountId, traitStore, {
             agentId: msg.agentId,
             type: msg.lessonType as LessonType,
             category: msg.category as LessonCategory,
@@ -5390,7 +5458,7 @@ wss.on("connection", (ws, request) => {
         }
 
         case "remove_lesson": {
-          const removed = removeLesson(PROJECT_CWD, traitStore, msg.lessonId);
+          const removed = removeLesson(currentAccountId, traitStore, msg.lessonId);
           if (removed) {
             dbg("info", "traits", `Lesson removed: ${msg.lessonId}`);
             sendDebug(ws, "info", "traits", `Lesson removed: ${msg.lessonId}`);
@@ -5401,7 +5469,7 @@ wss.on("connection", (ws, request) => {
 
         case "set_consent": {
           const { agentId, enabled } = msg;
-          setConsent(PROJECT_CWD, traitStore, agentId, enabled);
+          setConsent(currentAccountId, traitStore, agentId, enabled);
           dbg("info", "traits", `Consent ${enabled ? "enabled" : "disabled"} for ${agentId}`);
           sendDebug(ws, "info", "traits", `Learning consent ${enabled ? "enabled" : "disabled"} for ${agentId}`);
           const consentMsg: ServerMessage = { type: "consent_state", consent: getAllConsent(traitStore) };

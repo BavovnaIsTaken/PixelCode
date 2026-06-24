@@ -133,6 +133,11 @@ Map<String, dynamic> buildBoardRemoveAttachment({
 Map<String, dynamic> buildSetProject(String path) =>
     {'type': 'set_project', 'path': path};
 
+/// Declare which portable team (account) this client operates as. Scopes the
+/// server's team storage independently of the active project.
+Map<String, dynamic> buildSetAccount(String accountId) =>
+    {'type': 'set_account', 'accountId': accountId};
+
 Map<String, dynamic> buildSetProjectContext(String memories) =>
     {'type': 'set_project_context', 'memories': memories};
 
@@ -144,6 +149,7 @@ Map<String, dynamic> buildSetGameState({
   required Map<String, Map<String, dynamic>> instances,
   String? fullState,
   int? stateUpdatedAt,
+  String? accountId,
   String? deepseekApiKey,
   String? kimiApiKey,
 }) {
@@ -152,6 +158,9 @@ Map<String, dynamic> buildSetGameState({
     'instances': instances,
     'fullState': fullState,
     'stateUpdatedAt': stateUpdatedAt,
+    // Account this team belongs to — routes account-scoped persistence on the
+    // server. Kept present (may be null) like the other nullable keys.
+    'accountId': accountId,
     'deepseekApiKey': deepseekApiKey,
     'kimiApiKey': kimiApiKey,
   };
