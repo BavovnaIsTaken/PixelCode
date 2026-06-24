@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// Анімація файлу, що входить у архів
@@ -361,12 +363,9 @@ class ExtractionFilePainter extends CustomPainter {
 
 // Допоміжний клас для математики
 class Math {
-  static double cos(double angle) => __dart.math.cos(angle);
-  static double sin(double angle) => __dart.math.sin(angle);
+  static double cos(double angle) => math.cos(angle);
+  static double sin(double angle) => math.sin(angle);
 }
-
-// Імпорт math
-import 'dart:math' as __dart;
 
 /// Анімація стрілок, що вказують на архів
 class ArrowToArchiveAnimation extends StatefulWidget {

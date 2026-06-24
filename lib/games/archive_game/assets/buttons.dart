@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// Піксельарт кнопка для гри
@@ -403,7 +405,7 @@ class FileSizeIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Логарифмічна шкала для візуалізації
-    final logSize = (sizeInKB.toDouble() + 1).log() / 10;
+    final logSize = math.log(sizeInKB.toDouble() + 1) / 10;
     final width = (logSize * maxWidth).clamp(20.0, maxWidth);
 
     return CustomPaint(

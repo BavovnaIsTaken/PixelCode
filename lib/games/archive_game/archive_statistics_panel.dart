@@ -207,7 +207,7 @@ class ArchiveStatisticsPanel extends StatelessWidget {
   Widget _buildFileRow(dynamic file) {
     final originalSize = file.originalSize as int;
     final compressed = file.getCompressedSize();
-    final saved = originalSize - compressed;
+    final saved = (originalSize - compressed).toInt();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -247,20 +247,20 @@ class ArchiveStatisticsPanel extends StatelessWidget {
             children: [
               Text(
                 _formatBytes(originalSize),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9,
                   color: Colors.grey[600],
                 ),
               ),
               const SizedBox(width: 4),
-              const Text(
+              Text(
                 '→',
                 style: TextStyle(fontSize: 9, color: Colors.grey[600]),
               ),
               const SizedBox(width: 4),
               Text(
                 _formatBytes(compressed),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 9,
                   color: Colors.grey[600],
                 ),

@@ -1,5 +1,5 @@
 import 'dart:io';
-import 'package:archive/archive_io.dart';
+import 'package:archive/archive_io.dart' as zip;
 import 'package:path_provider/path_provider.dart';
 import '../../models/archive_crush/archive_file.dart';
 import '../../models/archive_crush/archive_level.dart';
@@ -60,13 +60,13 @@ class ArchiveCompressionService {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final zipPath = '${tempDir.path}/archive_crush_level_${level.id}_$timestamp.zip';
 
-      final encoder = ZipEncoder();
-      final archive = Archive();
+      final encoder = zip.ZipEncoder();
+      final archive = zip.Archive();
 
       // Додає фіктивні файли до архіву (вони не існують реально, це просто для демонстрації)
       for (final file in files) {
         final content = List<int>.filled(file.getCompressedSize(), 0);
-        archive.addFile(ArchiveFile(file.name, content.length, content));
+        archive.addFile(zip.ArchiveFile(file.name, content.length, content));
       }
 
       final bytes = encoder.encode(archive);
@@ -100,7 +100,7 @@ class ArchiveCompressionService {
       }
 
       final bytes = await zipFile.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
+      final archive = zip.ZipDecoder().decodeBytes(bytes);
 
       final extractedFiles = <File>[];
       for (final file in archive) {
