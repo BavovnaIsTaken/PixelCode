@@ -54,6 +54,7 @@ class _FakeWsService extends AgentWsService {
     int? stateUpdatedAt,
     String? deepseekApiKey,
     String? kimiApiKey,
+    String? accountId,
   }) {
     calls.add({'op': 'setGameState'});
   }

@@ -26,9 +26,8 @@ void main() {
 
     // Non-whitelisted fields ARE reset — old agent instance is gone.
     expect(loaded.agents.containsKey('inst_a'), isFalse);
-    // Office is reset to defaults (garage, no expansions, no placed rooms).
+    // Office is reset to defaults (garage, no placed rooms).
     expect(loaded.officeLevel, OfficeLevel.garage);
-    expect(loaded.officeExpansions, equals(0));
     expect(loaded.placedRooms, isEmpty);
   });
 

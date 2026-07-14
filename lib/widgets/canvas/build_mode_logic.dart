@@ -16,63 +16,44 @@ import '../../models/game_economy.dart';
 /// Why a build-mode ghost can't be placed. Drives the red ghost tint and the
 /// Place-bar reason text.
 enum GhostInvalidReason {
-  /// Ghost lies in the left/top out-of-bounds halo (col<1 or row<1).
+  /// Ghost lies wholly or partly outside the tier's fixed lot (any edge).
   outOfBounds,
 
   /// Ghost overlaps an already-placed room.
   overlap,
 
-  /// Ghost overlaps a blocked tile (chair, foreman, decor) inside owned grid.
+  /// Ghost overlaps a blocked tile (chair, foreman, decor) inside the grid.
   blocked,
 
   /// Already placed the maximum number of this room type for the office.
   atCap,
 
-  /// Ghost extends past the tier's hard ceiling. Player must buy an office
-  /// tier upgrade (in the shop) to expand further.
-  tierCeiling,
-
-  /// Ghost extends past the visible foundation buffer window. Player must
-  /// move the ghost closer to the owned grid.
-  bufferOverrun,
-
-  /// Player doesn't have enough grymni to pay for the room (+ any expansion).
+  /// Player doesn't have enough grymni to pay for the room.
   insufficientGrymni,
 }
 
-/// Tri-state ghost validity used by build mode.
+/// Ghost validity used by build mode.
 ///
-/// - `valid` — fits inside the currently owned grid, no overlap, affordable.
-/// - `pendingExpand` — fits in the foundation buffer outside the owned grid;
-///   commit triggers a combined expand+place transaction. `plan` holds cost.
+/// - `valid` — fits inside the tier's fixed lot, no overlap, affordable.
 /// - `invalid` — `reason` holds the specific cause for the Place Bar.
+///
+/// Stage 4 (fixed-tier shells) removed the `pendingExpand` state: there is no
+/// foundation buffer or per-tile expansion anymore — the lot is a fixed size
+/// per tier, so a ghost either fits or it doesn't.
 class GhostStatus {
   final bool valid;
-  final bool pendingExpand;
-  final PendingExpansionPlan? plan;
   final GhostInvalidReason? reason;
 
   const GhostStatus.valid()
       : valid = true,
-        pendingExpand = false,
-        plan = null,
         reason = null;
 
-  const GhostStatus.invalid(this.reason)
-      : valid = false,
-        pendingExpand = false,
-        plan = null;
-
-  const GhostStatus.pendingExpand(this.plan)
-      : valid = true,
-        pendingExpand = true,
-        reason = null;
+  const GhostStatus.invalid(this.reason) : valid = false;
 }
 
 /// Immutable snapshot fed to [computeGhostStatus]. The caller resolves the
-/// rotation-aware footprint, the per-type cap, the cost the commit will charge
-/// (room cost or template bundle cost), and the expansion plan that would
-/// reach the ghost's needed size.
+/// rotation-aware footprint, the per-type cap, and the cost the commit will
+/// charge (room cost or template bundle cost).
 class BuildGhostInput {
   /// Footprint top-left tile.
   final int col;
@@ -82,7 +63,8 @@ class BuildGhostInput {
   final int width;
   final int height;
 
-  /// Current owned grid size, INCLUDING the 1-tile wall border on each side.
+  /// Fixed lot size for the current tier, INCLUDING the 1-tile wall border on
+  /// each side.
   final int gridCols;
   final int gridRows;
 
@@ -100,13 +82,6 @@ class BuildGhostInput {
   final int grymni;
   final int roomCost;
 
-  /// Foundation-buffer window past the right/bottom owned edges.
-  final int bufferCols;
-  final int bufferRows;
-
-  /// Plan to expand the office to contain this ghost's needed size.
-  final PendingExpansionPlan plan;
-
   const BuildGhostInput({
     required this.col,
     required this.row,
@@ -120,9 +95,6 @@ class BuildGhostInput {
     required this.maxPerOffice,
     required this.grymni,
     required this.roomCost,
-    required this.bufferCols,
-    required this.bufferRows,
-    required this.plan,
   });
 }
 
@@ -140,8 +112,12 @@ GhostStatus computeGhostStatus(BuildGhostInput i) {
     return const GhostStatus.invalid(GhostInvalidReason.atCap);
   }
 
-  // 2. Left/top bounds — the office only ever grows right and down.
-  if (gc < 1 || gr < 1) {
+  // 2. Bounds — the ghost must fit entirely inside the tier's fixed lot
+  //    (the playable area between the 1-tile walls on every side).
+  if (gc < 1 ||
+      gr < 1 ||
+      gc + gw > i.gridCols - 1 ||
+      gr + gh > i.gridRows - 1) {
     return const GhostStatus.invalid(GhostInvalidReason.outOfBounds);
   }
 
@@ -155,54 +131,20 @@ GhostStatus computeGhostStatus(BuildGhostInput i) {
   }
 
   // 4. Blocked-tile overlap (desks, seats, foreman, blocking furniture).
-  // Hoisted ABOVE the owned/buffer split: a room dragged into the buffer
-  // still occupies its near columns/rows inside the owned grid, and those
-  // could sit on a desk or a seated agent — so scan every footprint tile that
-  // falls inside the owned playable area regardless of which branch is taken.
-  // (blockedTiles never contains wall/buffer coords, so clamping is exact.)
   for (int dc = 0; dc < gw; dc++) {
     for (int dr = 0; dr < gh; dr++) {
-      final c = gc + dc;
-      final r = gr + dr;
-      if (c > i.gridCols - 2 || r > i.gridRows - 2) continue; // wall/buffer
-      if (i.blockedTiles.contains('$c,$r')) {
+      if (i.blockedTiles.contains('${gc + dc},${gr + dr}')) {
         return const GhostStatus.invalid(GhostInvalidReason.blocked);
       }
     }
   }
 
-  final fitsOwned = (gc + gw <= i.gridCols - 1) && (gr + gh <= i.gridRows - 1);
-
-  if (fitsOwned) {
-    // In-grid affordability — previously skipped, so an unaffordable room
-    // showed green and silently failed on commit.
-    if (i.grymni < i.roomCost) {
-      return const GhostStatus.invalid(GhostInvalidReason.insufficientGrymni);
-    }
-    return const GhostStatus.valid();
-  }
-
-  // 5. Ghost spills into the foundation buffer → needs an expansion purchase.
-  // The footprint must still ATTACH to the owned office: its near edge can
-  // reach the wall column/row at most, never start past it (otherwise the
-  // player could drop a room floating in bought-but-empty space).
-  if (gc > i.gridCols - 1 || gr > i.gridRows - 1) {
-    return const GhostStatus.invalid(GhostInvalidReason.bufferOverrun);
-  }
-  if (!i.plan.reachable) {
-    return const GhostStatus.invalid(GhostInvalidReason.tierCeiling);
-  }
-  // Far edge must stay within the painted/clickable buffer window. The buffer
-  // spans cols (gridCols-1)..(gridCols-1+bufferCols) inclusive, so the
-  // rightmost footprint tile gc+gw-1 must be <= gridCols-1+bufferCols.
-  if (gc + gw > i.gridCols - 1 + i.bufferCols ||
-      gr + gh > i.gridRows - 1 + i.bufferRows) {
-    return const GhostStatus.invalid(GhostInvalidReason.bufferOverrun);
-  }
-  if (i.grymni < i.plan.totalCost + i.roomCost) {
+  // 5. Affordability — must be gated here too, else an unaffordable room shows
+  //    green and silently fails on commit.
+  if (i.grymni < i.roomCost) {
     return const GhostStatus.invalid(GhostInvalidReason.insufficientGrymni);
   }
-  return GhostStatus.pendingExpand(i.plan);
+  return const GhostStatus.valid();
 }
 
 /// Footprint top-left so a [width]×[height] item is centred under the cursor
@@ -229,10 +171,6 @@ String ghostInvalidReasonLabel(GhostInvalidReason? reason) {
       return 'на меблях чи персоналі';
     case GhostInvalidReason.atCap:
       return 'ліміт таких кімнат';
-    case GhostInvalidReason.tierCeiling:
-      return 'потрібен апгрейд офісу';
-    case GhostInvalidReason.bufferOverrun:
-      return 'занадто далеко — підсуньте ближче';
     case GhostInvalidReason.insufficientGrymni:
       return 'не вистачає ₲';
   }

@@ -268,47 +268,16 @@ void main() {
     });
 
     test('false when player cannot afford the next tier', () {
-      // smallOffice costs 1000₲.
-      expect(canAffordNextOffice(OfficeLevel.garage, 999), isFalse);
+      // smallOffice costs 4000₲ (Stage 4 fixed-tier pricing).
+      expect(canAffordNextOffice(OfficeLevel.garage, 3999), isFalse);
     });
 
     test('true with exact funds for the next tier', () {
-      expect(canAffordNextOffice(OfficeLevel.garage, 1000), isTrue);
+      expect(canAffordNextOffice(OfficeLevel.garage, 4000), isTrue);
     });
 
     test('true with more than enough funds', () {
       expect(canAffordNextOffice(OfficeLevel.smallOffice, 50000), isTrue);
-    });
-  });
-
-  group('nextExpansionCost / canAffordNextExpansion', () {
-    test('returns null when all expansion steps are bought', () {
-      final maxed = OfficeLevel.garage.expansions.length;
-      expect(nextExpansionCost(OfficeLevel.garage, maxed), isNull);
-    });
-
-    test('returns the first step cost when none are bought', () {
-      expect(
-        nextExpansionCost(OfficeLevel.garage, 0),
-        OfficeLevel.garage.expansions.first.cost,
-      );
-    });
-
-    test('canAffordNextExpansion = false when none left', () {
-      final maxed = OfficeLevel.garage.expansions.length;
-      expect(
-        canAffordNextExpansion(OfficeLevel.garage, maxed, 999999),
-        isFalse,
-      );
-    });
-
-    test('canAffordNextExpansion respects affordability', () {
-      final firstCost = OfficeLevel.garage.expansions.first.cost;
-      expect(canAffordNextExpansion(OfficeLevel.garage, 0, firstCost - 1),
-          isFalse);
-      expect(canAffordNextExpansion(OfficeLevel.garage, 0, firstCost), isTrue);
-      expect(canAffordNextExpansion(OfficeLevel.garage, 0, firstCost + 1),
-          isTrue);
     });
   });
 
@@ -389,7 +358,6 @@ void main() {
         resolveOfficeCardCta(
           level: OfficeLevel.smallOffice,
           current: OfficeLevel.garage,
-          currentExpansions: 0,
         ),
         OfficeCardCta.upgrade,
       );
@@ -401,30 +369,16 @@ void main() {
         resolveOfficeCardCta(
           level: OfficeLevel.campus,
           current: OfficeLevel.techHub,
-          currentExpansions: 0,
         ),
         OfficeCardCta.none,
       );
     });
 
-    test('expansion CTA at current tier with steps left', () {
+    test('no CTA at the current tier (Stage 4: no expansion)', () {
       expect(
         resolveOfficeCardCta(
           level: OfficeLevel.garage,
           current: OfficeLevel.garage,
-          currentExpansions: 0,
-        ),
-        OfficeCardCta.expansion,
-      );
-    });
-
-    test('no CTA at current tier when all expansions are bought', () {
-      final maxed = OfficeLevel.garage.expansions.length;
-      expect(
-        resolveOfficeCardCta(
-          level: OfficeLevel.garage,
-          current: OfficeLevel.garage,
-          currentExpansions: maxed,
         ),
         OfficeCardCta.none,
       );
@@ -435,7 +389,6 @@ void main() {
         resolveOfficeCardCta(
           level: OfficeLevel.garage,
           current: OfficeLevel.modernOffice,
-          currentExpansions: 0,
         ),
         OfficeCardCta.ownedCheckmark,
       );
@@ -447,7 +400,6 @@ void main() {
         resolveOfficeCardCta(
           level: OfficeLevel.modernOffice,
           current: OfficeLevel.garage,
-          currentExpansions: 0,
         ),
         OfficeCardCta.none,
       );

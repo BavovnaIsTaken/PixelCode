@@ -97,13 +97,12 @@ class OfficeSimulationService {
 
   void rebuildLayout(
     OfficeLevel newLevel,
-    int newExpansions,
     List<PlacedRoom> newRooms, [
     List<FurniturePlacement> newFurniture = const [],
     List<PlacedCorridor> newCorridors = const [],
   ]) =>
       gameState.rebuildLayout(
-          newLevel, newExpansions, newRooms, newFurniture, newCorridors);
+          newLevel, newRooms, newFurniture, newCorridors);
 
   // ── Network-sync passthroughs (broadcast/receive lives in provider) ──
 

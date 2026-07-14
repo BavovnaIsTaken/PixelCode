@@ -55,39 +55,3 @@ UpgradeButtonState upgradeButtonStateFor({
 bool canUpgradeFromState({required OfficeLevel current, required int grymni}) =>
     upgradeButtonStateFor(current: current, grymni: grymni) ==
     UpgradeButtonState.upgradeAffordable;
-
-/// What the "+ ₲N" expansion chip on the current-tier card should look like.
-enum ExpansionButtonState {
-  /// Tier still has expansion steps left and the player can afford the next.
-  buyAffordable,
-
-  /// Next step exists but the player can't afford it — disabled chip.
-  buyUnaffordable,
-
-  /// Tier is fully expanded — no chip rendered.
-  fullyExpanded,
-}
-
-ExpansionButtonState expansionButtonStateFor({
-  required OfficeLevel current,
-  required int expansionsBought,
-  required int grymni,
-}) {
-  final steps = current.expansions;
-  if (expansionsBought >= steps.length) return ExpansionButtonState.fullyExpanded;
-  final cost = steps[expansionsBought].cost;
-  return grymni >= cost
-      ? ExpansionButtonState.buyAffordable
-      : ExpansionButtonState.buyUnaffordable;
-}
-
-/// Cost of the next expansion step at [current], or `null` if the tier is
-/// already maxed.
-int? nextExpansionCost({
-  required OfficeLevel current,
-  required int expansionsBought,
-}) {
-  final steps = current.expansions;
-  if (expansionsBought >= steps.length) return null;
-  return steps[expansionsBought].cost;
-}

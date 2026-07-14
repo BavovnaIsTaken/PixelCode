@@ -339,60 +339,22 @@ void main() {
     });
   });
 
-  group('PendingExpansionPlan', () {
-    test('zero extraSteps when ghost already fits in owned grid', () {
-      const level = OfficeLevel.smallOffice;
-      // smallOffice baseCols=9, baseRows=6. inner = 7×4. Plenty of room for 5×4.
-      final plan = level.computeExpansionPlan(0, 5, 4);
-      expect(plan.extraSteps, 0);
-      expect(plan.totalCost, 0);
-      expect(plan.reachable, isTrue);
-      expect(plan.fitsInOwned, isTrue);
+  group('fixed-tier lots (Stage 4)', () {
+    test('each linear tier hands out a strictly bigger lot', () {
+      // No more per-tile expansion — the office grid is a fixed size per tier.
+      expect(OfficeLevel.garage.playableTiles,
+          lessThan(OfficeLevel.smallOffice.playableTiles));
+      expect(OfficeLevel.smallOffice.playableTiles,
+          lessThan(OfficeLevel.modernOffice.playableTiles));
+      expect(OfficeLevel.modernOffice.playableTiles,
+          lessThan(OfficeLevel.techHub.playableTiles));
     });
 
-    test('one extra step costs the next expansion in the sequence', () {
-      const level = OfficeLevel.smallOffice;
-      // smallOffice inner = 7×4. Ask for inner 8×4 → needs 1 col → step 0 (₲350).
-      final plan = level.computeExpansionPlan(0, 8, 4);
-      expect(plan.extraSteps, 1);
-      expect(plan.totalCost, level.expansions[0].cost);
-      expect(plan.reachable, isTrue);
-    });
-
-    test('multi-step expansion sums correctly', () {
-      const level = OfficeLevel.smallOffice;
-      // smallOffice base 9×6 → expansions add col,row,col,row,...
-      // need 11 inner cols (= total 13 cols). From base 9 → need +4 cols.
-      // Steps that add cols at indices 0,2,4,6 (alternating). 4 cols needs steps 0..6.
-      final plan = level.computeExpansionPlan(0, 11, 4);
-      expect(plan.reachable, isTrue);
-      expect(plan.resultCols, greaterThanOrEqualTo(13));
-      expect(plan.extraSteps, greaterThan(0));
-      // Cost must equal the sum of the first extraSteps expansion costs.
-      var expected = 0;
-      for (var i = 0; i < plan.extraSteps; i++) {
-        expected += level.expansions[i].cost;
+    test('playableTiles equals the inner area of the fixed lot', () {
+      for (final level in OfficeLevel.values) {
+        expect(level.playableTiles,
+            (level.gridCols - 2) * (level.gridRows - 2));
       }
-      expect(plan.totalCost, expected);
-    });
-
-    test('asking for more than max tier capacity reports reachable=false', () {
-      const level = OfficeLevel.garage;
-      // garage max inner is small; ask for huge → not reachable
-      final plan = level.computeExpansionPlan(0, 100, 100);
-      expect(plan.reachable, isFalse);
-    });
-
-    test('starting from a non-zero bought count picks up where we left off',
-        () {
-      const level = OfficeLevel.smallOffice;
-      // After buying first 2 steps, ask for 1 more step's worth.
-      final before = level.computeExpansionPlan(0, 11, 4);
-      final after = level.computeExpansionPlan(2, 11, 4);
-      // 'after' should pay strictly less (already had 2 steps).
-      expect(after.totalCost, lessThan(before.totalCost));
-      // And extraSteps should be smaller by exactly the consumed count.
-      expect(after.extraSteps, before.extraSteps - 2);
     });
   });
 }

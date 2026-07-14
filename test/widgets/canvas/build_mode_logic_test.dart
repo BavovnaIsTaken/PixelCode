@@ -3,21 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pixelcode/models/game_economy.dart';
 import 'package:pixelcode/widgets/canvas/build_mode_logic.dart';
 
-const _reachable = PendingExpansionPlan(
-  extraSteps: 1,
-  totalCost: 100,
-  resultCols: 12,
-  resultRows: 12,
-  reachable: true,
-);
-const _unreachable = PendingExpansionPlan(
-  extraSteps: 0,
-  totalCost: 0,
-  resultCols: 0,
-  resultRows: 0,
-  reachable: false,
-);
-
 /// Builds a [BuildGhostInput] with a valid default scenario: a 2×2 room at
 /// (1,1) in an 8×8 grid (inner 1..6), nothing in the way, affordable, under
 /// cap. Override per test to exercise one failure at a time.
@@ -34,9 +19,6 @@ BuildGhostInput input({
   int maxPerOffice = 5,
   int grymni = 1000,
   int roomCost = 100,
-  int bufferCols = 4,
-  int bufferRows = 4,
-  PendingExpansionPlan plan = _reachable,
 }) =>
     BuildGhostInput(
       col: col,
@@ -51,9 +33,6 @@ BuildGhostInput input({
       maxPerOffice: maxPerOffice,
       grymni: grymni,
       roomCost: roomCost,
-      bufferCols: bufferCols,
-      bufferRows: bufferRows,
-      plan: plan,
     );
 
 PlacedRoom _roomAt(int col, int row) =>
@@ -61,10 +40,9 @@ PlacedRoom _roomAt(int col, int row) =>
 
 void main() {
   group('computeGhostStatus — green==placeable parity', () {
-    test('fits in owned grid, affordable, under cap → valid', () {
+    test('fits in the lot, affordable, under cap → valid', () {
       final s = computeGhostStatus(input());
       expect(s.valid, isTrue);
-      expect(s.pendingExpand, isFalse);
       expect(s.reason, isNull);
     });
 
@@ -101,66 +79,31 @@ void main() {
     });
   });
 
-  group('computeGhostStatus — foundation buffer (expansion) path', () {
-    // 6-wide grid (inner 1..4); a 2-wide ghost at col 4 spills past the
-    // right wall (gc+gw=6 > gridCols-1=5).
-    test('spills into reachable, affordable buffer → pendingExpand', () {
-      final s = computeGhostStatus(
-          input(col: 4, gridCols: 6, bufferCols: 4));
-      expect(s.valid, isTrue);
-      expect(s.pendingExpand, isTrue);
-      expect(s.plan, same(_reachable));
+  group('computeGhostStatus — fixed-lot bounds (Stage 4)', () {
+    // 6-wide grid (inner cols 1..4, wall at col 5); a 2-wide ghost at col 4
+    // spills its far edge onto the wall (gc+gw=6 > gridCols-1=5).
+    test('right edge spills past the wall → invalid(outOfBounds)', () {
+      final s = computeGhostStatus(input(col: 4, gridCols: 6));
+      expect(s.valid, isFalse);
+      expect(s.reason, GhostInvalidReason.outOfBounds);
     });
 
-    test('spills past the tier ceiling → invalid(tierCeiling)', () {
-      final s = computeGhostStatus(
-          input(col: 4, gridCols: 6, bufferCols: 4, plan: _unreachable));
-      expect(s.reason, GhostInvalidReason.tierCeiling);
+    test('bottom edge spills past the wall → invalid(outOfBounds)', () {
+      final s = computeGhostStatus(input(row: 4, gridRows: 6));
+      expect(s.reason, GhostInvalidReason.outOfBounds);
     });
 
-    test('spills past the visible buffer window → invalid(bufferOverrun)', () {
-      final s = computeGhostStatus(
-          input(col: 5, gridCols: 6, bufferCols: 0));
-      expect(s.reason, GhostInvalidReason.bufferOverrun);
-    });
-
-    test('buffer placement unaffordable → invalid(insufficientGrymni)', () {
-      final s = computeGhostStatus(input(
-        col: 4,
-        gridCols: 6,
-        bufferCols: 4,
-        grymni: 50,
-        roomCost: 100,
-      ));
-      expect(s.reason, GhostInvalidReason.insufficientGrymni);
-    });
-
-    test('blocked tile under the OWNED part of a buffer-straddling footprint '
-        '→ invalid(blocked), not a free pendingExpand', () {
-      // 2×2 ghost at col 4 in a 6-wide grid spills past the wall (col 5) but
-      // its near column (4) is owned and sits on a desk at (4,1).
-      final s = computeGhostStatus(input(
-        col: 4,
-        gridCols: 6,
-        bufferCols: 4,
-        blockedTiles: {'4,1'},
-      ));
-      expect(s.reason, GhostInvalidReason.blocked);
-    });
-
-    test('footprint starting PAST the wall (detached) → invalid(bufferOverrun)',
-        () {
+    test('footprint starting past the wall → invalid(outOfBounds)', () {
       final s = computeGhostStatus(
           input(col: 6, row: 1, width: 1, height: 1, gridCols: 6));
-      expect(s.valid, isFalse);
-      expect(s.reason, GhostInvalidReason.bufferOverrun);
+      expect(s.reason, GhostInvalidReason.outOfBounds);
     });
 
-    test('1×1 attached AT the wall expands by one column → pendingExpand', () {
-      final s = computeGhostStatus(input(
-          col: 5, row: 1, width: 1, height: 1, gridCols: 6, bufferCols: 4));
+    test('1×1 in the last playable column → valid', () {
+      // gridCols 6 → wall at 5, last playable col is 4.
+      final s = computeGhostStatus(
+          input(col: 4, row: 1, width: 1, height: 1, gridCols: 6));
       expect(s.valid, isTrue);
-      expect(s.pendingExpand, isTrue);
     });
   });
 

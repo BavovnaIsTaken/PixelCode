@@ -742,43 +742,28 @@ class GameEconomyNotifier extends Notifier<GameState> {
   }
 
   /// Switch to a parallel-option office. Same side effects as upgradeOffice
-  /// (deduct cost, reset expansions, drop out-of-bounds rooms/furniture).
+  /// (deduct cost, drop out-of-bounds rooms/furniture). Stage 4: the office is
+  /// a fixed-size lot per tier — no expansion state to reset.
   void switchToOffice(OfficeLevel target) {
     if (!canSwitchToOffice(target)) return;
     final cost = target.upgradeCost;
-    final nextCols = target.baseCols;
-    final nextRows = target.baseRows;
-    final keptRooms = state.placedRooms
-        .where((r) =>
-            r.col >= 1 &&
-            r.row >= 1 &&
-            r.col + r.type.widthTiles <= nextCols - 1 &&
-            r.row + r.type.heightTiles <= nextRows - 1)
-        .toList();
-    final keptFurniture = state.placedFurniture
-        .where((p) => p.col < nextCols - 1 && p.row < nextRows - 1)
-        .toList();
-
-    _updateStateAndSync(state.copyWith(
-      grymni: state.grymni - cost,
-      totalSpent: state.totalSpent + cost,
-      officeLevel: target,
-      officeExpansions: 0,
-      placedRooms: keptRooms,
-      placedFurniture: keptFurniture,
-    ));
+    _updateStateAndSync(_withOfficeLot(target, cost));
   }
 
   void upgradeOffice() {
     if (!canUpgradeOffice()) return;
     final next = state.officeLevel.nextLevel!;
     if (next.isWipComingSoon) return;
-    final cost = next.upgradeCost;
+    _updateStateAndSync(_withOfficeLot(next, next.upgradeCost));
+  }
 
-    // Reset expansion count — the new tier's expansion track is independent.
-    // Drop any rooms/furniture that fall outside the new tier's base grid.
-    final nextCols = next.baseCols;
-    final nextRows = next.baseRows;
+  /// Move the player into `target`'s fixed lot: charge [cost] and drop any
+  /// placed rooms/furniture that fall outside the new grid. Tier upgrades only
+  /// grow the grid, so this drops nothing; a switch to a differently-shaped
+  /// parallel office (e.g. galley) may prune stragglers.
+  GameState _withOfficeLot(OfficeLevel target, int cost) {
+    final nextCols = target.gridCols;
+    final nextRows = target.gridRows;
     final keptRooms = state.placedRooms
         .where((r) =>
             r.col >= 1 &&
@@ -790,35 +775,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
         .where((p) => p.col < nextCols - 1 && p.row < nextRows - 1)
         .toList();
 
-    _updateStateAndSync(state.copyWith(
+    return state.copyWith(
       grymni: state.grymni - cost,
       totalSpent: state.totalSpent + cost,
-      officeLevel: next,
-      officeExpansions: 0,
+      officeLevel: target,
       placedRooms: keptRooms,
       placedFurniture: keptFurniture,
-    ));
-  }
-
-  /// Whether the player can afford and is eligible for the next expansion
-  /// step at the current tier.
-  bool canBuyOfficeExpansion() {
-    final next = state.nextExpansion;
-    if (next == null) return false;
-    return state.grymni >= next.cost;
-  }
-
-  /// Buy the next expansion step at the current tier. No-op if the tier is
-  /// already maxed out or the player can't afford it.
-  void buyOfficeExpansion() {
-    if (!canBuyOfficeExpansion()) return;
-    final next = state.nextExpansion!;
-
-    _updateStateAndSync(state.copyWith(
-      grymni: state.grymni - next.cost,
-      totalSpent: state.totalSpent + next.cost,
-      officeExpansions: state.officeExpansions + 1,
-    ));
+    );
   }
 
   // ─── Donations ─────────────────────────────────────────────────────────
@@ -1025,15 +988,10 @@ class GameEconomyNotifier extends Notifier<GameState> {
   bool isRoomLimitReached(RoomType type) =>
       roomCount(type) >= type.maxPerOffice;
 
-  /// Place a room into the office grid. If [expansionStepsToBuy] > 0 the
-  /// transaction first purchases that many sequential expansion steps and
-  /// then drops the room — a single atomic action so the ghost-in-buffer
-  /// UX commits one combined cost rather than two separate purchases.
-  void placeRoom(RoomType type, int col, int row,
-      {int rotation = 0, int expansionStepsToBuy = 0}) {
-    final plan = _planExpansion(expansionStepsToBuy);
-    if (plan == null) return;
-    final totalCost = type.cost + plan.totalCost;
+  /// Place a room into the office's fixed grid. The ghost is only valid inside
+  /// the tier's lot, so placement is a straight wallet-check + append.
+  void placeRoom(RoomType type, int col, int row, {int rotation = 0}) {
+    final totalCost = type.cost;
     if (state.grymni < totalCost) return;
     if (isRoomLimitReached(type)) return;
     final id = 'room_${DateTime.now().microsecondsSinceEpoch}';
@@ -1043,25 +1001,8 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni - totalCost,
       totalSpent: state.totalSpent + totalCost,
-      officeExpansions: state.officeExpansions + plan.extraSteps,
       placedRooms: rooms,
     ));
-  }
-
-  /// Resolves a requested expansion-step purchase into a concrete plan with
-  /// total cost. Returns null when [stepsToBuy] would exceed the tier cap.
-  _ExpansionPurchasePlan? _planExpansion(int stepsToBuy) {
-    if (stepsToBuy <= 0) {
-      return const _ExpansionPurchasePlan(extraSteps: 0, totalCost: 0);
-    }
-    final expansions = state.officeLevel.expansions;
-    final from = state.officeExpansions;
-    if (from + stepsToBuy > expansions.length) return null;
-    var cost = 0;
-    for (var i = from; i < from + stepsToBuy; i++) {
-      cost += expansions[i].cost;
-    }
-    return _ExpansionPurchasePlan(extraSteps: stepsToBuy, totalCost: cost);
   }
 
   /// Final price (after the bundle discount) of a room template.
@@ -1080,11 +1021,8 @@ class GameEconomyNotifier extends Notifier<GameState> {
   /// included furniture items are also marked as owned so the player can
   /// later move or remove them via the Decor edit mode.
   void placeRoomTemplate(RoomTemplate template, int col, int row,
-      {int rotation = 0, int expansionStepsToBuy = 0}) {
-    final plan = _planExpansion(expansionStepsToBuy);
-    if (plan == null) return;
-    final cost = templateCost(template);
-    final totalCost = cost + plan.totalCost;
+      {int rotation = 0}) {
+    final totalCost = templateCost(template);
     if (state.grymni < totalCost) return;
     if (isRoomLimitReached(template.baseRoom)) return;
     final roomId = 'room_${DateTime.now().microsecondsSinceEpoch}';
@@ -1114,7 +1052,6 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _updateStateAndSync(state.copyWith(
       grymni: state.grymni - totalCost,
       totalSpent: state.totalSpent + totalCost,
-      officeExpansions: state.officeExpansions + plan.extraSteps,
       placedRooms: rooms,
       placedFurniture: placed,
       furnitureInventory: inv,
@@ -1296,14 +1233,3 @@ final hiredAgentIdsProvider = Provider<List<String>>((ref) {
   return ref.watch(gameEconomyProvider).hiredAgentIds;
 });
 
-/// Internal contract returned by `_planExpansion` — concrete expansion steps
-/// to apply and their ₲ cost. Private to the provider: callers express intent
-/// via the `expansionStepsToBuy` parameter, not by constructing this directly.
-class _ExpansionPurchasePlan {
-  final int extraSteps;
-  final int totalCost;
-  const _ExpansionPurchasePlan({
-    required this.extraSteps,
-    required this.totalCost,
-  });
-}

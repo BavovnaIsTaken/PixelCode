@@ -62,20 +62,11 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       TransformationController();
   final FocusNode _keyboardFocusNode = FocusNode();
 
-  /// Foundation-buffer tile under the cursor, or null when the pointer is not
-  /// over a buffer tile. Drives the hover/press wash in [PixelOfficePainter].
-  ({int col, int row})? _hoveredBufferTile;
-  bool _bufferTilePressed = false;
-
   /// Tile under the cursor while edit mode has a held or selected furniture
   /// item — drives the translucent "drop preview" footprint that follows the
   /// pointer, mirroring the buy-mode ghost. Null when nothing in hand, when
   /// the pointer left the canvas, or outside edit mode.
   ({int col, int row})? _furnitureGhostTile;
-
-  /// 150 ms fade for the buffer hover wash. Forwards 0→1 on tile-enter,
-  /// reverses on tile-exit so the colour swap doesn't pop.
-  late final AnimationController _bufferHoverFade;
 
   /// When false, the canvas hides the amber selection halo around the
   /// currently selected agent. Tapping empty space clears it; tapping a
@@ -94,7 +85,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 
   /// True while a pointer is pressed inside the build-mode canvas with no
   /// ghost selected — drives the grab → grabbing cursor swap that signals
-  /// "you can drag the office to peek at the buffer".
+  /// "you can drag to reposition the office".
   bool _isGrabbing = false;
 
   static const String _foremanIntroSeenKey = 'foremanIntroSeen';
@@ -128,12 +119,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       _transformController.value = ref.read(officeViewProvider);
     }
     _loadForemanIntroFlag();
-    _bufferHoverFade = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 150),
-    )..addListener(() {
-        if (mounted) setState(() {});
-      });
   }
 
   Future<void> _loadForemanIntroFlag() async {
@@ -155,7 +140,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   void dispose() {
     _transformController.dispose();
     _keyboardFocusNode.dispose();
-    _bufferHoverFade.dispose();
     super.dispose();
   }
 
@@ -370,25 +354,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                           buildMode.selectedRoomType == null) {
                         setState(() => _isGrabbing = true);
                       }
-                      if (buildMode.active &&
-                          _bufferTileAt(e.localPosition, constraints) !=
-                              null) {
-                        if (!_bufferTilePressed) {
-                          setState(() => _bufferTilePressed = true);
-                        }
-                      }
                     },
                     onPointerUp: (_) {
                       if (_isGrabbing) setState(() => _isGrabbing = false);
-                      if (_bufferTilePressed) {
-                        setState(() => _bufferTilePressed = false);
-                      }
                     },
                     onPointerCancel: (_) {
                       if (_isGrabbing) setState(() => _isGrabbing = false);
-                      if (_bufferTilePressed) {
-                        setState(() => _bufferTilePressed = false);
-                      }
                     },
                     child: InteractiveViewer(
                     transformationController: _transformController,
@@ -420,13 +391,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                         setState(() {
                           _hoveredAgentId = null;
                           _foremanHovering = false;
-                          _hoveredBufferTile = null;
-                          _bufferTilePressed = false;
                           _furnitureGhostTile = null;
                         });
-                        if (_bufferHoverFade.value > 0) {
-                          _bufferHoverFade.reverse();
-                        }
                       },
                       child: GestureDetector(
                         // `onTapUp` (not `onTapDown`) so the tap handler only
@@ -470,27 +436,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                                   ghostIsValid: _ghostStatus(buildMode,
                                           gameEconomy.placedRooms)
                                       .valid,
-                                  ghostPendingExpand: _ghostStatus(
-                                          buildMode, gameEconomy.placedRooms)
-                                      .pendingExpand,
-                                  buildBufferCols:
-                                      buildMode.active ? _bufferDims().cols : 0,
-                                  buildBufferRows:
-                                      buildMode.active ? _bufferDims().rows : 0,
-                                  showFoundationBuffer:
-                                      _showFoundationBuffer(buildMode),
-                                  nextExpansionCost:
-                                      gameEconomy.nextExpansion?.cost,
-                                  hoveredBufferCol:
-                                      _hoveredBufferTile?.col,
-                                  hoveredBufferRow:
-                                      _hoveredBufferTile?.row,
-                                  bufferHoverAlpha: _bufferHoverFade.value,
-                                  bufferHoverAffordable:
-                                      (gameEconomy.nextExpansion?.cost ??
-                                              1 << 30) <=
-                                          gameEconomy.grymni,
-                                  bufferHoverPressed: _bufferTilePressed,
                                   adjacencyLabel: _adjacencyLabel(
                                       buildMode, gameEconomy.placedRooms),
                                   placedCorridors:
@@ -602,34 +547,12 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
             child: const BuildMenu(),
           ),
 
-        // Build-mode banner — diegetic affordance for the foundation buffer.
-        // Shown whenever a room is selected in build mode so the player
-        // notices the "drag past the wall to grow the office" mechanic.
-        if (buildMode.active && buildMode.selectedRoomType != null)
-          Positioned(
-            top: 12,
-            left: 16,
-            right: 16,
-            child: IgnorePointer(
-              child: _BuildBanner(
-                roomType: buildMode.selectedRoomType!,
-                bufferAvailable:
-                    _bufferDims().cols > 0 || _bufferDims().rows > 0,
-                tierLabel: officeLevel.label,
-                innerCols: _gameState.gridCols - 2,
-                innerRows: _gameState.gridRows - 2,
-              ),
-            ),
-          ),
-
         // Place Bar — floats above the build menu / above the canvas bottom
         // edge when a room type is selected and the ghost is live.
         if (buildMode.active && buildMode.selectedRoomType != null)
           Builder(builder: (context) {
             final status =
                 _ghostStatus(buildMode, gameEconomy.placedRooms);
-            final pendingCost =
-                status.pendingExpand ? (status.plan?.totalCost ?? 0) : 0;
             // The price the commit actually charges: a template bills its
             // furniture-inclusive bundle cost, a plain room bills rt.cost.
             final placeTemplateId = buildMode.selectedTemplateId;
@@ -649,7 +572,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
                 ghostIsValid: status.valid,
                 ghostLive: buildMode.ghostCol != null,
                 rotation: buildMode.ghostRotation,
-                pendingExpandCost: pendingCost,
                 invalidReason: status.reason,
                 onCancel: () =>
                     ref.read(buildModeProvider.notifier).clearSelection(),
@@ -679,11 +601,10 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     ref.read(officeViewProvider.notifier).reset();
   }
 
-  /// Is something affordable right now that would make sense to buy from
-  /// the renovation flow (next-tier move-in OR the next expansion step)?
+  /// Is a next-tier move-in affordable right now (drives the foreman/door
+  /// renovation-attention cue)?
   bool _renovationAttention(GameState game) {
-    final notifier = ref.read(gameEconomyProvider.notifier);
-    return notifier.canUpgradeOffice() || notifier.canBuyOfficeExpansion();
+    return ref.read(gameEconomyProvider.notifier).canUpgradeOffice();
   }
 
   void _enterBuildMode() {
@@ -746,65 +667,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     if (overForeman != _foremanHovering) {
       setState(() => _foremanHovering = overForeman);
     }
-    _updateBufferHover(pos, constraints, isBuildMode);
-  }
-
-  /// Detect which foundation-buffer tile (if any) the pointer sits over in
-  /// build mode and drive the 150 ms hover fade. Outside the buffer we run
-  /// the controller in reverse so the previous tile fades out cleanly.
-  void _updateBufferHover(
-      Offset screenPos, BoxConstraints constraints, bool isBuildMode) {
-    if (!isBuildMode) {
-      if (_hoveredBufferTile != null || _bufferTilePressed) {
-        setState(() {
-          _hoveredBufferTile = null;
-          _bufferTilePressed = false;
-        });
-      }
-      if (_bufferHoverFade.value > 0) _bufferHoverFade.reverse();
-      return;
-    }
-    final tile = _bufferTileAt(screenPos, constraints);
-    if (tile == null) {
-      if (_hoveredBufferTile != null) {
-        setState(() => _hoveredBufferTile = null);
-      }
-      if (_bufferTilePressed) setState(() => _bufferTilePressed = false);
-      if (_bufferHoverFade.value > 0) _bufferHoverFade.reverse();
-      return;
-    }
-    if (_hoveredBufferTile?.col != tile.col ||
-        _hoveredBufferTile?.row != tile.row) {
-      setState(() => _hoveredBufferTile = tile);
-    }
-    if (_bufferHoverFade.status != AnimationStatus.forward &&
-        _bufferHoverFade.value < 1.0) {
-      _bufferHoverFade.forward();
-    }
-  }
-
-  /// Returns the (col, row) of the foundation-buffer tile under [screenPos],
-  /// or null when the pointer is over the owned grid, outside the buffer, or
-  /// build mode is inactive. Mirrors `_drawFoundationBuffer` so visuals and
-  /// hit-tests can't drift.
-  ({int col, int row})? _bufferTileAt(
-      Offset screenPos, BoxConstraints constraints) {
-    final world = _screenToWorld(screenPos, constraints);
-    final col = (world.dx / kTileSize).floor();
-    final row = (world.dy / kTileSize).floor();
-    final buf = _bufferDims();
-    if (buf.cols == 0 && buf.rows == 0) return null;
-    final gCols = _gameState.gridCols;
-    final gRows = _gameState.gridRows;
-    final startCol = gCols - 1;
-    final endCol = gCols - 1 + buf.cols;
-    final startRow = gRows - 1;
-    final endRow = gRows - 1 + buf.rows;
-    if (col < 0 || row < 0 || col > endCol || row > endRow) return null;
-    final inRightStrip = col >= startCol && col <= endCol && row <= endRow;
-    final inBottomStrip = row >= startRow && row <= endRow && col < startCol;
-    if (!inRightStrip && !inBottomStrip) return null;
-    return (col: col, row: row);
   }
 
   void _scheduleOverlayHover(String agentId) {
@@ -931,10 +793,8 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   /// stay clickable and labels stay anchored to their sprites while the
   /// painter shifts to accommodate the buffer.
   _CanvasFit _canvasFit(BoxConstraints constraints) {
-    final buildMode = ref.read(buildModeProvider);
-    final buf = buildMode.active ? _bufferDims() : (cols: 0, rows: 0);
-    final cw = _gameState.canvasWidth + buf.cols * kTileSize;
-    final ch = _gameState.canvasHeight + buf.rows * kTileSize;
+    final cw = _gameState.canvasWidth.toDouble();
+    final ch = _gameState.canvasHeight.toDouble();
     final scale = math.min(
       constraints.maxWidth / cw,
       constraints.maxHeight / ch,
@@ -946,25 +806,18 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     );
   }
 
-  /// Number of foundation-buffer tiles drawn past each owned grid edge in
-  /// build mode. Lets the player ghost-place outside the owned area; the
-  /// transaction then auto-buys the required expansion step(s).
-  static const int kBuildBufferTiles = 4;
-
   MouseCursor _buildModeCursor(BuildModeState mode, GhostStatus? status) =>
       buildModeCursor(
         buildActive: mode.active,
         hasGhost: mode.selectedRoomType != null,
         ghostValid: status?.valid ?? false,
-        ghostPendingExpand: status?.pendingExpand ?? false,
         isGrabbing: _isGrabbing,
       );
 
   /// Build-mode ghost status — delegates the rules to the pure
   /// [computeGhostStatus] so the ghost colour, the Place-bar enable, and the
-  /// commit gate can never disagree. `pendingExpand` means the ghost is in the
-  /// foundation buffer outside the owned grid; commit triggers a combined
-  /// expand+place transaction.
+  /// commit gate can never disagree. Stage 4: the office is a fixed lot, so the
+  /// ghost simply fits or it doesn't — no expansion plan to consult.
   GhostStatus _ghostStatus(BuildModeState mode, List<PlacedRoom> rooms) {
     final rt = mode.selectedRoomType;
     final gc = mode.ghostCol;
@@ -974,17 +827,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     }
 
     final econ = ref.read(gameEconomyProvider);
-    final gw = mode.ghostWidth;
-    final gh = mode.ghostHeight;
-
-    // Expansion plan for the size this ghost would need — consulted only when
-    // the ghost spills past the owned grid (inner area excludes the 1-tile
-    // right/bottom walls, hence the −2).
-    final plan = econ.officeLevel.computeExpansionPlan(
-      econ.officeExpansions,
-      gc + gw + 1 - 2,
-      gr + gh + 1 - 2,
-    );
 
     // Cost the commit will actually charge: template bundle, or room cost.
     final templateId = mode.selectedTemplateId;
@@ -992,13 +834,11 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     final roomCost =
         template != null ? template.bundleCost(furnitureCatalog) : rt.cost;
 
-    final buf = _bufferDims();
-
     return computeGhostStatus(BuildGhostInput(
       col: gc,
       row: gr,
-      width: gw,
-      height: gh,
+      width: mode.ghostWidth,
+      height: mode.ghostHeight,
       gridCols: _gameState.gridCols,
       gridRows: _gameState.gridRows,
       blockedTiles: _gameState.blockedTiles,
@@ -1007,53 +847,7 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
       maxPerOffice: rt.maxPerOffice,
       grymni: econ.grymni,
       roomCost: roomCost,
-      bufferCols: buf.cols,
-      bufferRows: buf.rows,
-      plan: plan,
     ));
-  }
-
-  /// Buffer dimensions to render past each owned edge — clamped by the tier's
-  /// remaining expansion capacity so we don't draw a buffer the player can
-  /// never reach. When a room is selected in build mode, the buffer grows to
-  /// at least `ghost.size + 1` so even a 7-wide teamFloor can be ghosted past
-  /// the right wall and attached.
-  ({int cols, int rows}) _bufferDims() {
-    final econ = ref.read(gameEconomyProvider);
-    final maxCols =
-        econ.officeLevel.effectiveCols(econ.officeLevel.expansions.length);
-    final maxRows =
-        econ.officeLevel.effectiveRows(econ.officeLevel.expansions.length);
-    final curCols = _gameState.gridCols;
-    final curRows = _gameState.gridRows;
-
-    final mode = ref.read(buildModeProvider);
-    final ghostW = mode.ghostWidth;
-    final ghostH = mode.ghostHeight;
-
-    final requestedCols = math.max(kBuildBufferTiles, ghostW + 1);
-    final requestedRows = math.max(kBuildBufferTiles, ghostH + 1);
-
-    final cols = math.min(requestedCols, maxCols - curCols);
-    final rows = math.min(requestedRows, maxRows - curRows);
-    return (cols: cols < 0 ? 0 : cols, rows: rows < 0 ? 0 : rows);
-  }
-
-  /// Whether the amber foundation-buffer lot should be PAINTED right now. The
-  /// buffer space is always reserved in the fit (stable layout), but per the
-  /// UX decision the gold tiles only appear when the player is positioning a
-  /// room at the edge — so idle build mode stays clean and the tiles never
-  /// read as a mystery. Standalone expansion purchases live in the office
-  /// upgrade dialog; on the canvas the buffer is purely the "drag a room past
-  /// the edge to grow" affordance.
-  bool _showFoundationBuffer(BuildModeState mode) {
-    if (!mode.active || mode.selectedRoomType == null) return false;
-    final gc = mode.ghostCol;
-    final gr = mode.ghostRow;
-    if (gc == null || gr == null) return false;
-    // Footprint reaches (or passes) the right/bottom owned playable edge.
-    return gc + mode.ghostWidth >= _gameState.gridCols - 1 ||
-        gr + mode.ghostHeight >= _gameState.gridRows - 1;
   }
 
   /// Returns the adjacency bonus/penalty label for the current ghost, or null.
@@ -1151,14 +945,13 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
   }
 
   /// The single room/template commit — shared by the Place button AND a
-  /// desktop click on a valid ghost. Pays for any pending expansion, then
-  /// auto-connects the new room to its nearest neighbour with a free corridor.
+  /// desktop click on a valid ghost. Auto-connects the new room to its nearest
+  /// neighbour with a free corridor.
   void _commitRoomGhost(BuildModeState mode, GhostStatus status) {
     final gc = mode.ghostCol;
     final gr = mode.ghostRow;
     if (gc == null || gr == null || !status.valid) return;
     final econ = ref.read(gameEconomyProvider.notifier);
-    final extraSteps = status.plan?.extraSteps ?? 0;
 
     // Resolve the corridor BEFORE the new room joins placedRooms (otherwise
     // the "nearest room" would be the room we're about to place).
@@ -1168,12 +961,11 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
     if (templateId != null) {
       final template = roomTemplateById(templateId);
       if (template != null) {
-        econ.placeRoomTemplate(template, gc, gr,
-            rotation: mode.ghostRotation, expansionStepsToBuy: extraSteps);
+        econ.placeRoomTemplate(template, gc, gr, rotation: mode.ghostRotation);
       }
     } else {
       econ.placeRoom(mode.selectedRoomType!, gc, gr,
-          rotation: mode.ghostRotation, expansionStepsToBuy: extraSteps);
+          rotation: mode.ghostRotation);
     }
 
     if (corridor.isNotEmpty) {
@@ -1636,92 +1428,6 @@ class _AgentCanvasState extends ConsumerState<AgentCanvas>
 // testable build_mode_logic.dart and re-exported from this library (see the
 // `export` directive near the top) for existing importers.
 
-/// Banner overlay shown at the top of the canvas during build mode. Teaches
-/// the "drag past the wall to grow the office" affordance — without this,
-/// players who fill the office can't discover that the gold buffer beyond
-/// the wall is an actual placement zone that auto-buys an expansion step.
-class _BuildBanner extends StatelessWidget {
-  final RoomType roomType;
-  final bool bufferAvailable;
-  final String tierLabel;
-  final int innerCols;
-  final int innerRows;
-
-  const _BuildBanner({
-    required this.roomType,
-    required this.bufferAvailable,
-    required this.tierLabel,
-    required this.innerCols,
-    required this.innerRows,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.appColors;
-    final amber = const Color(0xFFFFB020);
-
-    final message = bufferAvailable
-        ? 'Тягни «${roomType.nameUk}» у золоту зону за стіною — офіс розшириться сам'
-        : 'Офіс на максимумі цього тіру. Купи апгрейд офісу через сторожа коло вхідних дверей';
-    final subtitle = '$tierLabel • $innerCols×$innerRows клітинок';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-      decoration: BoxDecoration(
-        color: c.surface.withValues(alpha: 0.94),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-            color: amber.withValues(alpha: 0.6), width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: amber.withValues(alpha: 0.25),
-            blurRadius: 14,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(
-            bufferAvailable
-                ? Icons.arrow_outward
-                : Icons.upgrade_outlined,
-            color: amber,
-            size: 18,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  message,
-                  style: TextStyle(
-                    color: c.textHigh,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    height: 1.25,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: c.textHigh.withValues(alpha: 0.55),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w500,
-                    height: 1.2,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _PlaceBar extends StatelessWidget {
   final RoomType roomType;
@@ -1734,12 +1440,8 @@ class _PlaceBar extends StatelessWidget {
   /// the bare RoomType.cost, which understates templates.
   final int roomCost;
 
-  /// Expansion-step cost paid alongside the room when the ghost is in the
-  /// foundation buffer. Zero when no expansion is needed.
-  final int pendingExpandCost;
-
   /// Reason the ghost is invalid — surfaced as inline text so the player
-  /// knows whether to move closer, free grymni, or buy a tier upgrade.
+  /// knows whether to move closer or free grymni.
   /// Null when ghost is valid or no specific reason was recorded.
   final GhostInvalidReason? invalidReason;
   final VoidCallback onCancel;
@@ -1753,7 +1455,6 @@ class _PlaceBar extends StatelessWidget {
     required this.ghostLive,
     required this.rotation,
     required this.roomCost,
-    this.pendingExpandCost = 0,
     this.invalidReason,
     required this.onCancel,
     required this.onRotateCW,
@@ -1768,8 +1469,7 @@ class _PlaceBar extends StatelessWidget {
     final rotLabel = rotation == 0
         ? ''
         : '$rotation°';
-    final isPendingExpand = pendingExpandCost > 0;
-    final totalCost = roomCost + pendingExpandCost;
+    final totalCost = roomCost;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -1806,23 +1506,11 @@ class _PlaceBar extends StatelessWidget {
                     Text(
                       '₲$totalCost',
                       style: TextStyle(
-                        color: isPendingExpand
-                            ? const Color(0xFFFFB020)
-                            : c.gold,
+                        color: c.gold,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    if (isPendingExpand) ...[
-                      const SizedBox(width: 4),
-                      Text(
-                        '(₲$roomCost + ₲$pendingExpandCost розширення)',
-                        style: TextStyle(
-                          color: const Color(0xFFFFB020).withValues(alpha: 0.85),
-                          fontSize: 9,
-                        ),
-                      ),
-                    ],
                     if (rotLabel.isNotEmpty) ...[
                       const SizedBox(width: 6),
                       Text(
@@ -2093,14 +1781,13 @@ class _ActiveAgentsStrip extends StatelessWidget {
 /// Resolves the cursor shown over the build-mode canvas.
 ///
 /// Empty-handed: `grab` → `grabbing` so the player notices the office can be
-/// dragged to peek at the foundation buffer. Ghost in hand: `cell` for valid
-/// drops and `forbidden` for invalid ones so the player sees at a glance
-/// whether the next tap will land a room or no-op.
+/// dragged to reposition. Ghost in hand: `cell` for valid drops and
+/// `forbidden` for invalid ones so the player sees at a glance whether the
+/// next tap will land a room or no-op.
 MouseCursor buildModeCursor({
   required bool buildActive,
   required bool hasGhost,
   required bool ghostValid,
-  required bool ghostPendingExpand,
   required bool isGrabbing,
 }) {
   if (!buildActive) return MouseCursor.defer;
@@ -2109,7 +1796,7 @@ MouseCursor buildModeCursor({
         ? SystemMouseCursors.grabbing
         : SystemMouseCursors.grab;
   }
-  if (ghostValid || ghostPendingExpand) return SystemMouseCursors.cell;
+  if (ghostValid) return SystemMouseCursors.cell;
   return SystemMouseCursors.forbidden;
 }
 

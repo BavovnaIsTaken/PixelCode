@@ -16,7 +16,6 @@ import 'office_upgrade_helpers.dart';
 
 const _accent = Color(0xFF00C0D1);
 const _gold = Color(0xFFFFD700);
-const _green = Color(0xFF22C55E);
 const _cardBg = Color(0xFF1A1A1F);
 
 Future<void> showOfficeUpgradeDialog(BuildContext context) {
@@ -43,8 +42,6 @@ class _OfficeUpgradeDialog extends ConsumerWidget {
     final current = game.officeLevel;
     final next = current.nextLevel;
     final canUpgrade = notifier.canUpgradeOffice();
-    final nextExpansion = game.nextExpansion;
-    final canBuyExpansion = notifier.canBuyOfficeExpansion();
 
     return Dialog(
       backgroundColor: c.surface,
@@ -95,17 +92,10 @@ class _OfficeUpgradeDialog extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Current tier card — shows expansion progress
+                  // Current tier card — shows the fixed lot for this tier.
                   _CurrentTierCard(
                     level: current,
-                    expansions: game.officeExpansions,
                     playableTiles: game.playableTiles,
-                    nextExpansion: nextExpansion,
-                    canBuyExpansion: canBuyExpansion,
-                    onBuyExpansion: () {
-                      notifier.buyOfficeExpansion();
-                    },
-                    formatNumber: _formatNumber,
                   ),
                   const SizedBox(height: 10),
                   // Next tier card — the "move in" offer
@@ -193,26 +183,15 @@ class _OfficeUpgradeDialog extends ConsumerWidget {
 
 class _CurrentTierCard extends StatelessWidget {
   final OfficeLevel level;
-  final int expansions;
   final int playableTiles;
-  final OfficeExpansion? nextExpansion;
-  final bool canBuyExpansion;
-  final VoidCallback onBuyExpansion;
-  final String Function(int) formatNumber;
 
   const _CurrentTierCard({
     required this.level,
-    required this.expansions,
     required this.playableTiles,
-    required this.nextExpansion,
-    required this.canBuyExpansion,
-    required this.onBuyExpansion,
-    required this.formatNumber,
   });
 
   @override
   Widget build(BuildContext context) {
-    final totalSteps = level.expansions.length;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -220,104 +199,54 @@ class _CurrentTierCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: _accent.withValues(alpha: 0.3)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Text(level.emoji, style: const TextStyle(fontSize: 20)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          Text(level.emoji, style: const TextStyle(fontSize: 20)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          level.label,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 5, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: _accent.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'ЗАРАЗ',
-                            style: TextStyle(
-                              color: _accent,
-                              fontSize: 8,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
                     Text(
-                      'Сітка ${level.effectiveCols(expansions) - 2}×${level.effectiveRows(expansions) - 2} • $playableTiles / ${level.maxPlayableTiles} клітинок',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.45),
-                        fontSize: 10,
+                      level.label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: _accent.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'ЗАРАЗ',
+                        style: TextStyle(
+                          color: _accent,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                   ],
                 ),
-              ),
-              if (nextExpansion != null)
-                _ActionButton(
-                  label: '+ ${formatNumber(nextExpansion!.cost)}₲',
-                  color: canBuyExpansion
-                      ? _green
-                      : Colors.white.withValues(alpha: 0.15),
-                  onTap: canBuyExpansion ? onBuyExpansion : null,
-                ),
-            ],
-          ),
-          if (totalSteps > 0) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
+                const SizedBox(height: 2),
                 Text(
-                  'Розширення',
+                  'Лот ${level.gridCols - 2}×${level.gridRows - 2} • $playableTiles клітинок',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.4),
-                    fontSize: 10,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                for (int i = 0; i < totalSteps; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 3),
-                    child: Container(
-                      width: 12,
-                      height: 5,
-                      decoration: BoxDecoration(
-                        color: i < expansions
-                            ? _green.withValues(alpha: 0.85)
-                            : Colors.white.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-                  ),
-                const SizedBox(width: 4),
-                Text(
-                  '$expansions / $totalSteps',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.5),
+                    color: Colors.white.withValues(alpha: 0.45),
                     fontSize: 10,
                   ),
                 ),
               ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -417,7 +346,7 @@ class _NextTierCard extends StatelessWidget {
               const SizedBox(width: 8),
               _StatChip(icon: '⚡', label: '×${level.speedModifier}'),
               const SizedBox(width: 8),
-              _StatChip(icon: '📐', label: '${level.maxPlayableTiles}'),
+              _StatChip(icon: '📐', label: '${level.playableTiles}'),
               const Spacer(),
               _ActionButton(
                 label: isWip

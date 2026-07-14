@@ -201,12 +201,12 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 50));
 
-      // smallOffice costs 1K — initial state has 500₲, so it's unaffordable.
-      expect(find.text('1K₲'), findsOneWidget);
+      // smallOffice costs 4K — initial state has 500₲, so it's unaffordable.
+      expect(find.text('4K₲'), findsOneWidget);
 
       // Tapping the disabled button should not change state.
       final grymniBefore = container.read(gameEconomyProvider).grymni;
-      await tester.tap(find.text('1K₲'));
+      await tester.tap(find.text('4K₲'));
       await tester.pump();
       expect(container.read(gameEconomyProvider).grymni, grymniBefore);
       // Office tier unchanged.
@@ -237,8 +237,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 50));
 
-      // Tap the upgrade button (next tier cost = 1K).
-      await tester.tap(find.text('1K₲'));
+      // Tap the upgrade button (next tier cost = 4K).
+      await tester.tap(find.text('4K₲'));
       await tester.pump();
 
       expect(container.read(gameEconomyProvider).officeLevel,

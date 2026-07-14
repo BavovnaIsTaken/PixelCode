@@ -101,20 +101,6 @@ bool canAffordNextOffice(OfficeLevel current, int grymni) {
   return grymni >= next.upgradeCost;
 }
 
-/// Cost of the next office expansion step, or null when the current tier
-/// has none (or all steps are already bought).
-int? nextExpansionCost(OfficeLevel level, int expansionsBought) {
-  if (expansionsBought >= level.expansions.length) return null;
-  return level.expansions[expansionsBought].cost;
-}
-
-/// Whether the player can afford the next expansion step at [level].
-bool canAffordNextExpansion(OfficeLevel level, int expansionsBought, int grymni) {
-  final cost = nextExpansionCost(level, expansionsBought);
-  if (cost == null) return false;
-  return grymni >= cost;
-}
-
 /// Whether a skill upgrade is *purchasable* — below the level-cap and
 /// affordable. Mirrors `GameEconomyNotifier.canUpgradeSkill`.
 bool canAffordSkillUpgrade({
@@ -146,15 +132,11 @@ enum OfficeCardCta {
   /// "Upgrade for X₲" — when [level] is the next tier above current.
   upgrade,
 
-  /// "+ X₲" — when [level] is the current tier and an expansion step is
-  /// available.
-  expansion,
-
   /// A green checkmark — when [level] is below current (already unlocked).
   ownedCheckmark,
 
-  /// Nothing — when the level is locked (above the next tier) or the
-  /// current tier has no expansion left to buy.
+  /// Nothing — when the level is locked (above the next tier) or is the
+  /// current tier (Stage 4: no per-tile expansion to buy anymore).
   none,
 }
 
@@ -163,15 +145,11 @@ enum OfficeCardCta {
 OfficeCardCta resolveOfficeCardCta({
   required OfficeLevel level,
   required OfficeLevel current,
-  required int currentExpansions,
 }) {
   if (level == current.nextLevel && !level.isWipComingSoon) {
     return OfficeCardCta.upgrade;
   }
-  if (level == current) {
-    final hasExpansion = currentExpansions < level.expansions.length;
-    return hasExpansion ? OfficeCardCta.expansion : OfficeCardCta.none;
-  }
+  if (level == current) return OfficeCardCta.none;
   if (level.index < current.index) return OfficeCardCta.ownedCheckmark;
   return OfficeCardCta.none;
 }

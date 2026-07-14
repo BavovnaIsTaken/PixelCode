@@ -44,9 +44,9 @@ void main() {
       state = OfficeGameState(level: OfficeLevel.garage);
     });
 
-    test('gridCols/gridRows match garage base size', () {
-      expect(state.gridCols, 7);
-      expect(state.gridRows, 5);
+    test('gridCols/gridRows match the garage fixed lot', () {
+      expect(state.gridCols, 10);
+      expect(state.gridRows, 7);
     });
 
     test('top border row is all walls', () {
@@ -383,18 +383,16 @@ void main() {
   group('rebuildLayout', () {
     test('updates gridCols and gridRows after level change', () {
       final state = OfficeGameState(level: OfficeLevel.garage);
-      expect(state.gridCols, 7);
-      state.rebuildLayout(OfficeLevel.smallOffice, 0, []);
-      expect(state.gridCols, 9);
-      expect(state.gridRows, 6);
+      expect(state.gridCols, 10);
+      state.rebuildLayout(OfficeLevel.smallOffice, []);
+      expect(state.gridCols, 13);
+      expect(state.gridRows, 10);
     });
 
     test('updates speedBonus when serverRoom added', () {
       final state = OfficeGameState(level: OfficeLevel.garage);
       expect(state.speedBonus, 1.0);
-      state.rebuildLayout(
-        OfficeLevel.garage,
-        0,
+      state.rebuildLayout(OfficeLevel.garage,
         [_room('srv', RoomType.serverRoom, col: 1, row: 1)],
       );
       // serverRoom without workstation: 1.1 - 0.05 = 1.05
@@ -407,16 +405,16 @@ void main() {
         placedRooms: [_room('lg', RoomType.lounge, col: 1, row: 1)],
       );
       expect(state.loungeCenterTile, isNotNull);
-      state.rebuildLayout(OfficeLevel.garage, 0, []);
+      state.rebuildLayout(OfficeLevel.garage, []);
       expect(state.loungeCenterTile, isNull);
     });
 
     test('tileMap resizes correctly after rebuild', () {
       final state = OfficeGameState(level: OfficeLevel.garage);
-      state.rebuildLayout(OfficeLevel.smallOffice, 0, []);
-      // smallOffice: 9 cols × 6 rows
-      expect(state.tileMap.length, 6);
-      expect(state.tileMap[0].length, 9);
+      state.rebuildLayout(OfficeLevel.smallOffice, []);
+      // smallOffice fixed lot: 13 cols × 10 rows
+      expect(state.tileMap.length, 10);
+      expect(state.tileMap[0].length, 13);
     });
   });
 
@@ -438,7 +436,7 @@ void main() {
         ],
       ];
       final state = OfficeGameState(level: OfficeLevel.garage);
-      state.rebuildLayout(OfficeLevel.garage, 0, rooms);
+      state.rebuildLayout(OfficeLevel.garage, rooms);
       expect(state.speedBonus, closeTo(kSpeedBonusCeiling, 0.001),
           reason: 'six pairs (raw 1.40) must be clamped to $kSpeedBonusCeiling');
     });
@@ -446,7 +444,7 @@ void main() {
     test('normal case (one pair) is not wrongly clamped', () {
       // Raw: 1.1 + 0.05 = 1.15 — well below ceiling.
       final state = OfficeGameState(level: OfficeLevel.garage);
-      state.rebuildLayout(OfficeLevel.garage, 0, [
+      state.rebuildLayout(OfficeLevel.garage, [
         _room('srv', RoomType.serverRoom, col: 0, row: 0),
         _room('ws', RoomType.workstation, col: 2, row: 0),
       ]);
@@ -463,9 +461,7 @@ void main() {
         ],
       ];
       final state = OfficeGameState(level: OfficeLevel.garage);
-      state.rebuildLayout(
-        OfficeLevel.garage,
-        0,
+      state.rebuildLayout(OfficeLevel.garage,
         rooms,
         [],
         [_corridor('c', [(col: 1, row: 3)], wide: true)],
@@ -492,17 +488,17 @@ void main() {
   // ─── syncHiredAgents + WorkplaceStatus ─────────────────────────────────────
 
   group('syncHiredAgents workplace status', () {
-    // smallOffice (9×6) is too small for the canonical coder station (col=9, row=7).
-    // techHub (12×9) fits all canonical stations.
+    // garage (10×7 fixed lot) is too small for the canonical coder station
+    // (col=9, row=7). techHub fits all canonical stations.
     OfficeGameState makeSmall() {
-      final s = OfficeGameState(level: OfficeLevel.smallOffice);
-      s.rebuildLayout(OfficeLevel.smallOffice, 0, []);
+      final s = OfficeGameState(level: OfficeLevel.garage);
+      s.rebuildLayout(OfficeLevel.garage, []);
       return s;
     }
 
     OfficeGameState makeLarge() {
       final s = OfficeGameState(level: OfficeLevel.techHub);
-      s.rebuildLayout(OfficeLevel.techHub, 0, []);
+      s.rebuildLayout(OfficeLevel.techHub, []);
       return s;
     }
 
@@ -553,10 +549,9 @@ void main() {
       );
       expect(state.characters['coder#1']!.state, CharState.waiting);
 
-      // Place a workstation room — desk at (3,2), seat at (3,3), fits 9×6.
-      state.rebuildLayout(
-        OfficeLevel.smallOffice,
-        0,
+      // Place a workstation room — desk at (3,2), seat at (3,3), fits the
+      // garage lot (10×7). Its extra station is what seats the waiting agent.
+      state.rebuildLayout(OfficeLevel.garage,
         [_room('ws1', RoomType.workstation, col: 3, row: 2)],
       );
 
@@ -626,7 +621,7 @@ void main() {
       state.cat.x = 18 * kTileSize + kTileSize / 2;
       state.cat.y = 30 * kTileSize + kTileSize / 2;
 
-      state.rebuildLayout(OfficeLevel.garage, 0, []);
+      state.rebuildLayout(OfficeLevel.garage, []);
 
       expect(isWalkable(state, state.cat.tileCol, state.cat.tileRow), isTrue);
       // Sprite world-space coordinates must follow the clamped tile.
@@ -643,7 +638,7 @@ void main() {
       state.cat.tileCol = lastCol;
       state.cat.tileRow = 2;
 
-      state.rebuildLayout(OfficeLevel.smallOffice, 0, []);
+      state.rebuildLayout(OfficeLevel.smallOffice, []);
 
       expect(state.cat.tileCol, lessThan(lastCol));
       expect(isWalkable(state, state.cat.tileCol, state.cat.tileRow), isTrue);
@@ -661,7 +656,7 @@ void main() {
       ch.x = 19 * kTileSize + kTileSize / 2;
       ch.y = 30 * kTileSize + kTileSize / 2;
 
-      state.rebuildLayout(OfficeLevel.garage, 0, []);
+      state.rebuildLayout(OfficeLevel.garage, []);
 
       expect(isWalkable(state, ch.tileCol, ch.tileRow), isTrue);
       expect(ch.tileCol, lessThan(state.gridCols - 1));

@@ -123,69 +123,24 @@ void main() {
         }
       });
 
-      test('upgrade resets expansions counter', () {
-        var state = GameState(
-          officeLevel: OfficeLevel.garage,
-          officeExpansions: 3,
-        );
-        expect(state.officeExpansions, 3);
-
-        state = state.copyWith(officeLevel: OfficeLevel.smallOffice);
-        expect(state.officeExpansions, 3); // copyWith keeps it unless explicitly reset
+      test('grid dimensions are the tier fixed lot (Stage 4)', () {
+        // Stage 4: each tier is a fixed lot equal to the old fully-expanded max.
+        final garage = GameState(officeLevel: OfficeLevel.garage);
+        expect(garage.gridCols, 10);
+        expect(garage.gridRows, 7);
       });
 
-      test('effective grid dimensions account for expansions', () {
-        // Garage base: 7×5
+      test('upgrading grows the grid to the next tier lot', () {
         final garage = GameState(officeLevel: OfficeLevel.garage);
-        expect(garage.gridCols, 7);
-        expect(garage.gridRows, 5);
-
-        // After first expansion (+1 col)
-        final expanded = garage.copyWith(officeExpansions: 1);
-        expect(expanded.gridCols, 8);
-        expect(expanded.gridRows, 5);
+        final small = garage.copyWith(officeLevel: OfficeLevel.smallOffice);
+        expect(small.gridCols, 13);
+        expect(small.gridRows, 10);
       });
 
       test('playableTiles excludes 1-tile wall borders', () {
         final garage = GameState(officeLevel: OfficeLevel.garage);
-        // 7×5 total → (7-2)×(5-2) = 5×3 = 15 playable
-        expect(garage.playableTiles, 15);
-      });
-
-      test('expansions clamp to max for tier', () {
-        final garage = GameState(officeLevel: OfficeLevel.garage);
-        // Garage has 5 expansion steps (per game_economy.dart)
-        expect(garage.officeLevel.expansions.length, 5);
-
-        // Try to set beyond max
-        final overclamped = garage.copyWith(officeExpansions: 999);
-        // fromJson will clamp, but copyWith doesn't auto-clamp
-        expect(overclamped.officeExpansions, 999); // value is 999, but logic should clamp
-
-        // When used in JSON round-trip or grid calc, it should clamp
-        expect(overclamped.gridCols,
-            garage.officeLevel.effectiveCols(5)); // clamped at 5
-      });
-
-      test('isOfficeFullyExpanded is true when all expansions bought', () {
-        final garage = GameState(officeLevel: OfficeLevel.garage);
-        expect(garage.isOfficeFullyExpanded, false);
-
-        final fullExpanded = garage.copyWith(officeExpansions: 5);
-        expect(fullExpanded.isOfficeFullyExpanded, true);
-      });
-
-      test('nextExpansion returns null when fully expanded', () {
-        final garage = GameState(officeLevel: OfficeLevel.garage);
-        expect(garage.nextExpansion, isNotNull);
-        expect(garage.nextExpansion!.cost, 80); // First expansion
-
-        final lastStep = garage.copyWith(officeExpansions: 4);
-        expect(lastStep.nextExpansion, isNotNull);
-        expect(lastStep.nextExpansion!.cost, 380); // Fifth expansion
-
-        final full = garage.copyWith(officeExpansions: 5);
-        expect(full.nextExpansion, isNull);
+        // 10×7 total → (10-2)×(7-2) = 8×5 = 40 playable
+        expect(garage.playableTiles, 40);
       });
     });
 
@@ -248,7 +203,6 @@ void main() {
         final original = GameState(
           grymni: 12345,
           officeLevel: OfficeLevel.modernOffice,
-          officeExpansions: 3,
           agents: {
             'coder#1': AgentGameData(
               instanceId: 'coder#1',
@@ -272,21 +226,15 @@ void main() {
         expect(restored.ownedCosmetics, original.ownedCosmetics);
       });
 
-      test('fromJson clamps out-of-bounds expansions', () {
+      test('v6→v7 migration refunds expansion spend and drops the field', () {
+        // Legacy garage save with 3 expansion steps bought. Refund = 100% of
+        // those first 3 step costs (80+140+200 = 420).
         final json = {
           'schemaVersion': 6,
           'grymni': 500,
-          'officeLevel': 0,
-          'officeExpansions': 999, // Way out of bounds
+          'officeLevel': 0, // garage
+          'officeExpansions': 3,
           'agents': <String, dynamic>{},
-          'totalEarned': 0,
-          'totalSpent': 0,
-          'nickname': '',
-          'nicknameChangesUsed': 0,
-          'ownedCosmetics': [],
-          'equippedCosmetics': <String, dynamic>{},
-          'themeState': <String, dynamic>{},
-          'ownedFurniture': [],
           'placedFurniture': [],
           'placedRooms': [],
           'placedCorridors': [],
@@ -296,8 +244,30 @@ void main() {
         };
 
         final state = GameState.fromJson(json);
-        // fromJson should clamp it
-        expect(state.officeExpansions, lessThanOrEqualTo(5)); // Garage has 5 max
+        expect(state.grymni, 500 + 420, reason: '100% expansion refund');
+        expect(state.gridCols, 10, reason: 'collapses to fixed garage lot');
+        expect(state.gridRows, 7);
+        // The re-serialised save no longer carries the legacy field, so a
+        // second load can't double-refund.
+        expect(state.toJson().containsKey('officeExpansions'), isFalse);
+      });
+
+      test('v6→v7 migration clamps an out-of-bounds expansion count', () {
+        // officeExpansions=999 must not over-refund: only the 5 real garage
+        // steps exist (80+140+200+280+380 = 1080).
+        final json = {
+          'schemaVersion': 6,
+          'grymni': 500,
+          'officeLevel': 0,
+          'officeExpansions': 999,
+          'agents': <String, dynamic>{},
+          'placedFurniture': [],
+          'placedRooms': [],
+          'placedCorridors': [],
+          'updatedAt': 0,
+        };
+        final state = GameState.fromJson(json);
+        expect(state.grymni, 500 + 1080);
       });
 
       test('fromJson filters out-of-bounds furniture/rooms', () {
@@ -345,21 +315,23 @@ void main() {
         expect(OfficeLevel.campus.speedModifier, 1.5);
       });
 
-      test('upgradeCost follows expected curve', () {
+      test('upgradeCost follows the Stage 4 fixed-tier curve', () {
         expect(OfficeLevel.garage.upgradeCost, 0);
-        expect(OfficeLevel.smallOffice.upgradeCost, 1000);
-        expect(OfficeLevel.modernOffice.upgradeCost, 8000);
-        expect(OfficeLevel.techHub.upgradeCost, 50000);
-        expect(OfficeLevel.campus.upgradeCost, 500000);
+        expect(OfficeLevel.smallOffice.upgradeCost, 4000);
+        expect(OfficeLevel.modernOffice.upgradeCost, 35000);
+        expect(OfficeLevel.techHub.upgradeCost, 220000);
+        expect(OfficeLevel.campus.upgradeCost, 2700000);
       });
 
-      test('basePlayableTiles and maxPlayableTiles are sensible', () {
+      test('playableTiles is positive and grows with the linear tier chain', () {
         for (final level in OfficeLevel.values) {
-          final baseTiles = level.basePlayableTiles;
-          final maxTiles = level.maxPlayableTiles;
-          expect(baseTiles, greaterThan(0));
-          expect(maxTiles, greaterThanOrEqualTo(baseTiles));
+          expect(level.playableTiles, greaterThan(0), reason: '$level');
         }
+        // Linear upgrade chain hands out strictly bigger lots.
+        expect(OfficeLevel.smallOffice.playableTiles,
+            greaterThan(OfficeLevel.garage.playableTiles));
+        expect(OfficeLevel.techHub.playableTiles,
+            greaterThan(OfficeLevel.modernOffice.playableTiles));
       });
     });
 
