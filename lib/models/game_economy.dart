@@ -12,23 +12,6 @@ import 'app_theme.dart';
 
 // ─── Office levels ─────────────────────────────────────────────────────────
 
-/// One expansion step within a given office tier.
-///
-/// Each step grows the grid by [deltaCols] columns and/or [deltaRows] rows
-/// and costs [cost] ₲. Steps are ordered — buying step N requires having
-/// bought all prior steps at the current tier.
-class OfficeExpansion {
-  final int deltaCols;
-  final int deltaRows;
-  final int cost;
-
-  const OfficeExpansion({
-    this.deltaCols = 0,
-    this.deltaRows = 0,
-    required this.cost,
-  });
-}
-
 enum OfficeLevel {
   garage,
   smallOffice,
@@ -55,15 +38,15 @@ extension OfficeLevelExt on OfficeLevel {
 
   String get description => switch (this) {
         OfficeLevel.garage =>
-          'Обшарпаний гараж, тьмяне світло. Старт 5×3, розширення до 8×5 клітинок — забудовуй і перебудовуй як хочеш.',
+          'Обшарпаний гараж, тьмяне світло. Лот 8×5 клітинок — забудовуй і перебудовуй як хочеш.',
         OfficeLevel.smallOffice =>
-          'Скромний офіс з нормальним Wi-Fi. Старт 7×4, розширення до 11×8 клітинок — твоя розкладка від першої клітинки.',
+          'Скромний офіс з нормальним Wi-Fi. Лот 11×8 клітинок — твоя розкладка від першої клітинки.',
         OfficeLevel.modernOffice =>
-          'Сучасний офіс, ергономіка і швидкий інтернет. Старт 9×5, розширення до 14×10 клітинок — простір під будь-яку розкладку.',
+          'Сучасний офіс, ергономіка і швидкий інтернет. Лот 14×10 клітинок — простір під будь-яку розкладку.',
         OfficeLevel.techHub =>
-          'Тех-хаб з неоном і топовим залізом. Старт 10×7, розширення до 16×13 клітинок — є де розгулятися.',
+          'Тех-хаб з неоном і топовим залізом. Лот 16×13 клітинок — є де розгулятися.',
         OfficeLevel.campus =>
-          'Розкішний кампус. Старт 12×10, розширення до 20×16 клітинок — плануй від першої до останньої клітинки.',
+          'Розкішний кампус. Лот 20×18 клітинок — плануй від першої до останньої клітинки.',
         OfficeLevel.galley =>
           'Антична бойова галера у відкритому морі. Довгий просторий корпус, просмолене дерево палуби, бронзовий ніс, ліхтарі під нічним небом. Старт 21×44 — велика палуба для всієї команди.',
       };
@@ -97,193 +80,45 @@ extension OfficeLevelExt on OfficeLevel {
 
   int get upgradeCost => switch (this) {
         OfficeLevel.garage => 0,
-        OfficeLevel.smallOffice => 1000,
-        OfficeLevel.modernOffice => 8000,
-        OfficeLevel.techHub => 50000,
-        OfficeLevel.campus => 500000,
+        // Stage 4 (fixed-tier shells): a tier upgrade now hands the player the
+        // FULL lot at once — no incremental per-tile expansion to buy. Prices
+        // are the old upgrade cost plus ~30% of the summed legacy expansion
+        // track (a "buy the whole kit" bundle discount, mirroring the room
+        // template pricing), so the gating order-of-magnitude is preserved.
+        OfficeLevel.smallOffice => 4000,
+        OfficeLevel.modernOffice => 35000,
+        OfficeLevel.techHub => 220000,
+        OfficeLevel.campus => 2700000, // WIP-gated; placeholder until unlock.
         OfficeLevel.galley => 80000,
       };
 
-  /// Base grid dimensions at purchase time (before any expansions bought).
+  /// Fixed grid dimensions for this tier (Stage 4 — fixed-tier shells). A tier
+  /// upgrade hands the player the whole lot at once; there is no incremental
+  /// per-tile expansion anymore. These values are the OLD fully-expanded max
+  /// grid of each tier, so legacy saves collapse into them with no shrink.
   /// Total grid includes a 1-tile wall on each side; playable inner area is
-  /// `(baseCols-2) × (baseRows-2)`.
-  int get baseCols => switch (this) {
+  /// `(gridCols-2) × (gridRows-2)`.
+  int get gridCols => switch (this) {
+        OfficeLevel.garage => 10,
+        OfficeLevel.smallOffice => 13,
+        OfficeLevel.modernOffice => 16,
+        OfficeLevel.techHub => 18,
+        OfficeLevel.campus => 22,
+        OfficeLevel.galley => 22,
+      };
+
+  int get gridRows => switch (this) {
         OfficeLevel.garage => 7,
-        OfficeLevel.smallOffice => 9,
-        OfficeLevel.modernOffice => 11,
-        OfficeLevel.techHub => 12,
-        OfficeLevel.campus => 14,
-        OfficeLevel.galley => 21,
+        OfficeLevel.smallOffice => 10,
+        OfficeLevel.modernOffice => 12,
+        OfficeLevel.techHub => 15,
+        OfficeLevel.campus => 20,
+        OfficeLevel.galley => 54,
       };
 
-  int get baseRows => switch (this) {
-        OfficeLevel.garage => 5,
-        OfficeLevel.smallOffice => 6,
-        OfficeLevel.modernOffice => 7,
-        OfficeLevel.techHub => 9,
-        OfficeLevel.campus => 12,
-        OfficeLevel.galley => 44,
-      };
-
-  /// Ordered expansion steps for this tier. Each step either adds a column
-  /// or a row (usually not both) and costs the given ₲. Steps are bought
-  /// sequentially — you must buy step N before step N+1.
-  List<OfficeExpansion> get expansions => switch (this) {
-        OfficeLevel.garage => const [
-            // base 7×5 inner 5×3=15 → 10×7 inner 8×5=40
-            OfficeExpansion(deltaCols: 1, cost: 80),   // 8×5 → 18
-            OfficeExpansion(deltaCols: 1, cost: 140),  // 9×5 → 21
-            OfficeExpansion(deltaRows: 1, cost: 200),  // 9×6 → 28
-            OfficeExpansion(deltaCols: 1, cost: 280),  // 10×6 → 32
-            OfficeExpansion(deltaRows: 1, cost: 380),  // 10×7 → 40
-          ],
-        OfficeLevel.smallOffice => const [
-            // base 9×6 inner 7×4=28 → 13×10 inner 11×8=88
-            OfficeExpansion(deltaCols: 1, cost: 350),  // 10×6 → 32
-            OfficeExpansion(deltaRows: 1, cost: 500),  // 10×7 → 40
-            OfficeExpansion(deltaCols: 1, cost: 700),  // 11×7 → 45
-            OfficeExpansion(deltaRows: 1, cost: 950),  // 11×8 → 54
-            OfficeExpansion(deltaCols: 1, cost: 1250), // 12×8 → 60
-            OfficeExpansion(deltaRows: 1, cost: 1600), // 12×9 → 70
-            OfficeExpansion(deltaCols: 1, cost: 2000), // 13×9 → 77
-            OfficeExpansion(deltaRows: 1, cost: 2500), // 13×10 → 88
-          ],
-        OfficeLevel.modernOffice => const [
-            // base 11×7 inner 9×5=45 → 16×12 inner 14×10=140
-            OfficeExpansion(deltaCols: 1, cost: 2200), // 12×7 → 50
-            OfficeExpansion(deltaRows: 1, cost: 3000), // 12×8 → 60
-            OfficeExpansion(deltaCols: 1, cost: 4000), // 13×8 → 66
-            OfficeExpansion(deltaRows: 1, cost: 5200), // 13×9 → 77
-            OfficeExpansion(deltaCols: 1, cost: 6800), // 14×9 → 84
-            OfficeExpansion(deltaRows: 1, cost: 8800), // 14×10 → 96
-            OfficeExpansion(deltaCols: 1, cost: 11000),// 15×10 → 104
-            OfficeExpansion(deltaRows: 1, cost: 13500),// 15×11 → 117
-            OfficeExpansion(deltaCols: 1, cost: 16500),// 16×11 → 126
-            OfficeExpansion(deltaRows: 1, cost: 20000),// 16×12 → 140
-          ],
-        OfficeLevel.techHub => const [
-            // base 12×9 inner 10×7=70 → 18×15 inner 16×13=208
-            OfficeExpansion(deltaCols: 1, cost: 12000), // 13×9 → 77
-            OfficeExpansion(deltaRows: 1, cost: 15000), // 13×10 → 88
-            OfficeExpansion(deltaCols: 1, cost: 18500), // 14×10 → 96
-            OfficeExpansion(deltaRows: 1, cost: 23000), // 14×11 → 108
-            OfficeExpansion(deltaCols: 1, cost: 28500), // 15×11 → 117
-            OfficeExpansion(deltaRows: 1, cost: 35000), // 15×12 → 130
-            OfficeExpansion(deltaCols: 1, cost: 43000), // 16×12 → 140
-            OfficeExpansion(deltaRows: 1, cost: 52000), // 16×13 → 154
-            OfficeExpansion(deltaCols: 1, cost: 63000), // 17×13 → 165
-            OfficeExpansion(deltaRows: 1, cost: 76000), // 17×14 → 180
-            OfficeExpansion(deltaCols: 1, cost: 92000), // 18×14 → 192
-            OfficeExpansion(deltaRows: 1, cost: 110000),// 18×15 → 208
-          ],
-        OfficeLevel.campus => const [
-            // base 14×12 inner 12×10=120 → 22×18 inner 20×16=320
-            OfficeExpansion(deltaCols: 1, cost: 90000),
-            OfficeExpansion(deltaRows: 1, cost: 110000),
-            OfficeExpansion(deltaCols: 1, cost: 135000),
-            OfficeExpansion(deltaRows: 1, cost: 165000),
-            OfficeExpansion(deltaCols: 1, cost: 200000),
-            OfficeExpansion(deltaRows: 1, cost: 240000),
-            OfficeExpansion(deltaCols: 1, cost: 285000),
-            OfficeExpansion(deltaRows: 1, cost: 340000),
-            OfficeExpansion(deltaCols: 1, cost: 400000),
-            OfficeExpansion(deltaRows: 1, cost: 470000),
-            OfficeExpansion(deltaCols: 1, cost: 550000),
-            OfficeExpansion(deltaRows: 1, cost: 640000),
-            OfficeExpansion(deltaCols: 1, cost: 740000),
-            OfficeExpansion(deltaRows: 1, cost: 850000),
-            OfficeExpansion(deltaCols: 1, cost: 980000),
-            OfficeExpansion(deltaRows: 1, cost: 1120000),
-          ],
-        OfficeLevel.galley => const [
-            // base 21×44 inner 19×42=798. Galley grows further by length —
-            // expansions stretch the ship rather than fatten it.
-            OfficeExpansion(deltaRows: 2, cost: 18000),
-            OfficeExpansion(deltaRows: 2, cost: 22000),
-            OfficeExpansion(deltaRows: 2, cost: 28000),
-            OfficeExpansion(deltaCols: 1, cost: 36000),
-            OfficeExpansion(deltaRows: 2, cost: 45000),
-            OfficeExpansion(deltaRows: 2, cost: 55000),
-          ],
-      };
-
-  /// Effective grid columns after applying [expansionsBought] steps (clamped
-  /// to `expansions.length`).
-  int effectiveCols(int expansionsBought) {
-    final n = expansionsBought.clamp(0, expansions.length);
-    var cols = baseCols;
-    for (var i = 0; i < n; i++) {
-      cols += expansions[i].deltaCols;
-    }
-    return cols;
-  }
-
-  int effectiveRows(int expansionsBought) {
-    final n = expansionsBought.clamp(0, expansions.length);
-    var rows = baseRows;
-    for (var i = 0; i < n; i++) {
-      rows += expansions[i].deltaRows;
-    }
-    return rows;
-  }
-
-  /// Playable inner tiles at the given expansion count — excludes the
-  /// 1-tile wall border. Used by the UI to show "X / Y клітинок" capacity.
-  int playableTiles(int expansionsBought) =>
-      (effectiveCols(expansionsBought) - 2) *
-      (effectiveRows(expansionsBought) - 2);
-
-  /// How many extra expansion steps (and what cost) are needed to grow the
-  /// playable inner area to at least `neededInnerCols × neededInnerRows`.
-  ///
-  /// Returns a plan even when zero steps are needed (extraSteps == 0). When
-  /// the target exceeds this tier's max expansion capacity, [reachable] is
-  /// false and the caller should treat the ghost as invalid (tooltip:
-  /// "Потрібен Tier Upgrade").
-  PendingExpansionPlan computeExpansionPlan(
-    int currentBought,
-    int neededInnerCols,
-    int neededInnerRows,
-  ) {
-    // Translate inner target → total grid target (inner + 2 walls).
-    final neededTotalCols = neededInnerCols + 2;
-    final neededTotalRows = neededInnerRows + 2;
-
-    final maxBought = expansions.length;
-    var bought = currentBought.clamp(0, maxBought);
-    var cumulativeCost = 0;
-
-    while (effectiveCols(bought) < neededTotalCols ||
-        effectiveRows(bought) < neededTotalRows) {
-      if (bought >= maxBought) {
-        return PendingExpansionPlan(
-          extraSteps: bought - currentBought,
-          totalCost: cumulativeCost,
-          resultCols: effectiveCols(bought),
-          resultRows: effectiveRows(bought),
-          reachable: false,
-        );
-      }
-      cumulativeCost += expansions[bought].cost;
-      bought++;
-    }
-
-    return PendingExpansionPlan(
-      extraSteps: bought - currentBought,
-      totalCost: cumulativeCost,
-      resultCols: effectiveCols(bought),
-      resultRows: effectiveRows(bought),
-      reachable: true,
-    );
-  }
-
-  /// Base/max playable tiles — used for shop labels.
-  int get basePlayableTiles => playableTiles(0);
-  int get maxPlayableTiles => playableTiles(expansions.length);
-
-  /// Legacy grid dims — kept as aliases to base size for any stale readers.
-  int get gridCols => baseCols;
-  int get gridRows => baseRows;
+  /// Playable inner tiles — excludes the 1-tile wall border. Used by the UI to
+  /// show office capacity ("N клітинок").
+  int get playableTiles => (gridCols - 2) * (gridRows - 2);
 
   /// True for tiers that are gated behind "В розробці" — visible in the
   /// upgrade UI but not purchasable yet.
@@ -2366,24 +2201,57 @@ FloorSkinPack? floorSkinPackById(String id) {
 
 // ─── Game state ────────────────────────────────────────────────────────────
 
+/// Migration-only snapshot of the legacy per-tier expansion step costs (the
+/// pre-Stage-4 grid-expansion economy). Kept solely so the v6→v7 migration can
+/// refund a player 100% of what they spent on expansion steps at the current
+/// tier — the live model no longer knows about expansions. Order matches the
+/// old `OfficeLevel.expansions` step order.
+const Map<OfficeLevel, List<int>> _legacyExpansionCostsV6 = {
+  OfficeLevel.garage: [80, 140, 200, 280, 380],
+  OfficeLevel.smallOffice: [350, 500, 700, 950, 1250, 1600, 2000, 2500],
+  OfficeLevel.modernOffice: [
+    2200, 3000, 4000, 5200, 6800, 8800, 11000, 13500, 16500, 20000,
+  ],
+  OfficeLevel.techHub: [
+    12000, 15000, 18500, 23000, 28500, 35000, //
+    43000, 52000, 63000, 76000, 92000, 110000,
+  ],
+  OfficeLevel.campus: [
+    90000, 110000, 135000, 165000, 200000, 240000, 285000, 340000, //
+    400000, 470000, 550000, 640000, 740000, 850000, 980000, 1120000,
+  ],
+  OfficeLevel.galley: [18000, 22000, 28000, 36000, 45000, 55000],
+};
+
+/// Refund owed to a legacy save for `boughtSteps` expansion steps already
+/// purchased at `level` (100% of what was spent — Stage 4 removes the feature
+/// the player invested in, so no haircut).
+int legacyExpansionRefund(OfficeLevel level, int boughtSteps) {
+  final costs = _legacyExpansionCostsV6[level] ?? const [];
+  final n = boughtSteps.clamp(0, costs.length);
+  var total = 0;
+  for (var i = 0; i < n; i++) {
+    total += costs[i];
+  }
+  return total;
+}
+
 class GameState {
   /// Current on-disk schema version. Bump this constant whenever the
   /// serialised shape changes in a breaking way.
   ///
   /// v6 — adds Build System v2: PlacedRoom rotation + per-room skin overrides,
   /// PlacedCorridor list, owned wall/floor skin pack sets.
-  static const int currentSchemaVersion = 6;
+  /// v7 — Stage 4 fixed-tier shells: drops `officeExpansions` (grid is now a
+  /// fixed size per tier); migration collapses old grids into the tier max and
+  /// refunds 100% of expansion spend at the current tier.
+  static const int currentSchemaVersion = 7;
 
   /// The schema version this instance was created with (persisted in JSON).
   final int schemaVersion;
 
   final int grymni;
   final OfficeLevel officeLevel;
-
-  /// Number of grid-expansion steps purchased at the current [officeLevel].
-  /// Reset to 0 on tier upgrade. Clamped at runtime to
-  /// `officeLevel.expansions.length`.
-  final int officeExpansions;
 
   final Map<String, AgentGameData> agents;
   final int totalEarned;
@@ -2467,7 +2335,6 @@ class GameState {
     this.schemaVersion = currentSchemaVersion,
     this.grymni = 500,
     this.officeLevel = OfficeLevel.garage,
-    this.officeExpansions = 0,
     this.agents = const {},
     this.totalEarned = 0,
     this.totalSpent = 0,
@@ -2520,34 +2387,19 @@ class GameState {
   String get displayNickname =>
       applyNicknameDecor(nickname, equippedFor(CosmeticType.nicknameDecor));
 
-  /// Effective grid columns = base + expansions bought at current tier.
-  int get gridCols => officeLevel.effectiveCols(officeExpansions);
+  /// Fixed grid columns for the current tier (Stage 4 — no more expansion).
+  int get gridCols => officeLevel.gridCols;
 
-  /// Effective grid rows = base + expansions bought at current tier.
-  int get gridRows => officeLevel.effectiveRows(officeExpansions);
+  /// Fixed grid rows for the current tier.
+  int get gridRows => officeLevel.gridRows;
 
   /// Currently playable inner tile count.
-  int get playableTiles => officeLevel.playableTiles(officeExpansions);
-
-  /// Max playable tiles if every expansion for this tier is bought.
-  int get maxPlayableTilesAtTier => officeLevel.maxPlayableTiles;
-
-  /// The next expansion step to be bought at the current tier, or null if
-  /// the tier is fully expanded.
-  OfficeExpansion? get nextExpansion {
-    final steps = officeLevel.expansions;
-    return officeExpansions < steps.length ? steps[officeExpansions] : null;
-  }
-
-  /// Whether the current tier is fully expanded (no more steps to buy).
-  bool get isOfficeFullyExpanded =>
-      officeExpansions >= officeLevel.expansions.length;
+  int get playableTiles => officeLevel.playableTiles;
 
   GameState copyWith({
     int? schemaVersion,
     int? grymni,
     OfficeLevel? officeLevel,
-    int? officeExpansions,
     Map<String, AgentGameData>? agents,
     int? totalEarned,
     int? totalSpent,
@@ -2571,7 +2423,6 @@ class GameState {
         schemaVersion: schemaVersion ?? this.schemaVersion,
         grymni: grymni ?? this.grymni,
         officeLevel: officeLevel ?? this.officeLevel,
-        officeExpansions: officeExpansions ?? this.officeExpansions,
         agents: agents ?? this.agents,
         totalEarned: totalEarned ?? this.totalEarned,
         totalSpent: totalSpent ?? this.totalSpent,
@@ -2600,7 +2451,6 @@ class GameState {
         'schemaVersion': schemaVersion,
         'grymni': grymni,
         'officeLevel': officeLevel.index,
-        'officeExpansions': officeExpansions,
         'agents': {
           for (final e in agents.entries) e.key: e.value.toJson(),
         },
@@ -2635,8 +2485,7 @@ class GameState {
 
   factory GameState.fromJson(Map<String, dynamic> json) {
     // Load raw then apply in-flight migrations before the real constructor.
-    var level = OfficeLevel.values[json['officeLevel'] as int? ?? 0];
-    var expansions = json['officeExpansions'] as int? ?? 0;
+    final level = OfficeLevel.values[json['officeLevel'] as int? ?? 0];
     var rooms = [
       for (final r in (json['placedRooms'] as List<dynamic>?) ?? [])
         PlacedRoom.fromJson(r as Map<String, dynamic>),
@@ -2650,15 +2499,23 @@ class GameState {
         PlacedCorridor.fromJson(c as Map<String, dynamic>),
     ];
 
-    // Clamp expansions to the number this tier actually supports.
-    final maxSteps = level.expansions.length;
-    if (expansions < 0) expansions = 0;
-    if (expansions > maxSteps) expansions = maxSteps;
+    // ── v6→v7 migration: fixed-tier shells (Stage 4) ──────────────────────
+    // Pre-v7 saves carry `officeExpansions` (grid-expansion steps bought at the
+    // current tier). The feature is gone; the grid is now a fixed size per
+    // tier equal to the OLD max, so nothing shrinks. Refund 100% of what the
+    // player spent on those steps, exactly once (a v7 save no longer persists
+    // the field, so the branch can't fire twice).
+    final version = json['schemaVersion'] as int? ?? 1;
+    final legacyExpansions = json['officeExpansions'] as int? ?? 0;
+    final expansionRefund = (version < 7 && legacyExpansions > 0)
+        ? legacyExpansionRefund(level, legacyExpansions)
+        : 0;
 
-    // Drop rooms/furniture/corridors that no longer fit in the effective grid
-    // (post migration — e.g. v3 → v4 grids may have shrunk).
-    final gCols = level.effectiveCols(expansions);
-    final gRows = level.effectiveRows(expansions);
+    // Drop rooms/furniture/corridors that fall outside the (fixed) grid — a
+    // no-op for legacy saves since the grid only grew, but keeps a corrupt or
+    // over-large placement from stranding geometry off the board.
+    final gCols = level.gridCols;
+    final gRows = level.gridRows;
     rooms = rooms
         .where((r) =>
             r.col >= 1 &&
@@ -2678,10 +2535,9 @@ class GameState {
         .toList();
 
     return GameState(
-        schemaVersion: json['schemaVersion'] as int? ?? 1,
-        grymni: json['grymni'] as int? ?? 500,
+        schemaVersion: version,
+        grymni: (json['grymni'] as int? ?? 500) + expansionRefund,
         officeLevel: level,
-        officeExpansions: expansions,
         agents: {
           for (final e
               in (json['agents'] as Map<String, dynamic>? ?? {}).entries)
@@ -2755,7 +2611,8 @@ class GameState {
     final json = jsonDecode(source) as Map<String, dynamic>;
     final version = json['schemaVersion'] as int? ?? 1;
     // Accept v2 (empty placedRooms), v3 (no officeExpansions), v4, v5 (no
-    // FacilitatorStyle), and v6 (no corridors / skin packs / room rotation).
+    // FacilitatorStyle), v6 (no corridors / skin packs / room rotation), and
+    // v7 (fixed-tier shells — officeExpansions dropped + refunded).
     // Reject older/unknown.
     if (version < 2 || version > currentSchemaVersion) {
       throw const FormatException('Incompatible game state schema');

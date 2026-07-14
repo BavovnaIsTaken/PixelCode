@@ -31,12 +31,12 @@ void main() {
       expect(state.canvasHeight, lessThan(kCanvasHeight));
     });
 
-    test('garage: 7 cols × 5 rows → 112×80 world-px', () {
+    test('garage fixed lot: 10 cols × 7 rows', () {
       final state = OfficeGameState(level: OfficeLevel.garage);
-      expect(state.gridCols, 7);
-      expect(state.gridRows, 5);
-      expect(state.canvasWidth, 7 * kTileSize);
-      expect(state.canvasHeight, 5 * kTileSize);
+      expect(state.gridCols, 10);
+      expect(state.gridRows, 7);
+      expect(state.canvasWidth, 10 * kTileSize);
+      expect(state.canvasHeight, 7 * kTileSize);
     });
 
     test('smallOffice canvas is larger than garage', () {

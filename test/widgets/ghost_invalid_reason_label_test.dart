@@ -29,20 +29,10 @@ void main() {
       );
     });
 
-    test('tierCeiling label tells the player to upgrade', () {
-      // The actionable detail — without this hint the player thinks the editor
-      // is broken when they hit the tier cap; the only fix is buying a tier
-      // upgrade in the shop, which has no surface from inside Build Mode.
+    test('atCap → ліміт таких кімнат', () {
       expect(
-        ghostInvalidReasonLabel(GhostInvalidReason.tierCeiling),
-        'потрібен апгрейд офісу',
-      );
-    });
-
-    test('bufferOverrun label tells the player to drag closer', () {
-      expect(
-        ghostInvalidReasonLabel(GhostInvalidReason.bufferOverrun),
-        'занадто далеко — підсуньте ближче',
+        ghostInvalidReasonLabel(GhostInvalidReason.atCap),
+        'ліміт таких кімнат',
       );
     });
 

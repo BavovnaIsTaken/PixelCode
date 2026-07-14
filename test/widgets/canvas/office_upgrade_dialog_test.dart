@@ -140,35 +140,6 @@ void main() {
     await _teardown(tester, container);
   });
 
-  testWidgets('expansion chip charges cost and increments expansion counter',
-      (tester) async {
-    final firstStepCost = OfficeLevel.garage.expansions.first.cost;
-    final container = await _makeContainer(
-      seed: GameState(
-        officeLevel: OfficeLevel.garage,
-        // Plenty for one expansion, not enough to also upgrade.
-        grymni: firstStepCost * 2,
-      ),
-    );
-    await _pumpDialog(tester, container);
-
-    expect(container.read(gameEconomyProvider).officeExpansions, 0);
-
-    // The expansion chip label is "+ <formatted>₲"
-    final chipFinder = find.textContaining(RegExp(r'^\+ '));
-    expect(chipFinder, findsWidgets);
-    await tester.tap(chipFinder.first);
-    await tester.pumpAndSettle();
-
-    expect(container.read(gameEconomyProvider).officeExpansions, 1);
-    expect(
-      container.read(gameEconomyProvider).grymni,
-      (firstStepCost * 2) - firstStepCost,
-    );
-
-    await _teardown(tester, container);
-  });
-
   testWidgets('dismiss button closes the dialog (negative path)',
       (tester) async {
     final container = await _makeContainer();

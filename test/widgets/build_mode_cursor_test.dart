@@ -11,7 +11,6 @@ void main() {
           buildActive: false,
           hasGhost: false,
           ghostValid: false,
-          ghostPendingExpand: false,
           isGrabbing: false,
         ),
         MouseCursor.defer,
@@ -24,7 +23,6 @@ void main() {
           buildActive: true,
           hasGhost: false,
           ghostValid: false,
-          ghostPendingExpand: false,
           isGrabbing: false,
         ),
         SystemMouseCursors.grab,
@@ -37,7 +35,6 @@ void main() {
           buildActive: true,
           hasGhost: false,
           ghostValid: false,
-          ghostPendingExpand: false,
           isGrabbing: true,
         ),
         SystemMouseCursors.grabbing,
@@ -50,33 +47,18 @@ void main() {
           buildActive: true,
           hasGhost: true,
           ghostValid: true,
-          ghostPendingExpand: false,
           isGrabbing: false,
         ),
         SystemMouseCursors.cell,
       );
     });
 
-    test('cell when ghost lives in foundation buffer (pendingExpand)', () {
+    test('forbidden when ghost overlaps or fails a bounds/cap guard', () {
       expect(
         buildModeCursor(
           buildActive: true,
           hasGhost: true,
           ghostValid: false,
-          ghostPendingExpand: true,
-          isGrabbing: false,
-        ),
-        SystemMouseCursors.cell,
-      );
-    });
-
-    test('forbidden when ghost overlaps or fails tier guard', () {
-      expect(
-        buildModeCursor(
-          buildActive: true,
-          hasGhost: true,
-          ghostValid: false,
-          ghostPendingExpand: false,
           isGrabbing: false,
         ),
         SystemMouseCursors.forbidden,
@@ -92,7 +74,6 @@ void main() {
           buildActive: true,
           hasGhost: true,
           ghostValid: true,
-          ghostPendingExpand: false,
           isGrabbing: true,
         ),
         SystemMouseCursors.cell,

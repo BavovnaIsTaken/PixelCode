@@ -36,9 +36,10 @@ void main() {
 
     test('zero corridors: border tiles are walls, inner tiles are floors', () {
       final state = OfficeGameState();
-      // Corners / borders stay walls.
+      // Corners / borders stay walls. Garage fixed lot is 10×7, so the
+      // bottom-right wall is at [6][9].
       expect(state.tileMap[0][0], TileType.wall);
-      expect(state.tileMap[4][6], TileType.wall);
+      expect(state.tileMap[6][9], TileType.wall);
       expect(state.tileMap[0][3], TileType.wall);
       // Centre inner tile is floor.
       expect(state.tileMap[2][3], TileType.floor);

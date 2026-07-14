@@ -64,7 +64,7 @@ void main() {
     test('rebuildLayout is forwarded to the underlying game state', () {
       final svc = OfficeSimulationService(autoStart: false);
       final beforeCols = svc.gameState.gridCols;
-      svc.rebuildLayout(OfficeLevel.smallOffice, 0, const [], const [], const []);
+      svc.rebuildLayout(OfficeLevel.smallOffice, const [], const [], const []);
       // smallOffice has different inner cols than garage default.
       expect(svc.gameState.gridCols, isNot(beforeCols));
       svc.dispose();

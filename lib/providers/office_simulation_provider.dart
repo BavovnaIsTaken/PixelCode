@@ -45,25 +45,21 @@ final officeSimulationProvider = Provider<OfficeSimulationService>((ref) {
   // actually changes — rebuilding is O(rows * cols) and clears wandering
   // state.
   OfficeLevel? lastLevel;
-  int lastExpansions = -1;
   List<PlacedRoom>? lastRooms;
   List<FurniturePlacement>? lastFurniture;
   List<PlacedCorridor>? lastCorridors;
 
   void onEconomy(GameState econ) {
     if (lastLevel != econ.officeLevel ||
-        lastExpansions != econ.officeExpansions ||
         !identical(lastRooms, econ.placedRooms) ||
         !identical(lastFurniture, econ.placedFurniture) ||
         !identical(lastCorridors, econ.placedCorridors)) {
       lastLevel = econ.officeLevel;
-      lastExpansions = econ.officeExpansions;
       lastRooms = econ.placedRooms;
       lastFurniture = econ.placedFurniture;
       lastCorridors = econ.placedCorridors;
       service.rebuildLayout(
         econ.officeLevel,
-        econ.officeExpansions,
         econ.placedRooms,
         econ.placedFurniture,
         econ.placedCorridors,

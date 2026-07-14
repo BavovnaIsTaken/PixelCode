@@ -950,16 +950,7 @@ class _OfficeTab extends ConsumerWidget {
             onUpgrade: () => level.isParallelOption
                 ? notifier.switchToOffice(level)
                 : notifier.upgradeOffice(),
-            currentExpansions:
-                game.officeLevel == level ? game.officeExpansions : 0,
-            nextExpansion:
-                game.officeLevel == level ? game.nextExpansion : null,
-            canBuyExpansion: game.officeLevel == level &&
-                notifier.canBuyOfficeExpansion(),
-            onBuyExpansion: () => notifier.buyOfficeExpansion(),
-            playableTiles: game.officeLevel == level
-                ? game.playableTiles
-                : level.basePlayableTiles,
+            playableTiles: level.playableTiles,
           ),
       ],
     );
@@ -974,16 +965,7 @@ class _OfficeLevelCard extends StatelessWidget {
   final bool canUpgrade;
   final VoidCallback onUpgrade;
 
-  /// Expansions bought at THIS level (zero for non-current tiers).
-  final int currentExpansions;
-
-  /// The next expansion step to be bought, or null if tier is maxed / not current.
-  final OfficeExpansion? nextExpansion;
-
-  final bool canBuyExpansion;
-  final VoidCallback onBuyExpansion;
-
-  /// Tiles available right now (effective for current; base for others).
+  /// Playable inner tiles for this tier's fixed lot.
   final int playableTiles;
 
   const _OfficeLevelCard({
@@ -993,10 +975,6 @@ class _OfficeLevelCard extends StatelessWidget {
     required this.isNext,
     required this.canUpgrade,
     required this.onUpgrade,
-    this.currentExpansions = 0,
-    this.nextExpansion,
-    this.canBuyExpansion = false,
-    required this.onBuyExpansion,
     required this.playableTiles,
   });
 
@@ -1082,18 +1060,10 @@ class _OfficeLevelCard extends StatelessWidget {
                     const SizedBox(width: 10),
                     _MiniStat(
                       icon: '📐',
-                      label:
-                          '$playableTiles / ${level.maxPlayableTiles} кліт.',
+                      label: '$playableTiles кліт.',
                     ),
                   ],
                 ),
-                if (isCurrent && level.expansions.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  _ExpansionProgress(
-                    bought: currentExpansions,
-                    total: level.expansions.length,
-                  ),
-                ],
               ],
             ),
           ),
@@ -1104,68 +1074,11 @@ class _OfficeLevelCard extends StatelessWidget {
                   canUpgrade ? _gold : Colors.white.withValues(alpha: 0.15),
               onTap: canUpgrade ? onUpgrade : null,
             )
-          else if (isCurrent && nextExpansion != null)
-            _ActionButton(
-              label: '+ ${_formatNumber(nextExpansion!.cost)}₲',
-              color: canBuyExpansion
-                  ? _green
-                  : Colors.white.withValues(alpha: 0.15),
-              onTap: canBuyExpansion ? onBuyExpansion : null,
-            )
           else if (isUnlocked && !isCurrent)
             Icon(Icons.check_circle,
                 size: 18, color: _green.withValues(alpha: 0.5)),
         ],
       ),
-    );
-  }
-}
-
-/// Segmented progress bar — one filled pip per bought expansion step,
-/// remaining pips dimmed. Purely visual; tap-to-buy happens via the card's
-/// action button so the whole row stays a single target.
-class _ExpansionProgress extends StatelessWidget {
-  final int bought;
-  final int total;
-
-  const _ExpansionProgress({required this.bought, required this.total});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          'Розширення',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.4),
-            fontSize: 9,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(width: 6),
-        for (int i = 0; i < total; i++)
-          Padding(
-            padding: const EdgeInsets.only(right: 2),
-            child: Container(
-              width: 10,
-              height: 4,
-              decoration: BoxDecoration(
-                color: i < bought
-                    ? _green.withValues(alpha: 0.8)
-                    : Colors.white.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-        const SizedBox(width: 4),
-        Text(
-          '$bought / $total',
-          style: TextStyle(
-            color: Colors.white.withValues(alpha: 0.5),
-            fontSize: 9,
-          ),
-        ),
-      ],
     );
   }
 }

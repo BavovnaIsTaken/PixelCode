@@ -442,12 +442,11 @@ class OfficeGameState {
 
   OfficeGameState({
     OfficeLevel level = OfficeLevel.garage,
-    int expansions = 0,
     List<PlacedRoom> placedRooms = const [],
     List<FurniturePlacement> placedFurniture = const [],
     List<PlacedCorridor> placedCorridors = const [],
-  })  : _gridCols = level.effectiveCols(expansions),
-        _gridRows = level.effectiveRows(expansions),
+  })  : _gridCols = level.gridCols,
+        _gridRows = level.gridRows,
         _placedRooms = placedRooms,
         _placedFurniture = placedFurniture,
         _placedCorridors = placedCorridors {
@@ -592,13 +591,12 @@ class OfficeGameState {
   /// bounds will pathfind to valid tiles on their next update tick.
   void rebuildLayout(
     OfficeLevel newLevel,
-    int newExpansions,
     List<PlacedRoom> newRooms, [
     List<FurniturePlacement> newFurniture = const [],
     List<PlacedCorridor> newCorridors = const [],
   ]) {
-    _gridCols = newLevel.effectiveCols(newExpansions);
-    _gridRows = newLevel.effectiveRows(newExpansions);
+    _gridCols = newLevel.gridCols;
+    _gridRows = newLevel.gridRows;
     _placedRooms = newRooms;
     _placedFurniture = newFurniture;
     _placedCorridors = newCorridors;
