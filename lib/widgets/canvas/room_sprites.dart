@@ -17,6 +17,7 @@ void drawRoom(
   RoomTheme theme,
   int tick, {
   bool showWorkstationFurniture = true,
+  bool workstationOccupied = false,
   List<PlacedRoom> neighborRooms = const [],
   List<PlacedCorridor> neighborCorridors = const [],
 }) {
@@ -25,25 +26,33 @@ void drawRoom(
   final w = room.footprintWidth * kTileSize;
   final h = room.footprintHeight * kTileSize;
 
-  // Shared background fill — slightly distinct from floor to delineate the area.
-  final bg = Paint()
-    ..style = PaintingStyle.fill
-    ..color = theme.floorDark.withValues(alpha: 0.5);
-  canvas.drawRect(Rect.fromLTWH(x, y, w, h), bg);
+  // Workstation is "just a desk and a chair" — no floor tint, no walls/border;
+  // it sits directly on the office floor. Every other room gets its delineated
+  // floor + door-aware border.
+  if (room.type != RoomType.workstation) {
+    // Shared background fill — slightly distinct from floor to delineate the area.
+    final bg = Paint()
+      ..style = PaintingStyle.fill
+      ..color = theme.floorDark.withValues(alpha: 0.5);
+    canvas.drawRect(Rect.fromLTWH(x, y, w, h), bg);
 
-  // Thin border drawn per-edge-tile so we can leave gaps (doors) where the
-  // room shares an edge with another room or a corridor. The gap auto-forms
-  // from geometry — no separate "door" data model needed for MVP.
-  final doors = computeRoomDoors(room, neighborRooms, neighborCorridors);
-  final borderPaint = Paint()
-    ..color = theme.wallBase.withValues(alpha: 0.4)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 0.8;
-  _drawRoomBorder(canvas, room, borderPaint, doors);
+    // Thin border drawn per-edge-tile so we can leave gaps (doors) where the
+    // room shares an edge with another room or a corridor. The gap auto-forms
+    // from geometry — no separate "door" data model needed for MVP.
+    final doors = computeRoomDoors(room, neighborRooms, neighborCorridors);
+    final borderPaint = Paint()
+      ..color = theme.wallBase.withValues(alpha: 0.4)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8;
+    _drawRoomBorder(canvas, room, borderPaint, doors);
+  }
 
   switch (room.type) {
     case RoomType.workstation:
-      _drawWorkstation(canvas, x, y, withFurniture: showWorkstationFurniture);
+      // Empty workstation shows the desk+monitor+chair; an OCCUPIED one is
+      // drawn by the agent's station (_addStationFurniture) so it isn't
+      // doubled. Both use the same drawWorkstation() so they look identical.
+      if (!workstationOccupied) drawWorkstation(canvas, x, y, theme);
     case RoomType.breakRoom:
       _drawBreakRoom(canvas, x, y);
     case RoomType.meetingRoom:
@@ -71,52 +80,75 @@ void drawRoom(
 
 // ─── Workstation (2×2) ──────────────────────────────────────────────────────
 
-void _drawWorkstation(
-  Canvas canvas,
-  double x,
-  double y, {
-  bool withFurniture = true,
-}) {
+Color _deskHighlight(RoomTheme t) => Color.lerp(t.deskSurface, t.wallTop, 0.35)!;
+Color _deskEdgeHighlight(RoomTheme t) =>
+    Color.lerp(t.deskEdge, t.deskSurface, 0.25)!;
+
+/// The workstation prop — desk + monitor (top tile) + chair (bottom tile),
+/// drawn directly on the office floor (NO floor fill / border). Shared by an
+/// empty workstation ROOM and an agent's STATION so they look identical and an
+/// agent can sit at it. [active] brightens the monitor (agent working).
+/// Origin (x, y) is the top-left of the 2-tile-tall footprint.
+void drawWorkstation(Canvas canvas, double x, double y, RoomTheme theme,
+    {bool active = false}) {
   final p = Paint()..style = PaintingStyle.fill;
 
-  // Carpet tint.
-  p.color = const Color(0xFF2A3A5C).withValues(alpha: 0.35);
-  canvas.drawRect(
-      Rect.fromLTWH(x + 1, y + 1, kTileSize * 2 - 2, kTileSize * 2 - 2), p);
+  // ── Monitor (top of the back tile) ──
+  p.color = const Color(0xFF1A1C20); // frame
+  canvas.drawRect(Rect.fromLTWH(x + 11, y + 3, 10, 8), p);
+  p.color = theme.accentColor.withValues(alpha: active ? 0.90 : 0.45); // screen
+  canvas.drawRect(Rect.fromLTWH(x + 12, y + 4, 8, 5), p);
+  p.color = const Color(0xFFFFFFFF).withValues(alpha: 0.22); // top specular
+  canvas.drawRect(Rect.fromLTWH(x + 12, y + 4, 8, 1), p);
+  if (active) {
+    p.color = const Color(0xFFFFFFFF).withValues(alpha: 0.30);
+    canvas.drawRect(Rect.fromLTWH(x + 14, y + 5, 5, 1), p); // code line 1
+    p.color = const Color(0xFFFFFFFF).withValues(alpha: 0.20);
+    canvas.drawRect(Rect.fromLTWH(x + 13, y + 6, 4, 1), p); // code line 2
+    p.color = const Color(0xFFFFFFFF).withValues(alpha: 0.55);
+    canvas.drawRect(Rect.fromLTWH(x + 13, y + 7, 1, 1), p); // cursor
+  }
+  p.color = const Color(0xFF111418); // bezel below screen
+  canvas.drawRect(Rect.fromLTWH(x + 11, y + 9, 10, 1), p);
+  p.color = const Color(0xFF1A1C20); // stand neck
+  canvas.drawRect(Rect.fromLTWH(x + 15, y + 10, 2, 2), p);
+  p.color = const Color(0xFF111418); // stand base
+  canvas.drawRect(Rect.fromLTWH(x + 14, y + 11, 4, 1), p);
 
-  if (!withFurniture) return;
+  // ── Desk ──
+  p.color = _deskHighlight(theme); // top-lit highlight
+  canvas.drawRect(Rect.fromLTWH(x + 1, y + 11, 30, 1), p);
+  p.color = theme.deskSurface; // surface
+  canvas.drawRect(Rect.fromLTWH(x + 1, y + 12, 30, 3), p);
+  p.color = _deskEdgeHighlight(theme); // front-edge highlight
+  canvas.drawRect(Rect.fromLTWH(x + 1, y + 15, 30, 1), p);
+  p.color = theme.deskEdge; // front edge
+  canvas.drawRect(Rect.fromLTWH(x + 1, y + 16, 30, 2), p);
+  p.color = theme.wallInner.withValues(alpha: 0.55); // AO under desk
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 18, 28, 1), p);
+  p.color = theme.deskEdge.withValues(alpha: 0.80); // legs
+  canvas.drawRect(Rect.fromLTWH(x + 2, y + 19, 2, 2), p);
+  canvas.drawRect(Rect.fromLTWH(x + 28, y + 19, 2, 2), p);
 
-  // Desk along the top tile (2 tiles wide).
-  final deskLeft = x + 3;
-  final deskTop = y + kTileSize * 0.45;
-  final deskW = kTileSize * 2 - 6;
-  const deskH = 7.0;
-  p.color = const Color(0xFF6B4F2A);
-  canvas.drawRect(Rect.fromLTWH(deskLeft, deskTop, deskW, deskH), p);
-  p.color = const Color(0xFF8B6A3A);
-  canvas.drawRect(Rect.fromLTWH(deskLeft + 1, deskTop + 1, deskW - 2, 1), p);
+  // Screen glow spilling onto the desk when the agent is working.
+  if (active) {
+    p.color = theme.accentColor.withValues(alpha: 0.10);
+    canvas.drawRect(Rect.fromLTWH(x + 8, y + 11, 16, 3), p);
+  }
 
-  // Monitor on the desk.
-  final monW = 9.0;
-  final monH = 6.0;
-  final monX = deskLeft + (deskW - monW) / 2;
-  final monY = deskTop - monH + 1;
-  p.color = const Color(0xFF111418);
-  canvas.drawRect(Rect.fromLTWH(monX, monY, monW, monH), p);
-  p.color = const Color(0xFF4AE0B5);
-  canvas.drawRect(Rect.fromLTWH(monX + 1, monY + 1, monW - 2, monH - 3), p);
-  p.color = const Color(0xFF1E1E24);
-  canvas.drawRect(Rect.fromLTWH(monX + monW / 2 - 1, monY + monH, 2, 1), p);
-
-  // Chair below the desk.
-  final chairW = 8.0;
-  final chairH = 7.0;
-  final chairX = x + kTileSize - chairW / 2;
-  final chairY = deskTop + deskH + 3;
-  p.color = const Color(0xFF2A2A3C);
-  canvas.drawRect(Rect.fromLTWH(chairX, chairY, chairW, chairH), p);
-  p.color = const Color(0xFF3C3C52);
-  canvas.drawRect(Rect.fromLTWH(chairX + 1, chairY + 1, chairW - 2, 2), p);
+  // ── Chair (bottom tile; the agent sits in front of it) ──
+  p.color = _deskHighlight(theme); // back top
+  canvas.drawRect(Rect.fromLTWH(x + 8, y + 20, 16, 1), p);
+  p.color = theme.deskEdge; // back body
+  canvas.drawRect(Rect.fromLTWH(x + 8, y + 21, 16, 4), p);
+  p.color = theme.wallInner.withValues(alpha: 0.45); // back shadow
+  canvas.drawRect(Rect.fromLTWH(x + 8, y + 24, 16, 1), p);
+  p.color = _deskHighlight(theme); // seat top
+  canvas.drawRect(Rect.fromLTWH(x + 9, y + 25, 14, 1), p);
+  p.color = theme.deskSurface.withValues(alpha: 0.70); // seat body
+  canvas.drawRect(Rect.fromLTWH(x + 9, y + 26, 14, 3), p);
+  p.color = theme.wallInner.withValues(alpha: 0.40); // seat AO
+  canvas.drawRect(Rect.fromLTWH(x + 10, y + 29, 12, 1), p);
 }
 
 // ─── Open Space (5×4) ───────────────────────────────────────────────────────

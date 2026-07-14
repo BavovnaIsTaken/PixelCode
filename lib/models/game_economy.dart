@@ -1276,6 +1276,7 @@ CosmeticItem? cosmeticById(String id) {
 // ─── Furniture system ────────────────────────────────────────────────────
 
 enum FurnitureType {
+  desk,
   coffeeTable,
   snackTable,
   decoration,
@@ -1285,6 +1286,7 @@ enum FurnitureType {
 
 extension FurnitureTypeExt on FurnitureType {
   String get label => switch (this) {
+        FurnitureType.desk => 'Робочі столи',
         FurnitureType.coffeeTable => 'Кавові столики',
         FurnitureType.snackTable => 'Столики з їжею',
         FurnitureType.decoration => 'Декор',
@@ -1293,6 +1295,7 @@ extension FurnitureTypeExt on FurnitureType {
       };
 
   String get icon => switch (this) {
+        FurnitureType.desk => '💻',
         FurnitureType.coffeeTable => '☕',
         FurnitureType.snackTable => '🍪',
         FurnitureType.decoration => '🌿',
@@ -1355,7 +1358,7 @@ const furnitureCatalog = <FurnitureItem>[
   // them.
   FurnitureItem(
     id: 'old_desk',
-    type: FurnitureType.coffeeTable,
+    type: FurnitureType.desk,
     name: 'Пошарпаний стіл',
     cost: 0,
     description: 'Хитається, але тримає ноутбук. З чогось треба починати.',
@@ -1373,6 +1376,17 @@ const furnitureCatalog = <FurnitureItem>[
     name: 'Коробки',
     cost: 0,
     description: 'Стопка картонних коробок. Щось у них напевно є.',
+  ),
+
+  // ── Робочі столи ──
+  // The standard workstation desk — the same desk-with-monitor that spawns
+  // under each hired agent, now buyable so the player can place spare ones.
+  FurnitureItem(
+    id: 'desk_workstation',
+    type: FurnitureType.desk,
+    name: 'Робочий стіл',
+    cost: 250,
+    description: 'Стандартний робочий стіл з монітором — такий самий, як у твоїх агентів.',
   ),
 
   // ── Кавові столики ──
@@ -2429,6 +2443,13 @@ class GameState {
   /// IDs of purchased floor skin packs (Build System v2). v6+.
   final Set<String> ownedFloorSkinPacks;
 
+  /// Player-defined slot order for the grid Inventory view. Each element is an
+  /// item id (furniture id or wall/floor skin-pack id); the list index is the
+  /// slot and `''` marks an explicitly empty slot. Trailing empties are
+  /// trimmed on save and re-padded for display. Empty/absent → the grid falls
+  /// back to catalog order.
+  final List<String> inventoryOrder;
+
   /// Board task IDs whose server-rolled outcome has already been folded into
   /// this client's economy (XP / specialization counter / crit gold). Used by
   /// [TaskOutcomeReflectorNotifier] for idempotency across reconnects and
@@ -2462,6 +2483,7 @@ class GameState {
     this.placedCorridors = const [],
     this.ownedWallSkinPacks = const {},
     this.ownedFloorSkinPacks = const {},
+    this.inventoryOrder = const [],
     this.rewardedTaskIds = const {},
     this.updatedAt = 0,
   });
@@ -2541,6 +2563,7 @@ class GameState {
     List<PlacedCorridor>? placedCorridors,
     Set<String>? ownedWallSkinPacks,
     Set<String>? ownedFloorSkinPacks,
+    List<String>? inventoryOrder,
     Set<String>? rewardedTaskIds,
     int? updatedAt,
   }) =>
@@ -2564,6 +2587,7 @@ class GameState {
         placedCorridors: placedCorridors ?? this.placedCorridors,
         ownedWallSkinPacks: ownedWallSkinPacks ?? this.ownedWallSkinPacks,
         ownedFloorSkinPacks: ownedFloorSkinPacks ?? this.ownedFloorSkinPacks,
+        inventoryOrder: inventoryOrder ?? this.inventoryOrder,
         rewardedTaskIds: rewardedTaskIds ?? this.rewardedTaskIds,
         updatedAt: updatedAt ?? this.updatedAt,
       );
@@ -2603,6 +2627,7 @@ class GameState {
         ],
         'ownedWallSkinPacks': ownedWallSkinPacks.toList(),
         'ownedFloorSkinPacks': ownedFloorSkinPacks.toList(),
+        if (inventoryOrder.isNotEmpty) 'inventoryOrder': inventoryOrder,
         if (rewardedTaskIds.isNotEmpty)
           'rewardedTaskIds': rewardedTaskIds.toList(),
         'updatedAt': updatedAt,
@@ -2707,6 +2732,10 @@ class GameState {
               in (json['ownedFloorSkinPacks'] as List<dynamic>?) ?? [])
             id as String,
         },
+        inventoryOrder: [
+          for (final id in (json['inventoryOrder'] as List<dynamic>?) ?? [])
+            id as String,
+        ],
         rewardedTaskIds: {
           for (final id
               in (json['rewardedTaskIds'] as List<dynamic>?) ?? [])

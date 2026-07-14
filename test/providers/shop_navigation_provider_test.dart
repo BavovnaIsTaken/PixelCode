@@ -39,6 +39,28 @@ void main() {
     });
   });
 
+  group('officeDeepLinkProvider', () {
+    test('starts as null (no pending navigation to Office)', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      expect(container.read(officeDeepLinkProvider), isNull);
+    });
+
+    test('can be bumped to a non-null nonce and reset back to null', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      // The Inventory "Місце" action bumps a monotonic nonce; the hub
+      // listens, navigates to Office, then resets to null.
+      final next = (container.read(officeDeepLinkProvider) ?? 0) + 1;
+      container.read(officeDeepLinkProvider.notifier).state = next;
+      expect(container.read(officeDeepLinkProvider), 1);
+
+      container.read(officeDeepLinkProvider.notifier).state = null;
+      expect(container.read(officeDeepLinkProvider), isNull);
+    });
+  });
+
   group('selectedFurnitureIdProvider', () {
     test('starts as null (no furniture selected)', () {
       final container = ProviderContainer();

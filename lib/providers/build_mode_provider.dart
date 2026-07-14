@@ -220,13 +220,16 @@ class BuildModeNotifier extends Notifier<BuildModeState> {
   }
 
   /// Drop the active room/template pick (e.g. when entering Edit mode,
-  /// where the player is removing rooms instead of placing them).
+  /// where the player is removing rooms instead of placing them). Also clears
+  /// any half-drawn corridor anchor so Esc / Cancel reliably resets every
+  /// transient placement state and the player can never get stuck mid-draw.
   void clearSelection() {
     state = state.copyWith(
         clearSelectedRoom: true,
         clearTemplate: true,
         clearPlacedRoom: true,
         clearGhost: true,
+        clearCorridorAnchor: true,
         resetRotation: true);
   }
 }

@@ -176,6 +176,19 @@ const _oldDesk = [
   '........',
 ];
 
+const _deskWorkstation = [
+  '........',
+  '..mmmm..',
+  '..mGGm..',
+  '..mggm..',
+  '...mm...',
+  'kkkkkkkk',
+  'dddddddd',
+  'dddddddd',
+  'kk....kk',
+  '.k....k.',
+];
+
 const _stool = [
   '........',
   '........',
@@ -306,6 +319,7 @@ const furnitureSpriteMap = <String, List<String>>{
   'coffee_table_premium': _coffeeTablePremium,
   'coffee_table_designer': _coffeeTableDesigner,
   'old_desk': _oldDesk,
+  'desk_workstation': _deskWorkstation,
   'stool': _stool,
   'cardboard_boxes': _cardboardBoxesFixed,
   'snack_table_basic': _snackTableBasic,

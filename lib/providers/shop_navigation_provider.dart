@@ -39,6 +39,12 @@ const shopTabDonation = 5;
 /// and then reset this back to null.
 final shopDeepLinkProvider = StateProvider<int?>((ref) => null);
 
+/// Bumped (monotonically) whenever something asks the hub to switch to the
+/// Office/canvas view — e.g. the Inventory tab's "Місце" action, which hands
+/// the player to the canvas with a furniture item already in hand. Consumers
+/// listen for a change, navigate to Office, then reset back to null.
+final officeDeepLinkProvider = StateProvider<int?>((ref) => null);
+
 /// The furniture item ID currently selected for placement from inventory
 /// (null = none).
 final selectedFurnitureIdProvider = StateProvider<String?>((ref) => null);
