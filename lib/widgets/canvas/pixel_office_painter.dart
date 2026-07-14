@@ -19,7 +19,6 @@ import 'character_accessories.dart';
 import 'character_skins.dart';
 import 'room_sprites.dart';
 import 'character_sprites.dart';
-import 'computer_sprites.dart';
 import 'galley_sprites.dart';
 import 'office_game_state.dart';
 import 'pixel_sprites.dart';
@@ -148,11 +147,23 @@ class PixelOfficePainter extends CustomPainter {
   /// a hover.
   final bool bufferHoverPressed;
 
+  /// Whether to actually PAINT the foundation-buffer lot. The buffer area is
+  /// always reserved in the canvas fit (stable layout), but the amber lot
+  /// markers + price only appear while the player is positioning a room at the
+  /// edge (or hovering the lot) — so idle build mode isn't littered with
+  /// mystery gold tiles.
+  final bool showFoundationBuffer;
+
   /// Adjacency bonus label rendered over the ghost (e.g. "+5%" or "−5%").
   /// Null when there is no adjacency effect for the current ghost position.
   final String? adjacencyLabel;
 
   final List<PlacedCorridor> placedCorridors;
+
+  /// Free auto-connect corridor preview for the active room ghost — the exact
+  /// path that gets built on commit (computed once in the widget). Drawn in
+  /// gold so the player sees the connection they're about to get.
+  final List<({int col, int row})> connectingCorridorTiles;
 
   /// First tile of a corridor being drawn — null when no corridor is in-flight.
   final int? corridorAnchorCol;
@@ -201,8 +212,10 @@ class PixelOfficePainter extends CustomPainter {
     this.bufferHoverAlpha = 0.0,
     this.bufferHoverAffordable = true,
     this.bufferHoverPressed = false,
+    this.showFoundationBuffer = true,
     this.adjacencyLabel,
     this.placedCorridors = const [],
+    this.connectingCorridorTiles = const [],
     this.corridorAnchorCol,
     this.corridorAnchorRow,
     this.agentSpecializations = const {},
@@ -238,10 +251,15 @@ class PixelOfficePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Guard a degenerate startup-layout frame: a zero/non-finite size makes
+    // `scale` 0, and `canvas.scale(0)` collapses the whole office to a single
+    // point — a blank frame. Skip until we have a real size to draw into.
+    if (size.width <= 0 || size.height <= 0) return;
     final scale = math.min(
       size.width / effectiveCanvasWidth,
       size.height / effectiveCanvasHeight,
     );
+    if (!scale.isFinite || scale <= 0) return;
     final offsetX = (size.width - effectiveCanvasWidth * scale) / 2;
     final offsetY = (size.height - effectiveCanvasHeight * scale) / 2;
 
@@ -617,92 +635,14 @@ class PixelOfficePainter extends CustomPainter {
     final deskTileX = station.deskCol * kTileSize;
     final deskTileY = station.deskRow * kTileSize;
     final deskZY = (station.deskRow + 1) * kTileSize.toDouble();
-    final theme = _theme;
 
-    // ── Desk surface (programmatic or PNG) ──
-    final deskImg = sprites?.furniture('DESK_FRONT');
-    if (_hasImages && deskImg != null) {
-      final dw = 48.0;
-      final dh = 32.0;
-      final dx = deskTileX + kTileSize / 2 - dw / 2;
-      final dy = deskTileY + kTileSize * 2 - dh;
-      drawables.add(_Drawable(deskZY, (c) {
-        c.drawImageRect(
-          deskImg,
-          Rect.fromLTWH(0, 0, deskImg.width.toDouble(), deskImg.height.toDouble()),
-          Rect.fromLTWH(dx, dy, dw, dh),
-          _pixelPaint,
-        );
-      }));
-    } else {
-      // Fallback: colored rectangle using theme desk colors
-      drawables.add(_Drawable(deskZY, (c) {
-        final p = Paint()..style = PaintingStyle.fill;
-        p.color = theme.deskSurface;
-        c.drawRect(Rect.fromLTWH(deskTileX + 1, deskTileY + 10, 14, 5), p);
-        p.color = theme.deskEdge;
-        c.drawRect(Rect.fromLTWH(deskTileX + 1, deskTileY + 15, 14, 1), p);
-      }));
-    }
-
-    // ── PC / Monitor ──
-    // Determine computer type from agent's hardware tier
-    final compType = computerForHardware(ch.hardware);
-
-    final pcName = isActive
-        ? 'PC_FRONT_ON_${(tick % 3) + 1}'
-        : 'PC_FRONT_OFF';
-    final pcImg = sprites?.furniture(pcName);
-    if (_hasImages && pcImg != null) {
-      final px = deskTileX.toDouble();
-      final py = deskTileY - kTileSize;
-      drawables.add(_Drawable(deskZY + 0.5, (c) {
-        c.drawImageRect(
-          pcImg,
-          Rect.fromLTWH(0, 0, pcImg.width.toDouble(), pcImg.height.toDouble()),
-          Rect.fromLTWH(px, py, kSpriteW.toDouble(), kSpriteH.toDouble()),
-          _pixelPaint,
-        );
-      }));
-    } else {
-      // Fallback: text sprite monitor from computer type
-      final frame = isActive
-          ? (tick % 2 == 0 ? compType.monitorOn0 : compType.monitorOn1)
-          : compType.monitorOff;
-      drawables.add(_Drawable(deskZY + 0.5, (c) {
-        drawSprite(c, frame, deskTileX + 4, deskTileY + 4, 1.0,
-            (k) => compType.resolveKey(k, active: isActive));
-      }));
-    }
-
-    // ── Monitor glow on desk ──
-    if (isActive) {
-      final glowColor = compType.monitorGlow;
-      drawables.add(_Drawable(deskZY + 0.3, (c) {
-        _fillPaint.color = glowColor.withValues(alpha: 0.08);
-        c.drawRect(
-          Rect.fromLTWH(deskTileX + 2, deskTileY + 10, 12, 6),
-          _fillPaint,
-        );
-      }));
-    }
-
-    // ── Chair (behind character) ──
-    final chairImg = sprites?.furniture('CUSHIONED_CHAIR_BACK');
-    if (_hasImages && chairImg != null) {
-      final cx = station.seatCol * kTileSize.toDouble();
-      final cy = station.seatRow * kTileSize.toDouble();
-      final chairZY = (station.seatRow + 1) * kTileSize - 0.5;
-      drawables.add(_Drawable(chairZY, (c) {
-        c.drawImageRect(
-          chairImg,
-          Rect.fromLTWH(
-            0, 0, chairImg.width.toDouble(), chairImg.height.toDouble()),
-          Rect.fromLTWH(cx, cy, kTileSize, kTileSize),
-          _pixelPaint,
-        );
-      }));
-    }
+    // Agents now sit at the SAME procedural workstation used by an empty
+    // workstation room — the old PNG DESK_FRONT/PC desk is retired from
+    // stations (it becomes a placeable furniture item). Drawn at the desk-row
+    // zY so the agent (seat row, higher zY) renders in front of the desk+chair.
+    drawables.add(_Drawable(deskZY, (c) {
+      drawWorkstation(c, deskTileX, deskTileY, _theme, active: isActive);
+    }));
   }
 
   // Amber outline paint: turns all opaque pixels into amber.
@@ -1105,6 +1045,7 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Placed furniture ──────────────────────────────────────────────────
 
   static const _furnitureColors = <FurnitureType, Color>{
+    FurnitureType.desk: Color(0xFF5C4033),
     FurnitureType.coffeeTable: Color(0xFF6B4226),
     FurnitureType.snackTable: Color(0xFF8B6914),
     FurnitureType.decoration: Color(0xFF44AA55),
@@ -1120,6 +1061,11 @@ class PixelOfficePainter extends CustomPainter {
 
       if (item.id == 'plant_small' || item.id == 'plant_large') {
         _addPlantSprite(drawables, placement, isLarge: item.id == 'plant_large');
+        continue;
+      }
+
+      if (item.id == 'desk_workstation') {
+        _addWorkDeskSprite(drawables, placement, item);
         continue;
       }
 
@@ -1212,6 +1158,61 @@ class PixelOfficePainter extends CustomPainter {
         return true;
     }
     return false;
+  }
+
+  // ─── Work desk sprite (the default workstation desk, now purchasable) ──
+  //
+  // Mirrors the desk-with-monitor that spawns under each hired agent
+  // (see [_addStationFurniture]) so a placed `desk_workstation` matches the
+  // office's built-in desks instead of the generic furniture block.
+  void _addWorkDeskSprite(
+    List<_Drawable> drawables,
+    FurniturePlacement placement,
+    FurnitureItem item,
+  ) {
+    final theme = _theme;
+    final baseX = placement.col * kTileSize.toDouble();
+    final baseY = placement.row * kTileSize.toDouble();
+    final w = item.widthTiles * kTileSize.toDouble();
+    final zY = (placement.row + 1) * kTileSize.toDouble();
+    final cx = baseX + w / 2;
+
+    drawables.add(_Drawable(zY, (c) {
+      final p = Paint()..style = PaintingStyle.fill;
+
+      // Desk surface + front edge (theme-tinted, like the built-in desks).
+      p.color = theme.deskSurface;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 9, w - 2, 6), p);
+      p.color = theme.deskEdge;
+      c.drawRect(Rect.fromLTWH(baseX + 1, baseY + 15, w - 2, 1), p);
+
+      // Monitor stand.
+      p.color = const Color(0xFF2A2A35);
+      c.drawRect(Rect.fromLTWH(cx - 1, baseY + 7, 2, 2), p);
+
+      // Monitor frame.
+      c.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(cx - 4, baseY + 2, 8, 6),
+          const Radius.circular(1),
+        ),
+        p,
+      );
+
+      // Screen — animated like the agents' live monitors: a cyan glow with
+      // dim "code" scanlines that scroll one row per tick (a 2-frame flicker
+      // on the same `tick` cadence as the built-in PCs).
+      final on0 = tick % 2 == 0;
+      p.color = const Color(0xFF00C0D1);
+      c.drawRect(Rect.fromLTWH(cx - 3, baseY + 3, 6, 4), p);
+      p.color = const Color(0xFF007A84);
+      c.drawRect(Rect.fromLTWH(cx - 3, baseY + (on0 ? 4 : 5), 6, 1), p);
+      c.drawRect(Rect.fromLTWH(cx - 3, baseY + (on0 ? 6 : 3), 4, 1), p);
+
+      // Faint screen glow spilling onto the desk, pulsing with the flicker.
+      p.color = const Color(0xFF00C0D1).withValues(alpha: on0 ? 0.10 : 0.06);
+      c.drawRect(Rect.fromLTWH(baseX + 2, baseY + 9, w - 4, 3), p);
+    }));
   }
 
   // ─── Plant sprite (purchasable decoration with bounce easter egg) ────
@@ -1321,45 +1322,33 @@ class PixelOfficePainter extends CustomPainter {
   // ─── Corridors ────────────────────────────────────────────────────────
 
   void _drawCorridors(Canvas canvas) {
-    // Corridor tint is a build/edit affordance — outside those modes the
-    // yellow wash just clutters the floor, so we hide it. The anchor dot
-    // only ever appears mid-draw inside build mode anyway.
-    if (!buildMode && !editMode) return;
-    if (placedCorridors.isEmpty &&
-        corridorAnchorCol == null &&
-        corridorAnchorRow == null) {
-      return;
-    }
-
-    final fill = Paint()
-      ..style = PaintingStyle.fill
-      ..color = const Color(0xFFFFD700).withValues(alpha: 0.22);
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..color = const Color(0xFFFFD700).withValues(alpha: 0.60);
-    final wideFill = Paint()
-      ..style = PaintingStyle.fill
-      ..color = const Color(0xFFFFA500).withValues(alpha: 0.28);
-    final wideStroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..color = const Color(0xFFFFA500).withValues(alpha: 0.65);
-
-    for (final corridor in placedCorridors) {
-      final f = corridor.wide ? wideFill : fill;
-      final s = corridor.wide ? wideStroke : stroke;
-      for (final tile in corridor.tiles) {
-        final rect = Rect.fromLTWH(
-          tile.col * kTileSize,
-          tile.row * kTileSize,
-          corridor.wide ? kTileSize * 2 : kTileSize,
-          kTileSize,
-        );
-        canvas.drawRect(rect, f);
-        canvas.drawRect(rect, s);
+    // Placed corridors are REAL floor structures connecting rooms — render in
+    // every mode. Build neighbour sets so walls appear only on OPEN sides (not
+    // where a corridor continues or meets a room — those edges are doorways).
+    final corridorSet = <String>{};
+    for (final c in placedCorridors) {
+      for (final t in c.tiles) {
+        corridorSet.add('${t.col},${t.row}');
+        if (c.wide) corridorSet.add('${t.col + 1},${t.row}'); // wide right cell
       }
     }
+    final roomSet = <String>{};
+    for (final r in placedRooms) {
+      for (var rc = r.col; rc < r.col + r.footprintWidth; rc++) {
+        for (var rr = r.row; rr < r.row + r.footprintHeight; rr++) {
+          roomSet.add('$rc,$rr');
+        }
+      }
+    }
+    for (final corridor in placedCorridors) {
+      for (final tile in corridor.tiles) {
+        _drawCorridorTile(
+            canvas, tile.col, tile.row, corridor.wide, corridorSet, roomSet);
+      }
+    }
+
+    // The corridor anchor dot is a build/edit affordance only.
+    if (!buildMode && !editMode) return;
 
     // Anchor dot — first tap when drawing a corridor.
     final ac = corridorAnchorCol;
@@ -1372,6 +1361,85 @@ class PixelOfficePainter extends CustomPainter {
           ..style = PaintingStyle.fill
           ..color = const Color(0xFFFFD700).withValues(alpha: 0.9),
       );
+    }
+  }
+
+  /// Carpet body colour: tier [theme.floorDark] blended ~12% toward the tier
+  /// accent — a distinct hallway runner that still belongs to the office.
+  static Color _carpetBody(RoomTheme theme) =>
+      Color.lerp(theme.floorDark, theme.accentColor, 0.12)!;
+
+  /// Paints one corridor tile as a CARPETED hallway with neighbour-aware walls.
+  /// The carpet is a woven accent-tinted runner; thin top-lit walls are drawn
+  /// only on edges that border neither another corridor tile nor a room (those
+  /// edges are doorways), so connected runs read continuous. [wide] doubles the
+  /// width to two tiles.
+  void _drawCorridorTile(Canvas canvas, int col, int row, bool wide,
+      Set<String> corridorSet, Set<String> roomSet) {
+    final theme = _theme;
+    final tx = col * kTileSize;
+    final ty = row * kTileSize;
+    final w = wide ? kTileSize * 2 : kTileSize;
+    final p = Paint()..style = PaintingStyle.fill;
+
+    // ── Carpet runner: border stripes → pile field → directional weave ───────
+    p.color = _carpetBody(theme);
+    canvas.drawRect(Rect.fromLTWH(tx, ty, w, kTileSize), p);
+    // Border stripes (read as a woven hem, not a smear).
+    p.color = theme.wallBase.withValues(alpha: 0.65);
+    canvas.drawRect(Rect.fromLTWH(tx, ty + 2, w, 2), p);
+    canvas.drawRect(Rect.fromLTWH(tx, ty + kTileSize - 4, w, 2), p);
+    // Thin bevel highlight just inside each stripe.
+    p.color = theme.wallTop.withValues(alpha: 0.18);
+    canvas.drawRect(Rect.fromLTWH(tx, ty + 4, w, 1), p);
+    canvas.drawRect(Rect.fromLTWH(tx, ty + kTileSize - 5, w, 1), p);
+    // Directional pile — two staggered rows of 1px dots (diagonal weave read).
+    p.color = theme.wallBase.withValues(alpha: 0.25);
+    for (var wx = tx + 1; wx < tx + w - 1; wx += 4) {
+      canvas.drawRect(Rect.fromLTWH(wx, ty + 6, 1, 1), p);
+    }
+    for (var wx = tx + 3; wx < tx + w - 1; wx += 4) {
+      canvas.drawRect(Rect.fromLTWH(wx, ty + 8, 1, 1), p);
+    }
+    // Center accent lane ties the runner to the tier.
+    p.color = theme.accentColor.withValues(alpha: 0.09);
+    canvas.drawRect(Rect.fromLTWH(tx + 4, ty + 5, w - 8, 6), p);
+
+    // ── Walls on open sides — 3-layer cap (highlight + body + base shadow) ────
+    bool open(int c, int r) =>
+        !corridorSet.contains('$c,$r') && !roomSet.contains('$c,$r');
+    final rightCol = wide ? col + 2 : col + 1;
+
+    if (open(col, row - 1)) {
+      p.color = theme.wallTop; // cap highlight
+      canvas.drawRect(Rect.fromLTWH(tx, ty, w, 1), p);
+      p.color = theme.wallBase; // body
+      canvas.drawRect(Rect.fromLTWH(tx, ty + 1, w, 2), p);
+      p.color = theme.wallInner.withValues(alpha: 0.80); // base shadow
+      canvas.drawRect(Rect.fromLTWH(tx, ty + 3, w, 1), p);
+    }
+    if (open(col, row + 1)) {
+      // Far edge — a receding shadow face (no top highlight from above).
+      p.color = theme.wallBase.withValues(alpha: 0.75);
+      canvas.drawRect(Rect.fromLTWH(tx, ty + kTileSize - 3, w, 2), p);
+      p.color = theme.wallInner.withValues(alpha: 0.90);
+      canvas.drawRect(Rect.fromLTWH(tx, ty + kTileSize - 1, w, 1), p);
+    }
+    if (open(col - 1, row)) {
+      p.color = theme.wallTop;
+      canvas.drawRect(Rect.fromLTWH(tx, ty, 1, kTileSize), p);
+      p.color = theme.wallBase;
+      canvas.drawRect(Rect.fromLTWH(tx + 1, ty, 2, kTileSize), p);
+      p.color = theme.wallInner.withValues(alpha: 0.80);
+      canvas.drawRect(Rect.fromLTWH(tx + 3, ty, 1, kTileSize), p);
+    }
+    if (open(rightCol, row)) {
+      p.color = theme.wallInner.withValues(alpha: 0.80);
+      canvas.drawRect(Rect.fromLTWH(tx + w - 4, ty, 1, kTileSize), p);
+      p.color = theme.wallBase;
+      canvas.drawRect(Rect.fromLTWH(tx + w - 3, ty, 2, kTileSize), p);
+      p.color = theme.wallTop;
+      canvas.drawRect(Rect.fromLTWH(tx + w - 1, ty, 1, kTileSize), p);
     }
   }
 
@@ -1411,6 +1479,22 @@ class PixelOfficePainter extends CustomPainter {
   }
 
   void _drawPlacedRooms(Canvas canvas) {
+    // Workstation rooms whose extra station has a seated agent — those draw
+    // their own PNG desk+PC via _addStationFurniture, so the room must NOT add
+    // an ambient desk on top (else it doubles up). Extra stations carry the
+    // room id as 'ws_<roomId>' (office_game_state._buildExtraStations).
+    final occupiedWorkstationIds = <String>{};
+    for (final station in gameState.allStations) {
+      if (!station.isExtra || !station.agentId.startsWith('ws_')) continue;
+      final roomId = station.agentId.substring(3);
+      for (final ch in gameState.characters.values) {
+        if (ch.isHired && ch.seat == station) {
+          occupiedWorkstationIds.add(roomId);
+          break;
+        }
+      }
+    }
+
     for (final room in placedRooms) {
       drawRoom(
         canvas,
@@ -1418,6 +1502,7 @@ class PixelOfficePainter extends CustomPainter {
         _themeForRoom(room),
         tick,
         showWorkstationFurniture: false,
+        workstationOccupied: occupiedWorkstationIds.contains(room.id),
         neighborRooms: placedRooms,
         neighborCorridors: placedCorridors,
       );
@@ -1432,7 +1517,8 @@ class PixelOfficePainter extends CustomPainter {
 
     // Foundation buffer past the owned grid — tiles where placement triggers
     // an expansion-step purchase. Painted FIRST so room overlays land on top.
-    if (buildBufferCols > 0 || buildBufferRows > 0) {
+    if (showFoundationBuffer &&
+        (buildBufferCols > 0 || buildBufferRows > 0)) {
       _drawFoundationBuffer(
           canvas, gCols, gRows, buildBufferCols, buildBufferRows);
     }
@@ -1474,111 +1560,31 @@ class PixelOfficePainter extends CustomPainter {
               : const Color(0xFF44FF88)) // green — fits in owned grid
           : const Color(0xFFFF4444); // red — invalid
 
-      // Overall ghost footprint (for corridor routing) — accounts for rotation.
-      int footLeft = gc, footTop = gr, footRight = gc, footBottom = gr;
-      final gtForFoot = ghostRoomType;
-      if (gtForFoot != null) {
-        final rotated = ghostRoomRotation == 90 || ghostRoomRotation == 270;
-        footRight = gc + (rotated ? gtForFoot.heightTiles : gtForFoot.widthTiles);
-        footBottom = gr + (rotated ? gtForFoot.widthTiles : gtForFoot.heightTiles);
-      }
-
-      // Corridor preview: connect the ghost footprint to the nearest existing
-      // room with an L-shaped 1-tile strip. Skip if no rooms yet or ghost
-      // overlaps (handled as invalid).
-      if (ghostIsValid && placedRooms.isNotEmpty && gtForFoot != null) {
-        final gcx = (footLeft + footRight) / 2.0;
-        final gcy = (footTop + footBottom) / 2.0;
-        PlacedRoom? nearest;
-        double nearestDist = double.infinity;
-        for (final room in placedRooms) {
-          final rcx =
-              room.col + room.type.widthTiles / 2.0;
-          final rcy =
-              room.row + room.type.heightTiles / 2.0;
-          final d = (rcx - gcx).abs() + (rcy - gcy).abs();
-          if (d < nearestDist) {
-            nearestDist = d;
-            nearest = room;
-          }
-        }
-        if (nearest != null) {
-          final nrLeft = nearest.col;
-          final nrTop = nearest.row;
-          final nrRight = nearest.col + nearest.type.widthTiles;
-          final nrBottom = nearest.row + nearest.type.heightTiles;
-
-          // Pick corridor midline at a tile that lies within the vertical
-          // overlap (or nearest edge) and horizontal overlap of both rects.
-          final yMid = ((math.max(footTop, nrTop) +
-                      math.min(footBottom, nrBottom) -
-                      1) /
-                  2)
-              .floor();
-          final xMid = ((math.max(footLeft, nrLeft) +
-                      math.min(footRight, nrRight) -
-                      1) /
-                  2)
-              .floor();
-
-          // Horizontal segment at yMid between the two rects' x-extents.
-          int hx1, hx2;
-          if (footRight <= nrLeft) {
-            hx1 = footRight;
-            hx2 = nrLeft;
-          } else if (nrRight <= footLeft) {
-            hx1 = nrRight;
-            hx2 = footLeft;
-          } else {
-            hx1 = hx2 = 0; // already horizontally overlapping
-          }
-
-          // Vertical segment at xMid between the two rects' y-extents.
-          int vy1, vy2;
-          if (footBottom <= nrTop) {
-            vy1 = footBottom;
-            vy2 = nrTop;
-          } else if (nrBottom <= footTop) {
-            vy1 = nrBottom;
-            vy2 = footTop;
-          } else {
-            vy1 = vy2 = 0;
-          }
-
-          final corridorFill = Paint()
-            ..color = const Color(0xFFFFD700).withValues(alpha: 0.18)
-            ..style = PaintingStyle.fill;
-          final corridorStroke = Paint()
-            ..color = const Color(0xFFFFD700).withValues(alpha: 0.55)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 0.8;
-
-          if (hx2 > hx1) {
-            final safeY = yMid
-                .clamp(1, gameState.gridRows - 2)
-                .toInt();
-            final rect = Rect.fromLTWH(
-              hx1 * kTileSize,
-              safeY * kTileSize,
-              (hx2 - hx1) * kTileSize,
-              kTileSize,
-            );
-            canvas.drawRect(rect, corridorFill);
-            canvas.drawRect(rect, corridorStroke);
-          }
-          if (vy2 > vy1) {
-            final safeX = xMid
-                .clamp(1, gameState.gridCols - 2)
-                .toInt();
-            final rect = Rect.fromLTWH(
-              safeX * kTileSize,
-              vy1 * kTileSize,
-              kTileSize,
-              (vy2 - vy1) * kTileSize,
-            );
-            canvas.drawRect(rect, corridorFill);
-            canvas.drawRect(rect, corridorStroke);
-          }
+      // Auto-connect corridor preview — a GHOST of the SAME carpet the commit
+      // builds: a faint carpet body + edge bands + an accent outline so it
+      // reads as "the corridor that will appear here", not a committed path.
+      if (connectingCorridorTiles.isNotEmpty) {
+        final theme = _theme;
+        final body = Paint()
+          ..style = PaintingStyle.fill
+          ..color = _carpetBody(theme).withValues(alpha: 0.28);
+        final band = Paint()
+          ..style = PaintingStyle.fill
+          ..color = theme.wallBase.withValues(alpha: 0.22);
+        final outline = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.8
+          ..color = theme.accentColor.withValues(alpha: 0.60);
+        for (final t in connectingCorridorTiles) {
+          final tx = t.col * kTileSize;
+          final ty = t.row * kTileSize;
+          canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize, kTileSize), body);
+          canvas.drawRect(Rect.fromLTWH(tx, ty, kTileSize, 1), band);
+          canvas.drawRect(
+              Rect.fromLTWH(tx, ty + kTileSize - 1, kTileSize, 1), band);
+          canvas.drawRect(
+              Rect.fromLTWH(tx + 0.5, ty + 0.5, kTileSize - 1, kTileSize - 1),
+              outline);
         }
       }
 
@@ -1700,27 +1706,6 @@ class PixelOfficePainter extends CustomPainter {
     const armThick = 0.5;
     const inset = 2.5;
 
-    // Per-tile cost stamp ("12К₲"): laid out once, painted at every tile.
-    // Currency suffix matches `_formatNumber` in office_upgrade_dialog.
-    TextPainter? costTp;
-    final cost = nextExpansionCost;
-    if (cost != null) {
-      final costLabel = '${_formatCompact(cost)}₲';
-      costTp = TextPainter(
-        text: TextSpan(
-          text: costLabel,
-          style: const TextStyle(
-            color: Color(0xFFFFD680),
-            fontSize: 2.5,
-            fontWeight: FontWeight.w700,
-            height: 1.0,
-            letterSpacing: 0.1,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-    }
-
     bool isHoverThisTile(int c, int r) =>
         hoveredBufferCol == c &&
         hoveredBufferRow == r &&
@@ -1795,12 +1780,6 @@ class PixelOfficePainter extends CustomPainter {
           Rect.fromLTWH(x + kTileSize - inset - armThick,
               y + kTileSize - inset - armLen, armThick, armLen),
           corner);
-
-      if (costTp != null) {
-        final tx = x + (kTileSize - costTp.width) / 2;
-        final ty = y + (kTileSize - costTp.height) / 2;
-        costTp.paint(canvas, Offset(tx, ty));
-      }
     }
 
     // Right buffer: full vertical strip past current right wall.
@@ -1832,6 +1811,34 @@ class PixelOfficePainter extends CustomPainter {
     if (bufR > 0) {
       canvas.drawLine(Offset(0, ownedBottom),
           Offset(ownedRight, ownedBottom), boundary);
+    }
+
+    // ONE quiet price chip for the whole lot (replaces the old per-tile
+    // "12К₲" stamp that read as clutter), anchored just past the boundary.
+    final cost = nextExpansionCost;
+    if (cost != null && (bufC > 0 || bufR > 0)) {
+      final label = TextPainter(
+        text: TextSpan(
+          text: '+${_formatCompact(cost)}₲ / крок',
+          style: const TextStyle(
+            color: Color(0xFFFFD680),
+            fontSize: 4.5,
+            fontWeight: FontWeight.w700,
+            height: 1.0,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final lx = bufC > 0 ? ownedRight + 2.0 : kTileSize + 2.0;
+      final ly = bufC > 0 ? kTileSize + 2.0 : ownedBottom + 2.0;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(lx - 1.5, ly - 1, label.width + 3, label.height + 2),
+          const Radius.circular(1.5),
+        ),
+        Paint()..color = const Color(0xCC1A1A2E),
+      );
+      label.paint(canvas, Offset(lx, ly));
     }
   }
 

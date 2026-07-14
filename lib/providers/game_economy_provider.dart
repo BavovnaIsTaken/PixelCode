@@ -1010,6 +1010,13 @@ class GameEconomyNotifier extends Notifier<GameState> {
     _updateStateAndSync(state.copyWith(placedFurniture: placed));
   }
 
+  /// Persist the player's custom slot order for the grid Inventory view.
+  /// [order] is the slot list (item ids, `''` for empty slots); the UI trims
+  /// trailing empties before calling this.
+  void setInventoryOrder(List<String> order) {
+    _updateStateAndSync(state.copyWith(inventoryOrder: order));
+  }
+
   // ─── Office rooms (Build Mode) ────────────────────────────────────────────
 
   bool canPlaceRoom(RoomType type) => state.grymni >= type.cost;
@@ -1244,6 +1251,18 @@ class GameEconomyNotifier extends Notifier<GameState> {
       totalSpent: state.totalSpent + cost,
       placedCorridors: corridors,
     ));
+  }
+
+  /// Append a FREE courtesy corridor that auto-connects a just-placed room to
+  /// its nearest neighbour. Manual corridor drawing still pays via
+  /// [placeCorridor]; this one is part of "placing the room" so it doesn't
+  /// charge (and never surprises the player with an extra deduction).
+  void addConnectingCorridor(List<({int col, int row})> tiles) {
+    if (tiles.isEmpty) return;
+    final id = 'corridor_auto_${DateTime.now().microsecondsSinceEpoch}';
+    final corridors = List<PlacedCorridor>.from(state.placedCorridors)
+      ..add(PlacedCorridor(id: id, tiles: tiles, wide: false));
+    _updateStateAndSync(state.copyWith(placedCorridors: corridors));
   }
 
   void removeCorridor(String corridorId) {

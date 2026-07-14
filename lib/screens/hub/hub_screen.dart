@@ -23,6 +23,7 @@ import '../../widgets/canvas/build_menu.dart';
 import '../../widgets/chat/chat_panel.dart';
 import '../../widgets/hub/activity_overlay.dart';
 import '../../widgets/easter_eggs/easter_egg_games.dart';
+import '../../widgets/inventory/inventory_panel.dart';
 import '../../widgets/debug/debug_console.dart';
 import '../../widgets/facilitator/facilitator_auto_onboarder.dart';
 import '../../widgets/project/project_selector.dart';
@@ -33,6 +34,22 @@ import '../../widgets/painters/pixel_glitch_painter.dart';
 import '../../widgets/shop/shop_panel.dart';
 import '../../models/app_theme.dart';
 import '../../providers/theme_provider.dart';
+
+/// Floor for the hub's opening-scale animation. The content is scaled
+/// vertically from this value up to 1.0 as the app opens — crucially it never
+/// reaches 0, so a muted ticker / background launch can never strand the whole
+/// UI squashed to invisible (the intermittent "black screen on startup" bug).
+const double kHubOpenScaleFloor = 0.96;
+
+/// Vertical scale applied to the hub content during the open animation.
+/// Floored at [kHubOpenScaleFloor] so content is ALWAYS visible regardless of
+/// the animation controller's value; full scale during shutdown. Pure so the
+/// "never collapses to zero" invariant is unit-testable.
+double hubOpenScale(double openValue, {required bool shuttingDown}) {
+  if (shuttingDown) return 1.0;
+  final t = Curves.easeOut.transform(openValue.clamp(0.0, 1.0));
+  return kHubOpenScaleFloor + (1.0 - kHubOpenScaleFloor) * t;
+}
 
 /// Main split-screen: Chat (left) + Agent Canvas (right) + Debug Console (bottom)
 class HubScreen extends ConsumerStatefulWidget {
@@ -50,10 +67,10 @@ class _HubScreenState extends ConsumerState<HubScreen>
   double _debugHeight = 200;
   bool _isShuttingDown = false;
   double _shutdownHeight = 0;
-  int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop
+  int _viewIndex = 0; // 0=Office, 1=Board, 2=Shop, 3=Inventory
   bool _showGames = false;
   bool _activityOverlayOpen = false;
-  int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop
+  int _mobileTab = 0; // 0=Chat, 1=Office, 2=Board, 3=Shop, 4=Inventory
   int _prevMobileTab = 0;
 
   // Icon fly-to-opposite-corner on shutdown
@@ -236,11 +253,12 @@ class _HubScreenState extends ConsumerState<HubScreen>
     TweenSequenceItem(tween: Tween(begin: 0.9, end: 0.9), weight: 14),
   ]).animate(_shutdownCtrl);
 
-  // Opening animation — content scales up from center
+  // Opening animation — content scales up from center (started deterministically
+  // in initState, not lazily, so it can't be stranded at 0; see hubOpenScale).
   late final AnimationController _openCtrl = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 450),
-  )..forward();
+  );
 
   void _triggerShutdown() {
     if (_isShuttingDown) return;
@@ -310,6 +328,18 @@ class _HubScreenState extends ConsumerState<HubScreen>
   void initState() {
     super.initState();
     _loadLogoImage();
+    // Start the open animation AFTER first mount (not lazily mid-build) and
+    // honour reduced-motion. Even if the ticker never fires (e.g. the app
+    // launched in the background with muted tickers), hubOpenScale's floor
+    // keeps the content visible — this only lets the flourish play when it can.
+    if (WidgetsBinding.instance.platformDispatcher.accessibilityFeatures
+        .disableAnimations) {
+      _openCtrl.value = 1.0;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openCtrl.forward();
+      });
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowSchemaResetToast());
   }
 
@@ -402,8 +432,8 @@ class _HubScreenState extends ConsumerState<HubScreen>
   bool get _isServerConnected =>
       ref.read(connectionStatusProvider).valueOrNull ?? false;
 
-  /// Number of mobile tabs available (2 without server, 4 with).
-  int get _mobileTabCount => _isServerConnected ? 4 : 2;
+  /// Number of mobile tabs available (2 without server, 5 with).
+  int get _mobileTabCount => _isServerConnected ? 5 : 2;
 
   void _switchMobileTab(int newTab) {
     if (newTab < 0 || newTab >= _mobileTabCount || newTab == _mobileTab) return;
@@ -415,7 +445,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
 
   /// Builds the content widget for the given mobile tab.
   /// Without server: 0=Chat, 1=Office.
-  /// With server: 0=Chat, 1=Office, 2=Board, 3=Shop.
+  /// With server: 0=Chat, 1=Office, 2=Board, 3=Shop, 4=Inventory.
   Widget _buildMobileTabContent([int? overrideTab]) {
     final tab = overrideTab ?? _mobileTab;
     if (_isServerConnected) {
@@ -423,6 +453,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
         1 => const AgentCanvas(),
         2 => const TaskBoardPanel(),
         3 => const ShopPanel(),
+        4 => const InventoryPanel(),
         _ => _showGames
             ? EasterEggGames(
                 onClose: () => setState(() => _showGames = false),
@@ -466,6 +497,16 @@ class _HubScreenState extends ConsumerState<HubScreen>
       }
     });
 
+    // Navigate to the Office/canvas when requested (e.g. the Inventory tab's
+    // "Місце" action, which leaves a furniture item in hand to place).
+    ref.listen(officeDeepLinkProvider, (_, nonce) {
+      if (nonce != null) {
+        setState(() => _viewIndex = 0); // desktop: Office
+        _switchMobileTab(1);            // mobile: Office
+        ref.read(officeDeepLinkProvider.notifier).state = null;
+      }
+    });
+
     final tc = context.appColors;
 
     return Scaffold(
@@ -474,9 +515,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
         child: AnimatedBuilder(
         animation: Listenable.merge([_shutdownCtrl, _openCtrl, _iconMoveCtrl]),
         builder: (context, child) {
-          final sy = _isShuttingDown
-              ? 1.0
-              : Curves.easeOut.transform(_openCtrl.value);
+          final sy = hubOpenScale(_openCtrl.value, shuttingDown: _isShuttingDown);
           // Content fades out as the CRT flash ramps up — the flash replaces
           // the content so the last visible frame is a bright glow.
           final contentOpacity = _isShuttingDown ? 1.0 - _flash.value : 1.0;
@@ -657,6 +696,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
                         child: switch (_viewIndex) {
                           1 => const TaskBoardPanel(),
                           2 => const ShopPanel(),
+                          3 => const InventoryPanel(),
                           _ => const AgentCanvas(),
                         },
                       ),
@@ -845,6 +885,7 @@ class _HubScreenState extends ConsumerState<HubScreen>
       (Icons.grid_view_rounded, 'Офіс'),
       if (isConnected) (Icons.dashboard_outlined, 'Дошка'),
       if (isConnected) (Icons.storefront_outlined, 'Ринок'),
+      if (isConnected) (Icons.inventory_2_outlined, 'Інвентар'),
     ];
 
     final tc = context.appColors;
@@ -1301,6 +1342,7 @@ class _NotchViewToggle extends StatelessWidget {
     (Icons.grid_view_rounded, 'Офіс'),
     (Icons.dashboard_outlined, 'Дошка'),
     (Icons.storefront_outlined, 'Ринок'),
+    (Icons.inventory_2_outlined, 'Інвентар'),
   ];
 
   @override
